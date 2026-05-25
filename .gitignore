@@ -27,5 +27,8 @@ GEMINI.md
 docs/STATUS.md
 docs/HANDOFF.md
 
+# Local brain state (checkpoints, caches) written by the dogfood sync
+.thalamus/
+
 # OS
 .DS_Store

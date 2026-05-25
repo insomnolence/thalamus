@@ -13,12 +13,24 @@ from thalamus.experiential.segmentation import (
     EpisodeSegmenter,
     EpisodeSpan,
 )
+from thalamus.experiential.sync import (
+    Checkpoint,
+    CommitSource,
+    FileCheckpoint,
+    GitEpisodeIngestor,
+    InMemoryCheckpoint,
+)
 
 __all__ = [
+    "Checkpoint",
     "CommitBoundedSegmenter",
+    "CommitSource",
     "EpisodeBuilder",
     "EpisodeSegmenter",
     "EpisodeSpan",
+    "FileCheckpoint",
+    "GitEpisodeIngestor",
+    "InMemoryCheckpoint",
     "WhyComponent",
     "WhyProvenance",
     "ingest_episodes",

@@ -1,0 +1,22 @@
+[project]
+name = "thalamus-cli"
+version = "0.1.0"
+description = "Composition-root CLI: the dogfood sync (repo commits -> Brain 1)."
+requires-python = ">=3.12"
+dependencies = [
+    "thalamus-core",
+    "thalamus-instrumentation",
+    "thalamus-experiential",
+    "thalamus-routing",
+    "thalamus-store",
+    "thalamus-structural",
+    "thalamus-retrieval",
+    "thalamus-gateway",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/thalamus"]

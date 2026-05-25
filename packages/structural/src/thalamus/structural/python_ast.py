@@ -31,6 +31,11 @@ from thalamus.structural.schema import (
 
 logger = logging.getLogger(__name__)
 
+# Directories never part of a project's own re-derivable corpus. Hidden dirs
+# (``.venv``/``.git``/``.mypy_cache``/…) are pruned separately by the leading dot,
+# so this only needs the non-hidden noise.
+_IGNORE_DIRS = frozenset({"venv", "__pycache__", "build", "dist", "node_modules", "site-packages"})
+
 
 def _dotted(path: Path, root_package: str | None) -> str:
     if root_package is None:
@@ -56,16 +61,33 @@ def _anchor(path: Path, node: ast.AST) -> SourceAnchor:
 class PythonAstIngestor:
     """Ingests Python source into the structural graph (containment/inherit/imports)."""
 
-    def __init__(self, root_package: str | None = None) -> None:
+    def __init__(
+        self, root_package: str | None = None, *, ignore_dirs: frozenset[str] = _IGNORE_DIRS
+    ) -> None:
         self._root_package = root_package
+        self._ignore_dirs = ignore_dirs
 
     def ingest_path(self, root: Path) -> IngestResult:
         nodes: list[StructuralNode] = []
         edges: list[StructuralEdge] = []
-        files = [root] if root.is_file() else sorted(root.rglob("*.py"))
-        for path in files:
+        for path in self._python_files(root):
             self._ingest_file(path, nodes, edges)
         return IngestResult(nodes=nodes, edges=edges)
+
+    def _python_files(self, root: Path) -> list[Path]:
+        """Python files under ``root``, never descending into ignored/hidden dirs
+        (``.venv``, ``.git``, caches, …) — the corpus is the project, not its deps."""
+        if root.is_file():
+            return [root]
+        files: list[Path] = []
+        for dirpath, dirnames, filenames in root.walk():
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if name not in self._ignore_dirs and not name.startswith(".")
+            ]
+            files.extend(dirpath / name for name in filenames if name.endswith(".py"))
+        return sorted(files)
 
     def _ingest_file(
         self, path: Path, nodes: list[StructuralNode], edges: list[StructuralEdge]
