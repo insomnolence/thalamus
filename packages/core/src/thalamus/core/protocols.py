@@ -1,0 +1,89 @@
+"""Thalamus cross-package contracts, defined as ``typing.Protocol`` classes.
+
+Components satisfy these via structural subtyping — no inheritance required.
+A protocol lives in ``core`` only when more than one package depends on it;
+package-local seams (e.g. trajectory observers) start in their own package and
+are promoted here when a second consumer appears.
+
+These are the **swappable seams** the design relies on: each encoder, store,
+router, and retrieval rung is an interchangeable implementation behind one of
+these interfaces (design-notes §14; build-discipline memory). **v0** — expected
+to evolve. (Protocol/structural-subtyping pattern referenced from Polynoica's
+``core/protocols.py``; their tensor/GNN/JEPA contracts are not carried over.)
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Protocol, runtime_checkable
+
+from thalamus.core.types import (
+    Cue,
+    MemoryId,
+    MemoryRecord,
+    RetrievalResult,
+    Scope,
+    ScoredMemory,
+    Vector,
+)
+
+
+@runtime_checkable
+class Encoder(Protocol):
+    """Turns text into dense vectors (e.g. a frozen BGE wrapper)."""
+
+    @property
+    def dim(self) -> int:
+        """Dimensionality of the vectors this encoder produces."""
+        ...
+
+    def encode(self, texts: Sequence[str]) -> list[Vector]:
+        """Encode a batch of texts into vectors of length :attr:`dim`."""
+        ...
+
+
+@runtime_checkable
+class Store(Protocol):
+    """A per-hemisphere store: record CRUD + vector search over one index.
+
+    The substrate is a single graph with *separate vector indexes per
+    hemisphere* (deep-dives/foundation.md). Graph/link operations are added by
+    the structural package when needed, not assumed here.
+    """
+
+    def add(self, record: MemoryRecord, embedding: Vector) -> None:
+        """Persist a record and index its embedding."""
+        ...
+
+    def get(self, memory_id: MemoryId) -> MemoryRecord | None:
+        """Fetch a record by id, or ``None`` if absent."""
+        ...
+
+    def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredMemory]:
+        """Return the ``k`` nearest records within ``scope`` by vector similarity."""
+        ...
+
+
+@runtime_checkable
+class Router(Protocol):
+    """Classifies a cue's intent for routing (BGE + labeled classifier)."""
+
+    def route(self, cue: Cue) -> str:
+        """Return an intent label for the cue."""
+        ...
+
+
+@runtime_checkable
+class Retriever(Protocol):
+    """The central swappable seam.
+
+    L0 (frozen-BGE + recency + importance) is the first implementation; gated
+    rungs (bandit reweighting, bent geometry) are later implementations behind
+    this *same* interface, toggled by the eval harness
+    (outcome-learned-retrieval §13.5, §13.20). This is what makes
+    "switch off and measure against the baseline" a config choice, not a rewrite.
+    """
+
+    def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
+        """Retrieve up to ``k`` memories for ``cue``."""
+        ...

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.tools/
+
+# Model weights / data artifacts
+weights/
+*.pt
+*.bin
+
+# Local agent/editor config
+.claude/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# Working-state docs (local only, not part of the codebase)
+docs/STATUS.md
+docs/HANDOFF.md
+
+# OS
+.DS_Store

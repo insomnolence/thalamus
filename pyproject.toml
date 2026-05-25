@@ -1,0 +1,97 @@
+[project]
+name = "thalamus"
+version = "0.1.0"
+description = "A persistent memory brain for agentic LLMs (workspace root)."
+requires-python = ">=3.12"
+dependencies = [
+    "thalamus-core",
+    "thalamus-store",
+    "thalamus-structural",
+    "thalamus-experiential",
+    "thalamus-routing",
+    "thalamus-retrieval",
+    "thalamus-instrumentation",
+    "thalamus-gateway",
+    "thalamus-eval",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "neo4j>=5",
+    "fastmcp>=2",
+]
+
+# Virtual workspace root — an aggregator, not itself an installable package.
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+thalamus-core = { workspace = true }
+thalamus-store = { workspace = true }
+thalamus-structural = { workspace = true }
+thalamus-experiential = { workspace = true }
+thalamus-routing = { workspace = true }
+thalamus-retrieval = { workspace = true }
+thalamus-instrumentation = { workspace = true }
+thalamus-gateway = { workspace = true }
+thalamus-eval = { workspace = true }
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+testpaths = ["packages/*/tests", "tests"]
+pythonpath = [
+    "packages/core/src",
+    "packages/store/src",
+    "packages/structural/src",
+    "packages/experiential/src",
+    "packages/routing/src",
+    "packages/retrieval/src",
+    "packages/instrumentation/src",
+    "packages/gateway/src",
+    "packages/eval/src",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = [
+    "packages/core/src",
+    "packages/store/src",
+    "packages/structural/src",
+    "packages/experiential/src",
+    "packages/routing/src",
+    "packages/retrieval/src",
+    "packages/instrumentation/src",
+    "packages/gateway/src",
+    "packages/eval/src",
+]
+
+[[tool.mypy.overrides]]
+module = "sentence_transformers.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "neo4j.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "fastmcp.*"
+ignore_missing_imports = true
