@@ -83,15 +83,20 @@ class StructuralItem:
     label: str
     location: str | None = None
     relevance: float | None = None  # set for direct structural hits; None for linked nodes
+    corpus: str = "code"  # which Brain-2 corpus (code / docs / …) — groups the payload section
 
     @classmethod
-    def from_node(cls, node: StructuralNode) -> StructuralItem:
+    def from_node(cls, node: StructuralNode, *, corpus: str = "code") -> StructuralItem:
         return cls(
-            node_id=node.node_id, kind=node.kind, label=node.label, location=_node_location(node)
+            node_id=node.node_id,
+            kind=node.kind,
+            label=node.label,
+            location=_node_location(node),
+            corpus=corpus,
         )
 
     @classmethod
-    def from_scored_node(cls, scored: ScoredNode) -> StructuralItem:
+    def from_scored_node(cls, scored: ScoredNode, *, corpus: str = "code") -> StructuralItem:
         node = scored.node
         return cls(
             node_id=node.node_id,
@@ -99,6 +104,7 @@ class StructuralItem:
             label=node.label,
             location=_node_location(node),
             relevance=scored.score,
+            corpus=corpus,
         )
 
 
@@ -145,13 +151,19 @@ class ContextPayload:
                     gone = ", ".join(item.stale_references)
                     lines.append(f"  ⚠ may be stale — references no longer in the codebase: {gone}")
         if self.structural or self.structural_omitted:
-            lines += ["", "## Related code"]
+            by_corpus: dict[str, list[StructuralItem]] = {}
             for symbol in self.structural:
-                location = f" — {symbol.location}" if symbol.location else ""
-                relevance = (
-                    f" [relevance {symbol.relevance:.2f}]" if symbol.relevance is not None else ""
-                )
-                lines.append(f"- ({symbol.kind}) {symbol.label}{location}{relevance}")
+                by_corpus.setdefault(symbol.corpus, []).append(symbol)
+            for corpus, symbols in by_corpus.items():
+                lines += ["", f"## Related {corpus}"]
+                for symbol in symbols:
+                    location = f" — {symbol.location}" if symbol.location else ""
+                    relevance = (
+                        f" [relevance {symbol.relevance:.2f}]"
+                        if symbol.relevance is not None
+                        else ""
+                    )
+                    lines.append(f"- ({symbol.kind}) {symbol.label}{location}{relevance}")
             if self.structural_omitted:
                 lines.append(f"- ... {self.structural_omitted} additional related item(s) omitted")
         if self.calls:

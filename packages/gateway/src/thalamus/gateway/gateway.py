@@ -106,7 +106,7 @@ class Gateway:
         k: int = 5,
         graph: StructuralGraph | None = None,
         links: CrossLinkIndex | None = None,
-        structural_retriever: StructuralRetriever | None = None,
+        structural_retrievers: Sequence[StructuralRetriever] | None = None,
         structural_k_hop: int = 0,
         structural_min_relevance: float = 0.0,
         stale_references: Mapping[MemoryRef, Sequence[str]] | None = None,
@@ -120,7 +120,9 @@ class Gateway:
         self._k = k
         self._graph = graph
         self._links = links
-        self._structural_retriever = structural_retriever
+        # One retriever per Brain-2 corpus (code / docs / …), each over its own index — direct
+        # hits are ranked across corpora by relevance but grouped into per-corpus payload sections.
+        self._structural_retrievers = tuple(structural_retrievers) if structural_retrievers else ()
         self._structural_k_hop = structural_k_hop
         # memory_ref -> its footprint files that are gone from disk (§13.18-D2). Precomputed at
         # composition (where the repo root is known) so the gateway stays filesystem-free.
@@ -154,31 +156,31 @@ class Gateway:
         direct = self._direct_hits(cue)
         structural = self._structural_for([scored.record.ref for scored in result.shown])
         # Cross-linked nodes (the §13.19 headline — "the code this memory is about") come
-        # first; direct semantic hits from structural retrieval fill the rest, deduped.
+        # first; direct semantic hits fill the rest, deduped and tagged by corpus.
         exclude = {item.node_id for item in structural}
-        for scored in direct:
+        for corpus, scored in direct:
             if scored.node.node_id not in exclude:
                 exclude.add(scored.node.node_id)
-                structural.append(StructuralItem.from_scored_node(scored))
+                structural.append(StructuralItem.from_scored_node(scored, corpus=corpus))
         return ContextPayload(
             cue_text=prompt,
             memories=memories,
             structural=structural[: self._max_structural_items],
             structural_omitted=max(len(structural) - self._max_structural_items, 0),
-            calls=self._call_relations(direct),
+            calls=self._call_relations([scored for _, scored in direct]),
             event_id=result.event_id,
         )
 
-    def _direct_hits(self, cue: Cue) -> list[ScoredNode]:
-        """Direct structural retrieval hits above the relevance floor (empty if disabled)."""
-        retriever = self._structural_retriever
-        if retriever is None:
-            return []
-        return [
-            scored
-            for scored in retriever.retrieve(cue, self._max_structural_items)
-            if scored.score > self._structural_min_relevance
-        ]
+    def _direct_hits(self, cue: Cue) -> list[tuple[str, ScoredNode]]:
+        """Direct structural hits above the relevance floor, as ``(corpus, hit)`` ranked across
+        corpora — each corpus searches its own index (no pollution), then merged by relevance."""
+        hits: list[tuple[str, ScoredNode]] = []
+        for retriever in self._structural_retrievers:
+            for scored in retriever.retrieve(cue, self._max_structural_items):
+                if scored.score > self._structural_min_relevance:
+                    hits.append((retriever.corpus, scored))
+        hits.sort(key=lambda item: item[1].score, reverse=True)
+        return hits
 
     def _call_relations(self, direct: Sequence[ScoredNode]) -> list[CallRelation]:
         """Callers/callees of the cue's top direct code hits — the call graph, surfaced.

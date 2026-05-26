@@ -36,8 +36,9 @@ NOW = datetime(2026, 5, 26, tzinfo=UTC)
 class _StubStructuralRetriever:
     """Returns preset direct hits (top-k), standing in for the real StructuralRetriever."""
 
-    def __init__(self, hits: Sequence[ScoredNode]) -> None:
+    def __init__(self, hits: Sequence[ScoredNode], corpus: str = "code") -> None:
         self._hits = list(hits)
+        self.corpus = corpus
 
     def retrieve(self, cue: Cue, k: int) -> list[ScoredNode]:
         return self._hits[: max(k, 0)]
@@ -65,7 +66,7 @@ def test_direct_hits_surface_without_cross_links() -> None:
         ]
     )
     gateway = Gateway(
-        L0Retriever(encoder, store, now=lambda: NOW), structural_retriever=retriever
+        L0Retriever(encoder, store, now=lambda: NOW), structural_retrievers=[retriever]
     )
     payload = gateway.recall(prompt="hello", scope=SCOPE)
 
@@ -95,7 +96,7 @@ def test_direct_hits_dedup_against_cross_links(tmp_path: Path) -> None:
         L0Retriever(encoder, store, now=lambda: NOW),
         graph=graph,
         links=links,
-        structural_retriever=retriever,
+        structural_retrievers=[retriever],
     )
     payload = gateway.recall(prompt="why sqlite", scope=SCOPE)
 
@@ -125,7 +126,7 @@ def test_merged_structural_respects_max_items(tmp_path: Path) -> None:
         L0Retriever(encoder, store, now=lambda: NOW),
         graph=graph,
         links=links,
-        structural_retriever=retriever,
+        structural_retrievers=[retriever],
         max_structural_items=1,
     )
     payload = gateway.recall(prompt="why sqlite", scope=SCOPE)
@@ -153,7 +154,7 @@ def test_call_graph_surfaces_callees_of_a_direct_hit() -> None:
     gateway = Gateway(
         L0Retriever(encoder, store, now=lambda: NOW),
         graph=_calls_graph(),
-        structural_retriever=retriever,
+        structural_retrievers=[retriever],
     )
     payload = gateway.recall(prompt="about a", scope=SCOPE)
 
@@ -174,10 +175,32 @@ def test_call_graph_surfaces_callers_of_a_direct_hit() -> None:
     gateway = Gateway(
         L0Retriever(encoder, store, now=lambda: NOW),
         graph=_calls_graph(),
-        structural_retriever=retriever,
+        structural_retrievers=[retriever],
     )
     payload = gateway.recall(prompt="about b", scope=SCOPE)
 
     assert payload.calls[0].callers == ("m.a",)
     assert payload.calls[0].callees == ()
     assert "called by: m.a" in payload.render()
+
+
+def test_code_and_docs_surface_in_separate_corpus_sections() -> None:
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    _add(encoder, store, "m", "hello")
+    code_hit = ScoredNode(_snode("function:m.f", "f"), 0.82)
+    code_r = _StubStructuralRetriever([code_hit], corpus="code")
+    doc_r = _StubStructuralRetriever(
+        [ScoredNode(_snode("section:d.md:1", "Goals", "section"), 0.88)], corpus="docs"
+    )
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW), structural_retrievers=[code_r, doc_r]
+    )
+    payload = gateway.recall(prompt="hello", scope=SCOPE)
+
+    assert {item.corpus for item in payload.structural} == {"code", "docs"}
+    # ranked across corpora by relevance: the docs hit (0.88) outranks the code hit (0.82)
+    assert payload.structural[0].corpus == "docs"
+    rendered = payload.render()
+    assert "## Related code" in rendered
+    assert "## Related docs" in rendered

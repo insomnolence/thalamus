@@ -8,6 +8,7 @@ memories to structural nodes (§13.19). See ``deep-dives/structural-hemisphere.m
 
 from thalamus.structural.composite import CompositeIngestor
 from thalamus.structural.cross_link import CrossLinkIndex, InMemoryCrossLinkIndex
+from thalamus.structural.doc_ingestor import DocIngestor
 from thalamus.structural.graph import Direction, InMemoryStructuralGraph, StructuralGraph
 from thalamus.structural.index import (
     InMemoryStructuralIndex,
@@ -32,6 +33,7 @@ __all__ = [
     "CompositeIngestor",
     "CrossLinkIndex",
     "Direction",
+    "DocIngestor",
     "IngestResult",
     "InMemoryCrossLinkIndex",
     "InMemoryStructuralGraph",

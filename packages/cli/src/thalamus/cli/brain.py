@@ -31,13 +31,16 @@ from thalamus.store import InMemoryStore, Neo4jStore, connect
 from thalamus.structural import (
     CompositeIngestor,
     CrossLinkIndex,
+    DocIngestor,
     Ingestor,
+    IngestResult,
     InMemoryCrossLinkIndex,
     InMemoryStructuralGraph,
     InMemoryStructuralIndex,
     JediCallIngestor,
     PythonAstIngestor,
     StructuralGraph,
+    StructuralNode,
     StructuralRetriever,
     footprint_staleness,
     link_by_footprint,
@@ -61,6 +64,18 @@ def _default_ingestor(resolve_calls: bool) -> Ingestor:
     return CompositeIngestor([ast_pass, JediCallIngestor()])
 
 
+def _corpus_index(encoder: Encoder, nodes: Sequence[StructuralNode]) -> InMemoryStructuralIndex:
+    """Embed one corpus's nodes into its own structural index (a separate vector space, so
+    code and docs retrieval never pollute each other's top-k)."""
+    index = InMemoryStructuralIndex(dim=encoder.dim)
+    node_list = list(nodes)
+    if node_list:
+        embeddings = encoder.encode([node_text(node) for node in node_list])
+        for node, embedding in zip(node_list, embeddings, strict=True):
+            index.add(node, embedding)
+    return index
+
+
 def build_two_hemisphere_gateway(
     repo: Path,
     *,
@@ -74,6 +89,7 @@ def build_two_hemisphere_gateway(
     k: int = 5,
     k_hop: int = 1,
     resolve_calls: bool = True,
+    resolve_docs: bool = True,
     structural_min_relevance: float = 0.0,
     max_structural_items: int = 12,
     max_memory_chars: int = 1000,
@@ -87,16 +103,27 @@ def build_two_hemisphere_gateway(
     Neo4j-backed implementations to persist Brain 2 + native cross-edges in the shared
     substrate. Returns a :class:`Gateway` whose recall fuses experiential memories with
     the structural nodes they touched (plus their ``k_hop`` neighbours)."""
-    ingestor = ingestor if ingestor is not None else _default_ingestor(resolve_calls)
-    result = ingestor.ingest_path(repo, scope)
+    # Two re-derivable Brain-2 corpora: code (AST + jedi calls) and docs (Markdown). They share
+    # the one graph substrate (typed nodes) but get SEPARATE vector indexes (no-pollution).
+    code_ingestor = ingestor if ingestor is not None else _default_ingestor(resolve_calls)
+    code_result = code_ingestor.ingest_path(repo, scope)
+    doc_result = (
+        DocIngestor().ingest_path(repo, scope) if resolve_docs else IngestResult(nodes=[], edges=[])
+    )
     graph = graph if graph is not None else InMemoryStructuralGraph(scope)
-    graph.replace(result)
+    graph.replace(
+        IngestResult(
+            nodes=[*code_result.nodes, *doc_result.nodes],
+            edges=[*code_result.edges, *doc_result.edges],
+        )
+    )
 
     links = links if links is not None else InMemoryCrossLinkIndex()
     footprints = [
         (episode.ref, tuple(episode.metadata.get("footprint", ()))) for episode in episodes
     ]
-    link_by_footprint(footprints, result.nodes, links, repo_root=repo)
+    # Footprints link to code modules only (episodes touch source files).
+    link_by_footprint(footprints, code_result.nodes, links, repo_root=repo)
 
     # §13.18-D2: flag curated memories whose footprint files are gone from disk (stale beliefs
     # about code that no longer exists). Episodes are immutable history, so only curated memories
@@ -110,16 +137,16 @@ def build_two_hemisphere_gateway(
         repo_root=repo,
     )
 
-    # Direct structural retrieval: embed Brain 2 nodes into their own (separate) index so a
-    # cue can hit code directly, not only via cross-links. A derived view over the re-derived
-    # graph (§14.1) — rebuilt here each start, cheap for repo-scale node counts.
-    structural_index = InMemoryStructuralIndex(dim=encoder.dim)
-    nodes = list(result.nodes)
-    if nodes:
-        embeddings = encoder.encode([node_text(node) for node in nodes])
-        for node, embedding in zip(nodes, embeddings, strict=True):
-            structural_index.add(node, embedding)
-    structural_retriever = StructuralRetriever(encoder, structural_index)
+    # Direct structural retrieval, per corpus: a cue can hit code or docs directly (not only via
+    # cross-links), each from its own index so they don't pollute each other. A derived view over
+    # the re-derived graph (§14.1) — rebuilt each start, cheap at repo scale.
+    structural_retrievers = [
+        StructuralRetriever(encoder, _corpus_index(encoder, code_result.nodes), corpus="code")
+    ]
+    if resolve_docs:
+        structural_retrievers.append(
+            StructuralRetriever(encoder, _corpus_index(encoder, doc_result.nodes), corpus="docs")
+        )
 
     base = L0Retriever(encoder, store)
     retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)
@@ -130,7 +157,7 @@ def build_two_hemisphere_gateway(
         k=k,
         graph=graph,
         links=links,
-        structural_retriever=structural_retriever,
+        structural_retrievers=structural_retrievers,
         structural_k_hop=k_hop,
         structural_min_relevance=structural_min_relevance,
         stale_references=stale_references,

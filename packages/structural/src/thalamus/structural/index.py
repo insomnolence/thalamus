@@ -26,11 +26,16 @@ from thalamus.structural.schema import StructuralNode
 
 
 def node_text(node: StructuralNode) -> str:
-    """The text embedded for a structural node: kind, label, and qualified path.
+    """The text embedded for a structural node.
 
-    The qualified id (e.g. ``function:pkg.mod.func`` -> ``pkg.mod.func``) gives the
-    encoder the module context, not just a bare symbol name.
+    When the node carries embeddable content (``metadata["text"]`` — e.g. a doc
+    section's body), embed that, so prose matches on meaning rather than a bare
+    heading. Otherwise (code symbols) embed kind + label + the qualified id, which
+    gives the encoder the module context, not just a bare symbol name.
     """
+    text = node.metadata.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
     qualified = node.node_id.split(":", 1)[-1]
     if qualified and qualified != node.label:
         return f"{node.kind} {node.label} ({qualified})"
@@ -113,11 +118,16 @@ class StructuralRetriever:
     The Brain-2 counterpart to the experiential ``Retriever`` — a separate seam because
     it returns structural nodes, not memory records. Injected (optionally) into the
     Gateway, which fuses its hits into the payload's related-code section.
+
+    Each retriever covers one *corpus* over its own index (the no-pollution principle):
+    ``corpus`` (e.g. ``"code"`` / ``"docs"``) tags its hits so the gateway can group them
+    into separate payload sections and keep their vector spaces from muddying each other.
     """
 
-    def __init__(self, encoder: Encoder, index: StructuralIndex) -> None:
+    def __init__(self, encoder: Encoder, index: StructuralIndex, *, corpus: str = "code") -> None:
         self._encoder = encoder
         self._index = index
+        self.corpus = corpus
 
     def retrieve(self, cue: Cue, k: int) -> list[ScoredNode]:
         embedding = (
