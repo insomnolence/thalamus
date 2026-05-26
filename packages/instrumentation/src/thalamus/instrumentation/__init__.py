@@ -23,6 +23,15 @@ from thalamus.instrumentation.events import (
 from thalamus.instrumentation.git_observer import GitObserver
 from thalamus.instrumentation.junit_observer import JUnitObserver
 from thalamus.instrumentation.logging_retriever import LoggingRetriever
+from thalamus.instrumentation.session import (
+    FileSessionContextStore,
+    SessionContext,
+    SessionContextStore,
+    default_session_path,
+    deserialize_session_context,
+    mint_session_id,
+    serialize_session_context,
+)
 from thalamus.instrumentation.sinks import EventSink, InMemoryEventSink, JsonlEventSink
 from thalamus.instrumentation.trajectory import (
     InMemoryTrajectorySink,
@@ -63,6 +72,7 @@ def read_trajectory_log(path: Path) -> Iterator[TrajectoryEvent]:
 __all__ = [
     "CandidateLog",
     "EventSink",
+    "FileSessionContextStore",
     "GitObserver",
     "InMemoryEventSink",
     "InMemoryTrajectorySink",
@@ -73,6 +83,8 @@ __all__ = [
     "JsonlUsageSink",
     "LoggingRetriever",
     "RetrievalEvent",
+    "SessionContext",
+    "SessionContextStore",
     "ShownItem",
     "TrajectoryEvent",
     "TrajectoryEventKind",
@@ -81,13 +93,17 @@ __all__ = [
     "UsageSink",
     "attribute_overlap",
     "build_test_run_event",
+    "default_session_path",
     "deserialize_event",
+    "deserialize_session_context",
     "deserialize_trajectory_event",
     "deserialize_usage",
+    "mint_session_id",
     "read_event_log",
     "read_usage_log",
     "read_trajectory_log",
     "serialize_event",
+    "serialize_session_context",
     "serialize_trajectory_event",
     "serialize_usage",
 ]

@@ -31,8 +31,13 @@ def build_server(
     *,
     name: str = "thalamus",
     remember_writer: RememberWriter | None = None,
+    default_session_id: SessionId | None = None,
 ) -> FastMCP:
-    """Build a FastMCP server exposing the gateway's ``recall`` tool."""
+    """Build a FastMCP server exposing the gateway's ``recall`` tool.
+
+    ``default_session_id`` is stamped on every recall whose caller omits one, so the
+    serve process can key its session without any actuator cooperation; an explicit
+    caller-supplied ``session_id`` still wins (finer-grained sessions)."""
     try:
         from fastmcp import FastMCP
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
@@ -55,7 +60,7 @@ def build_server(
             prompt=prompt,
             scope=scope,
             focus=focus,
-            session_id=SessionId(session_id) if session_id is not None else None,
+            session_id=SessionId(session_id) if session_id is not None else default_session_id,
         )
         if payload.event_id is not None:
             pending[payload.event_id] = payload

@@ -18,15 +18,23 @@ import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_store
 from thalamus.cli.remember import RememberConfig, run_remember
 from thalamus.core.protocols import Encoder, Store
-from thalamus.core.types import MemoryRecord, RepoId, Scope, TenantId
+from thalamus.core.types import MemoryRecord, RepoId, Scope, SessionId, TenantId
 from thalamus.gateway import Gateway
 from thalamus.gateway.server import RememberWriter
-from thalamus.instrumentation import JsonlEventSink, JsonlUsageSink
+from thalamus.instrumentation import (
+    FileSessionContextStore,
+    JsonlEventSink,
+    JsonlUsageSink,
+    SessionContext,
+    default_session_path,
+    mint_session_id,
+)
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 
 _DEFAULT_DIM = 128
@@ -49,6 +57,8 @@ class ServeConfig:
     neo4j_uri: str | None
     neo4j_user: str
     neo4j_password: str | None
+    session: bool = True
+    session_id: str | None = None
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -86,6 +96,18 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "--max-memory-chars", type=int, default=1000,
         help="maximum text returned for each recalled memory",
     )
+    parser.add_argument(
+        "--session", action=argparse.BooleanOptionalAction, default=True,
+        help=(
+            "tag recalls with a per-process session id and publish a session-context file "
+            "so out-of-band capture (tests/commits) can join to it (--no-session leaves "
+            "events unkeyed = the pre-measurement-loop behavior)"
+        ),
+    )
+    parser.add_argument(
+        "--session-id", default=None,
+        help="explicit session id to use (default: mint a fresh one per serve process)",
+    )
 
 
 def serve_config(args: argparse.Namespace) -> ServeConfig:
@@ -105,6 +127,8 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
         neo4j_user=os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
+        session=bool(args.session),
+        session_id=str(args.session_id) if args.session_id else None,
     )
 
 
@@ -192,10 +216,25 @@ def run_serve(config: ServeConfig) -> None:
         else DeterministicEncoder(dim=config.dim)
     )
     gateway, store, episodes = build_serve_gateway(config, encoder=encoder)
+
+    # Mint + publish a session id so recalls are keyed and out-of-band capture
+    # (pytest plugin / git sync) can join to the same session — the measurement loop.
+    default_session_id: SessionId | None = None
+    if config.session:
+        default_session_id = (
+            SessionId(config.session_id) if config.session_id else mint_session_id()
+        )
+        FileSessionContextStore(default_session_path(config.repo)).publish(
+            SessionContext(session_id=default_session_id, started_at=datetime.now(UTC))
+        )
+
     try:
+        session_note = (
+            f"session {default_session_id}" if default_session_id else "session tagging off"
+        )
         print(
             f"thalamus: serving [{config.repo_id}] over MCP (stdio) — {len(episodes)} episodes, "
-            f"Brain 2 re-derived from {config.repo}. Ctrl-C to stop.",
+            f"Brain 2 re-derived from {config.repo}, {session_note}. Ctrl-C to stop.",
             file=sys.stderr,
         )
         scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
@@ -204,6 +243,7 @@ def run_serve(config: ServeConfig) -> None:
             scope,
             name=f"thalamus:{config.repo_id}",
             remember_writer=build_remember_writer(config, store=store, encoder=encoder),
+            default_session_id=default_session_id,
         ).run()
     finally:
         close_store(store)

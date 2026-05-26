@@ -35,6 +35,18 @@ def test_serve_config_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert config.max_structural_items == 12
     assert config.max_memory_chars == 1000
     assert config.neo4j_uri is None
+    assert config.session is True  # session tagging on by default
+    assert config.session_id is None  # minted per process unless overridden
+
+
+def test_serve_config_session_flags(tmp_path: Path) -> None:
+    parser = argparse.ArgumentParser()
+    add_serve_arguments(parser)
+    off = serve_config(parser.parse_args(["--repo", str(tmp_path), "--no-session"]))
+    assert off.session is False
+    explicit = serve_config(parser.parse_args(["--repo", str(tmp_path), "--session-id", "abc123"]))
+    assert explicit.session is True
+    assert explicit.session_id == "abc123"
 
 
 def test_build_serve_gateway_scans_brain1_and_relinks(tmp_path: Path) -> None:

@@ -5,8 +5,17 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import pytest
-from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
+from thalamus.core.types import (
+    Hemisphere,
+    MemoryId,
+    MemoryRecord,
+    RepoId,
+    Scope,
+    SessionId,
+    TenantId,
+)
 from thalamus.gateway import Gateway, build_server
+from thalamus.instrumentation import InMemoryEventSink, LoggingRetriever
 from thalamus.retrieval import L0Retriever
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
@@ -50,6 +59,43 @@ async def test_recall_tool_returns_context_over_mcp() -> None:
         text = result.data if isinstance(result.data, str) else result.content[0].text
         assert "sqlite" in text
         assert "why: json too slow" in text
+
+
+def _logging_gateway() -> tuple[Gateway, InMemoryEventSink]:
+    encoder = DeterministicEncoder(dim=64)
+    store = InMemoryStore(dim=64)
+    content = "switched to sqlite; json too slow"
+    record = MemoryRecord(
+        MemoryId("sqlite"), Hemisphere.EXPERIENTIAL, "episode", content, SCOPE, NOW, {}
+    )
+    store.add(record, encoder.encode([content])[0])
+    sink = InMemoryEventSink()
+    retriever = LoggingRetriever(
+        L0Retriever(encoder, store, now=lambda: NOW), sink, policy_id="L0"
+    )
+    return Gateway(retriever, k=3), sink
+
+
+async def test_recall_defaults_to_server_session_id_when_caller_omits_it() -> None:
+    from fastmcp import Client
+
+    gateway, sink = _logging_gateway()
+    server = build_server(gateway, SCOPE, default_session_id=SessionId("serve-test-1"))
+    async with Client(server) as client:
+        await client.call_tool("recall", {"prompt": "why did we move to sqlite"})
+    assert sink.events[-1].session_id == SessionId("serve-test-1")
+
+
+async def test_caller_session_id_overrides_server_default() -> None:
+    from fastmcp import Client
+
+    gateway, sink = _logging_gateway()
+    server = build_server(gateway, SCOPE, default_session_id=SessionId("serve-test-1"))
+    async with Client(server) as client:
+        await client.call_tool(
+            "recall", {"prompt": "why did we move to sqlite", "session_id": "caller-99"}
+        )
+    assert sink.events[-1].session_id == SessionId("caller-99")
 
 
 async def test_recall_tool_lists_in_server() -> None:
