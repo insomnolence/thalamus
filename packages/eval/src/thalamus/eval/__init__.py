@@ -14,19 +14,23 @@ an actuator are wired in.
 from thalamus.eval.benchmark import BenchmarkCase, load_cases
 from thalamus.eval.harness import EvalReport, NullRetriever, compare, evaluate
 from thalamus.eval.metrics import hit_at_k, precision_at_k, recall_at_k, reciprocal_rank
+from thalamus.eval.proxy_truth import ProxyTruthReport, proxy_truth, session_utility
 from thalamus.eval.utility import UtilityReport, utility_at_k
 
 __all__ = [
     "BenchmarkCase",
     "EvalReport",
     "NullRetriever",
+    "ProxyTruthReport",
     "UtilityReport",
     "compare",
     "evaluate",
     "hit_at_k",
     "load_cases",
     "precision_at_k",
+    "proxy_truth",
     "recall_at_k",
     "reciprocal_rank",
+    "session_utility",
     "utility_at_k",
 ]

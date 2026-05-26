@@ -8,6 +8,7 @@ from thalamus.core.types import (
     Hemisphere,
     MemoryId,
     MemoryRecord,
+    MemoryRef,
     RepoId,
     Scope,
     TenantId,
@@ -33,8 +34,8 @@ def test_add_get() -> None:
     store = InMemoryStore(dim=3)
     record = _record("m1")
     store.add(record, [1.0, 0.0, 0.0])
-    assert store.get(MemoryId("m1")) is record
-    assert store.get(MemoryId("missing")) is None
+    assert store.get(MemoryRef(SCOPE, MemoryId("m1"))) is record
+    assert store.get(MemoryRef(SCOPE, MemoryId("missing"))) is None
     assert len(store) == 1
 
 
@@ -53,6 +54,24 @@ def test_scope_isolation() -> None:
     store.add(_record("theirs", OTHER), [1.0, 0.0])
     results = store.search([1.0, 0.0], k=5, scope=SCOPE)
     assert [r.record.memory_id for r in results] == [MemoryId("mine")]
+
+
+def test_identical_memory_ids_coexist_across_scopes() -> None:
+    store = InMemoryStore(dim=2)
+    store.add(_record("same", SCOPE), [1.0, 0.0])
+    store.add(_record("same", OTHER), [0.0, 1.0])
+    assert store.get(MemoryRef(SCOPE, MemoryId("same"))).scope == SCOPE
+    assert store.get(MemoryRef(OTHER, MemoryId("same"))).scope == OTHER
+
+
+def test_scan_returns_scoped_records() -> None:
+    store = InMemoryStore(dim=2)
+    store.add(_record("a", SCOPE), [1.0, 0.0])
+    store.add(_record("b", SCOPE), [0.0, 1.0])
+    store.add(_record("other", OTHER), [1.0, 0.0])
+    scanned = {r.memory_id for r in store.scan(SCOPE)}
+    assert scanned == {MemoryId("a"), MemoryId("b")}  # scoped, not query-driven
+    assert store.scan(OTHER) == [_record("other", OTHER)]
 
 
 def test_dim_mismatch() -> None:

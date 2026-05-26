@@ -30,6 +30,8 @@ from thalamus.instrumentation.trajectory import (
     TrajectoryEvent,
     TrajectoryEventKind,
     TrajectorySink,
+    build_test_run_event,
+    deserialize_trajectory_event,
     serialize_trajectory_event,
 )
 from thalamus.instrumentation.usage import (
@@ -53,6 +55,11 @@ def read_usage_log(path: Path) -> Iterator[UsageSignal]:
     return (deserialize_usage(obj) for obj in read_jsonl(path))
 
 
+def read_trajectory_log(path: Path) -> Iterator[TrajectoryEvent]:
+    """Stream persisted raw trajectory observations back into events."""
+    return (deserialize_trajectory_event(obj) for obj in read_jsonl(path))
+
+
 __all__ = [
     "CandidateLog",
     "EventSink",
@@ -73,10 +80,13 @@ __all__ = [
     "UsageSignal",
     "UsageSink",
     "attribute_overlap",
+    "build_test_run_event",
     "deserialize_event",
+    "deserialize_trajectory_event",
     "deserialize_usage",
     "read_event_log",
     "read_usage_log",
+    "read_trajectory_log",
     "serialize_event",
     "serialize_trajectory_event",
     "serialize_usage",

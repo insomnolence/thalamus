@@ -19,8 +19,8 @@ from typing import Protocol, runtime_checkable
 
 from thalamus.core.types import (
     Cue,
-    MemoryId,
     MemoryRecord,
+    MemoryRef,
     RetrievalResult,
     Scope,
     ScoredMemory,
@@ -55,12 +55,21 @@ class Store(Protocol):
         """Persist a record and index its embedding."""
         ...
 
-    def get(self, memory_id: MemoryId) -> MemoryRecord | None:
-        """Fetch a record by id, or ``None`` if absent."""
+    def get(self, ref: MemoryRef) -> MemoryRecord | None:
+        """Fetch a record by scoped identity, or ``None`` if absent."""
         ...
 
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredMemory]:
         """Return the ``k`` nearest records within ``scope`` by vector similarity."""
+        ...
+
+    def scan(self, scope: Scope) -> list[MemoryRecord]:
+        """Return all records within ``scope`` (unordered).
+
+        The enumeration access pattern (vs. ``search``'s top-k): re-deriving
+        cross-hemisphere links at serve time, dreaming re-segmentation, belief
+        audits. Distinct from ``search`` because it is not query-driven.
+        """
         ...
 
 

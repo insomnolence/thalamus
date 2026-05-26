@@ -1,4 +1,4 @@
-"""``python -m thalamus.cli`` — the dogfood sync: a repo's commits → Brain 1, durably.
+"""``thalamus.cli sync`` — the dogfood sync: a repo's commits → Brain 1, durably.
 
 The *composition root* for the git→Brain 1 loop (``docs/deep-dives/path-to-real-data.md``):
 the one place allowed to choose concretes (Neo4j vs. in-memory store, the encoder,
@@ -8,27 +8,26 @@ Run it after each commit and the project's own history accumulates as episodes.
 
 Durable store: set ``THALAMUS_NEO4J_URI`` (+ ``_USER`` / ``_PASSWORD``) to persist
 episodes in Neo4j across sessions; without it, it falls back to an in-memory store
-with a loud warning (episodes will not survive the process). The checkpoint is a
-file, so incremental sync resumes across runs.
+with a loud warning. The checkpoint is a file, so incremental sync resumes across runs.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from thalamus.cli.brain import build_store, close_store
 from thalamus.core.protocols import Store
-from thalamus.core.types import Hemisphere, MemoryRecord, RepoId, Scope, TenantId
+from thalamus.core.types import MemoryRecord, RepoId, Scope, TenantId
 from thalamus.experiential import FileCheckpoint, GitEpisodeIngestor
-from thalamus.instrumentation import GitObserver
-from thalamus.routing import DeterministicEncoder
-from thalamus.store import InMemoryStore, Neo4jStore, connect
+from thalamus.instrumentation import GitObserver, JsonlTrajectorySink, read_trajectory_log
+from thalamus.routing import BgeEncoder, DeterministicEncoder
 
 _DEFAULT_DIM = 128
+_DEFAULT_ENCODER = "bge-small"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,16 +37,13 @@ class SyncConfig:
     tenant: str
     repo_id: str
     dim: int
+    encoder: str
     neo4j_uri: str | None
     neo4j_user: str
     neo4j_password: str | None
 
 
-def parse_args(argv: Sequence[str]) -> SyncConfig:
-    parser = argparse.ArgumentParser(
-        prog="python -m thalamus.cli",
-        description="Sync a repository's commits into the experiential hemisphere (Brain 1).",
-    )
+def add_sync_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--repo", type=Path, default=Path.cwd(), help="repo to ingest (default: cwd)"
     )
@@ -60,8 +56,13 @@ def parse_args(argv: Sequence[str]) -> SyncConfig:
         "--repo-id", default=None, help="repo id for scoping (default: repo dir name)"
     )
     parser.add_argument("--dim", type=int, default=_DEFAULT_DIM, help="embedding dimensionality")
-    args = parser.parse_args(argv)
+    parser.add_argument(
+        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        help="embedding model (default: bge-small; deterministic is for smoke tests)",
+    )
 
+
+def sync_config(args: argparse.Namespace) -> SyncConfig:
     repo = Path(args.repo).resolve()
     checkpoint = (
         Path(args.checkpoint)
@@ -74,32 +75,47 @@ def parse_args(argv: Sequence[str]) -> SyncConfig:
         tenant=str(args.tenant),
         repo_id=str(args.repo_id) if args.repo_id else repo.name,
         dim=int(args.dim),
+        encoder=str(args.encoder),
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
         neo4j_user=os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
     )
 
 
-def _build_store(config: SyncConfig) -> Store:
-    if config.neo4j_uri is not None:
-        driver = connect(config.neo4j_uri, config.neo4j_user, config.neo4j_password or "")
-        return Neo4jStore(dim=config.dim, driver=driver, hemisphere=Hemisphere.EXPERIENTIAL)
-    print(
-        "warning: THALAMUS_NEO4J_URI not set — using in-memory store; "
-        "episodes will NOT persist across runs.",
-        file=sys.stderr,
+def parse_args(argv: Sequence[str]) -> SyncConfig:
+    """Standalone parse of the sync arguments (the subcommand dispatcher reuses the pieces)."""
+    parser = argparse.ArgumentParser(
+        prog="python -m thalamus.cli sync",
+        description="Sync a repository's commits into the experiential hemisphere (Brain 1).",
     )
-    return InMemoryStore(dim=config.dim)
+    add_sync_arguments(parser)
+    return sync_config(parser.parse_args(argv))
 
 
 def build_ingestor(config: SyncConfig) -> tuple[GitEpisodeIngestor, Store]:
     """Wire the concrete encoder/store/observer/checkpoint into an ingestor."""
-    encoder = DeterministicEncoder(dim=config.dim)
-    store = _build_store(config)
+    encoder = (
+        BgeEncoder("BAAI/bge-small-en-v1.5")
+        if config.encoder == "bge-small"
+        else DeterministicEncoder(dim=config.dim)
+    )
+    store = build_store(
+        dim=encoder.dim,
+        neo4j_uri=config.neo4j_uri,
+        neo4j_user=config.neo4j_user,
+        neo4j_password=config.neo4j_password,
+        encoder_id=config.encoder,
+    )
     scope = Scope(tenant_id=TenantId(config.tenant), repo_id=RepoId(config.repo_id))
     observer = GitObserver(config.repo, scope)
+    trajectory_path = config.repo / ".thalamus" / "logs" / "trajectory.jsonl"
     ingestor = GitEpisodeIngestor(
-        observer, encoder=encoder, store=store, checkpoint=FileCheckpoint(config.checkpoint)
+        observer,
+        encoder=encoder,
+        store=store,
+        checkpoint=FileCheckpoint(config.checkpoint),
+        trajectory_sink=JsonlTrajectorySink(trajectory_path),
+        raw_events=lambda: list(read_trajectory_log(trajectory_path)),
     )
     return ingestor, store
 
@@ -110,15 +126,8 @@ def run_sync(config: SyncConfig) -> list[MemoryRecord]:
     try:
         records = ingestor.sync()
     finally:
-        close = getattr(store, "close", None)
-        if callable(close):
-            close()
-    print(f"synced {len(records)} new episode(s) into Brain 1 [{config.repo_id}]")
+        close_store(store)
+    print(f"materialized {len(records)} episode(s) into Brain 1 [{config.repo_id}]")
     for record in records:
         print(f"  {record.memory_id}  {record.content.splitlines()[0]}")
     return records
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    run_sync(parse_args(sys.argv[1:] if argv is None else argv))
-    return 0

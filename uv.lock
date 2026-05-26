@@ -2214,8 +2214,17 @@ dependencies = [
     { name = "thalamus-core" },
 ]
 
+[package.optional-dependencies]
+pytest = [
+    { name = "pytest" },
+]
+
 [package.metadata]
-requires-dist = [{ name = "thalamus-core", editable = "packages/core" }]
+requires-dist = [
+    { name = "pytest", marker = "extra == 'pytest'", specifier = ">=8.0" },
+    { name = "thalamus-core", editable = "packages/core" },
+]
+provides-extras = ["pytest"]
 
 [[package]]
 name = "thalamus-retrieval"

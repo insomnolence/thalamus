@@ -16,6 +16,7 @@ from collections import deque
 from collections.abc import Sequence
 from typing import Literal, Protocol, runtime_checkable
 
+from thalamus.core.types import Scope, StructuralRef
 from thalamus.structural.schema import IngestResult, StructuralEdge, StructuralNode
 
 Direction = Literal["out", "in", "both"]
@@ -26,13 +27,18 @@ class StructuralGraph(Protocol):
     """A re-derivable graph of structural nodes + typed edges, with k-hop traversal."""
 
     def add(self, result: IngestResult) -> None: ...
-    def get(self, node_id: str) -> StructuralNode | None: ...
+    def replace(self, result: IngestResult) -> None: ...
+    def get(self, ref: StructuralRef) -> StructuralNode | None: ...
     def neighbors(
-        self, node_id: str, *, edge_types: Sequence[str] | None = None, direction: Direction = "out"
+        self,
+        ref: StructuralRef,
+        *,
+        edge_types: Sequence[str] | None = None,
+        direction: Direction = "out",
     ) -> list[StructuralNode]: ...
     def k_hop(
         self,
-        node_id: str,
+        ref: StructuralRef,
         k: int,
         *,
         edge_types: Sequence[str] | None = None,
@@ -43,20 +49,29 @@ class StructuralGraph(Protocol):
 class InMemoryStructuralGraph:
     """Pure-Python structural graph: node lookup, neighbours, and k-hop BFS."""
 
-    def __init__(self) -> None:
+    def __init__(self, scope: Scope) -> None:
+        self._scope = scope
         self._nodes: dict[str, StructuralNode] = {}
         self._out: dict[str, list[StructuralEdge]] = {}
         self._in: dict[str, list[StructuralEdge]] = {}
 
     def add(self, result: IngestResult) -> None:
         for node in result.nodes:
+            if node.scope != self._scope:
+                raise ValueError("structural node scope does not match graph scope")
             self._nodes[node.node_id] = node
         for edge in result.edges:
             self._out.setdefault(edge.source_id, []).append(edge)
             self._in.setdefault(edge.target_id, []).append(edge)
 
-    def get(self, node_id: str) -> StructuralNode | None:
-        return self._nodes.get(node_id)
+    def replace(self, result: IngestResult) -> None:
+        self._nodes.clear()
+        self._out.clear()
+        self._in.clear()
+        self.add(result)
+
+    def get(self, ref: StructuralRef) -> StructuralNode | None:
+        return self._nodes.get(ref.node_id) if ref.scope == self._scope else None
 
     def _adjacent_ids(
         self, node_id: str, edge_types: Sequence[str] | None, direction: Direction
@@ -74,11 +89,17 @@ class InMemoryStructuralGraph:
         return ids
 
     def neighbors(
-        self, node_id: str, *, edge_types: Sequence[str] | None = None, direction: Direction = "out"
+        self,
+        ref: StructuralRef,
+        *,
+        edge_types: Sequence[str] | None = None,
+        direction: Direction = "out",
     ) -> list[StructuralNode]:
         out: list[StructuralNode] = []
         seen: set[str] = set()
-        for adjacent_id in self._adjacent_ids(node_id, edge_types, direction):
+        if ref.scope != self._scope:
+            return []
+        for adjacent_id in self._adjacent_ids(ref.node_id, edge_types, direction):
             node = self._nodes.get(adjacent_id)
             if node is not None and adjacent_id not in seen:
                 seen.add(adjacent_id)
@@ -87,16 +108,18 @@ class InMemoryStructuralGraph:
 
     def k_hop(
         self,
-        node_id: str,
+        ref: StructuralRef,
         k: int,
         *,
         edge_types: Sequence[str] | None = None,
         direction: Direction = "both",
     ) -> list[StructuralNode]:
         """BFS up to depth ``k`` from ``node_id`` (excluded); returns reached nodes."""
-        visited = {node_id}
+        if ref.scope != self._scope:
+            return []
+        visited = {ref.node_id}
         out: list[StructuralNode] = []
-        frontier: deque[tuple[str, int]] = deque([(node_id, 0)])
+        frontier: deque[tuple[str, int]] = deque([(ref.node_id, 0)])
         while frontier:
             current, depth = frontier.popleft()
             if depth >= k:

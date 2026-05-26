@@ -22,6 +22,7 @@ import ast
 import logging
 from pathlib import Path
 
+from thalamus.core.types import Scope
 from thalamus.structural.schema import (
     IngestResult,
     SourceAnchor,
@@ -37,18 +38,18 @@ logger = logging.getLogger(__name__)
 _IGNORE_DIRS = frozenset({"venv", "__pycache__", "build", "dist", "node_modules", "site-packages"})
 
 
-def _dotted(path: Path, root_package: str | None) -> str:
-    if root_package is None:
-        # No package root: use the file stem (the parent dir name for __init__).
-        return path.parent.name if path.stem == "__init__" else path.stem
-    parts = list(path.with_suffix("").parts)
-    pkg = root_package.split(".")
-    for i in range(len(parts)):
-        if parts[i : i + len(pkg)] == pkg:
-            parts = parts[i:]
-            break
+def _dotted(path: Path, root: Path, root_package: str | None) -> str:
+    """Stable module identity from a corpus-relative path, optionally package-prefixed."""
+    relative = path.name if root.is_file() else str(path.relative_to(root))
+    parts = list(Path(relative).with_suffix("").parts)
     if parts and parts[-1] == "__init__":
         parts = parts[:-1]
+    if root_package is not None:
+        pkg = root_package.split(".")
+        if parts[: len(pkg)] != pkg:
+            parts = [*pkg, *parts]
+    if not parts:
+        parts = root_package.split(".") if root_package is not None else [path.parent.name]
     return ".".join(parts)
 
 
@@ -67,11 +68,11 @@ class PythonAstIngestor:
         self._root_package = root_package
         self._ignore_dirs = ignore_dirs
 
-    def ingest_path(self, root: Path) -> IngestResult:
+    def ingest_path(self, root: Path, scope: Scope) -> IngestResult:
         nodes: list[StructuralNode] = []
         edges: list[StructuralEdge] = []
         for path in self._python_files(root):
-            self._ingest_file(path, nodes, edges)
+            self._ingest_file(path, root, scope, nodes, edges)
         return IngestResult(nodes=nodes, edges=edges)
 
     def _python_files(self, root: Path) -> list[Path]:
@@ -90,7 +91,12 @@ class PythonAstIngestor:
         return sorted(files)
 
     def _ingest_file(
-        self, path: Path, nodes: list[StructuralNode], edges: list[StructuralEdge]
+        self,
+        path: Path,
+        root: Path,
+        scope: Scope,
+        nodes: list[StructuralNode],
+        edges: list[StructuralEdge],
     ) -> None:
         try:
             source = path.read_text(encoding="utf-8")
@@ -103,19 +109,20 @@ class PythonAstIngestor:
             logger.warning("syntax error, skipping %s", path)
             return
 
-        module = _dotted(path, self._root_package)
+        module = _dotted(path, root, self._root_package)
         module_id = f"module:{module}"
         nodes.append(
             StructuralNode(
                 node_id=module_id,
                 kind="module",
                 label=module,
+                scope=scope,
                 anchor=SourceAnchor(path=str(path), line_start=1, line_end=source.count("\n") + 1),
             )
         )
         for child in ast.iter_child_nodes(tree):
             if isinstance(child, ast.ClassDef):
-                self._add_class(path, child, module, module_id, nodes, edges)
+                self._add_class(path, child, module, module_id, scope, nodes, edges)
             elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                 func_id = f"function:{module}.{child.name}"
                 nodes.append(
@@ -123,6 +130,7 @@ class PythonAstIngestor:
                         node_id=func_id,
                         kind="function",
                         label=f"{module}.{child.name}",
+                        scope=scope,
                         anchor=_anchor(path, child),
                     )
                 )
@@ -139,6 +147,7 @@ class PythonAstIngestor:
         class_node: ast.ClassDef,
         module: str,
         module_id: str,
+        scope: Scope,
         nodes: list[StructuralNode],
         edges: list[StructuralEdge],
     ) -> None:
@@ -149,6 +158,7 @@ class PythonAstIngestor:
                 node_id=class_id,
                 kind="class",
                 label=f"{module}.{class_node.name}",
+                scope=scope,
                 anchor=_anchor(path, class_node),
                 metadata={"bases": base_names},
             )
@@ -165,6 +175,7 @@ class PythonAstIngestor:
                         node_id=method_id,
                         kind="method",
                         label=f"{module}.{class_node.name}.{item.name}",
+                        scope=scope,
                         anchor=_anchor(path, item),
                     )
                 )

@@ -11,6 +11,7 @@ from thalamus.core.types import (
     Hemisphere,
     MemoryId,
     MemoryRecord,
+    MemoryRef,
     RepoId,
     Scope,
     ScoredMemory,
@@ -68,12 +69,12 @@ def _search_until(store: Neo4jStore, vec: list[float], expected: int) -> list[Sc
 
 def test_add_get_roundtrip(store: Neo4jStore) -> None:
     store.add(_record("m1", "hello world"), [1.0, 0.0, 0.0, 0.0])
-    got = store.get(MemoryId("m1"))
+    got = store.get(MemoryRef(SCOPE, MemoryId("m1")))
     assert got is not None
     assert got.content == "hello world"
     assert got.metadata == {"k": "v"}
     assert got.scope == SCOPE
-    assert store.get(MemoryId("missing")) is None
+    assert store.get(MemoryRef(SCOPE, MemoryId("missing"))) is None
 
 
 def test_vector_search_orders_and_scopes(store: Neo4jStore) -> None:
@@ -85,6 +86,22 @@ def test_vector_search_orders_and_scopes(store: Neo4jStore) -> None:
     assert ids[0] == MemoryId("near")  # most similar ranks first
     assert MemoryId("far") in ids
     assert MemoryId("other") not in ids  # scope isolation
+
+
+def test_scan_returns_scoped_records(store: Neo4jStore) -> None:
+    store.add(_record("a", "a"), [1.0, 0.0, 0.0, 0.0])
+    store.add(_record("b", "b"), [0.0, 1.0, 0.0, 0.0])
+    store.add(_record("other", "other", OTHER), [1.0, 0.0, 0.0, 0.0])
+    scanned = {r.memory_id for r in store.scan(SCOPE)}
+    assert scanned == {MemoryId("a"), MemoryId("b")}  # scope-filtered, no vector query
+    assert [r.memory_id for r in store.scan(OTHER)] == [MemoryId("other")]
+
+
+def test_identical_memory_ids_coexist_across_scopes(store: Neo4jStore) -> None:
+    store.add(_record("same", "mine"), [1.0, 0.0, 0.0, 0.0])
+    store.add(_record("same", "theirs", OTHER), [0.0, 1.0, 0.0, 0.0])
+    assert store.get(MemoryRef(SCOPE, MemoryId("same"))).content == "mine"
+    assert store.get(MemoryRef(OTHER, MemoryId("same"))).content == "theirs"
 
 
 def test_dim_mismatch(store: Neo4jStore) -> None:

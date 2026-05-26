@@ -12,35 +12,37 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from thalamus.core.types import MemoryId
+from thalamus.core.types import MemoryRef, StructuralRef
 
 
 @runtime_checkable
 class CrossLinkIndex(Protocol):
     """Bidirectional index of experiential-memory ↔ structural-node links."""
 
-    def link(self, memory_id: MemoryId, node_id: str) -> None: ...
-    def nodes_for(self, memory_id: MemoryId) -> list[str]: ...
-    def memories_for(self, node_id: str) -> list[MemoryId]: ...
+    def link(self, memory: MemoryRef, node: StructuralRef) -> None: ...
+    def nodes_for(self, memory: MemoryRef) -> list[StructuralRef]: ...
+    def memories_for(self, node: StructuralRef) -> list[MemoryRef]: ...
 
 
 class InMemoryCrossLinkIndex:
     """In-memory cross-link index (insertion-ordered, deduplicated)."""
 
     def __init__(self) -> None:
-        self._by_memory: dict[MemoryId, list[str]] = {}
-        self._by_node: dict[str, list[MemoryId]] = {}
+        self._by_memory: dict[MemoryRef, list[StructuralRef]] = {}
+        self._by_node: dict[StructuralRef, list[MemoryRef]] = {}
 
-    def link(self, memory_id: MemoryId, node_id: str) -> None:
-        nodes = self._by_memory.setdefault(memory_id, [])
-        if node_id not in nodes:
-            nodes.append(node_id)
-        memories = self._by_node.setdefault(node_id, [])
-        if memory_id not in memories:
-            memories.append(memory_id)
+    def link(self, memory: MemoryRef, node: StructuralRef) -> None:
+        if memory.scope != node.scope:
+            raise ValueError("cross-link endpoints must have the same scope")
+        nodes = self._by_memory.setdefault(memory, [])
+        if node not in nodes:
+            nodes.append(node)
+        memories = self._by_node.setdefault(node, [])
+        if memory not in memories:
+            memories.append(memory)
 
-    def nodes_for(self, memory_id: MemoryId) -> list[str]:
-        return list(self._by_memory.get(memory_id, []))
+    def nodes_for(self, memory: MemoryRef) -> list[StructuralRef]:
+        return list(self._by_memory.get(memory, []))
 
-    def memories_for(self, node_id: str) -> list[MemoryId]:
-        return list(self._by_node.get(node_id, []))
+    def memories_for(self, node: StructuralRef) -> list[MemoryRef]:
+        return list(self._by_node.get(node, []))

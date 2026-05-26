@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from thalamus.core.types import MemoryId
+from thalamus.core.types import MemoryId, MemoryRef, RepoId, Scope, TenantId
 from thalamus.structural import InMemoryCrossLinkIndex, PythonAstIngestor, link_by_footprint
+
+SCOPE = Scope(TenantId("t"), RepoId("r"))
 
 
 def _write(repo: Path, rel: str, src: str) -> None:
@@ -15,49 +17,53 @@ def _write(repo: Path, rel: str, src: str) -> None:
 def test_links_episode_to_touched_module(tmp_path: Path) -> None:
     _write(tmp_path, "foo.py", "def do_thing():\n    return 1\n")
     _write(tmp_path, "bar.py", "def other():\n    return 2\n")
-    result = PythonAstIngestor().ingest_path(tmp_path)
+    result = PythonAstIngestor().ingest_path(tmp_path, SCOPE)
     links = InMemoryCrossLinkIndex()
 
     created = link_by_footprint(
-        [(MemoryId("ep1"), ["foo.py"])], result.nodes, links, repo_root=tmp_path
+        [(MemoryRef(SCOPE, MemoryId("ep1")), ["foo.py"])], result.nodes, links, repo_root=tmp_path
     )
     assert created == 1
-    assert links.nodes_for(MemoryId("ep1")) == ["module:foo"]  # touched foo, not bar
-    assert MemoryId("ep1") in links.memories_for("module:foo")
+    nodes = links.nodes_for(MemoryRef(SCOPE, MemoryId("ep1")))
+    assert [node.node_id for node in nodes] == ["module:foo"]  # touched foo, not bar
+    assert MemoryRef(SCOPE, MemoryId("ep1")) in links.memories_for(nodes[0])
 
 
 def test_absolute_anchor_matches_relative_footprint(tmp_path: Path) -> None:
     # anchors are absolute (ingested from an absolute root); footprints are repo-relative
     _write(tmp_path, "sub/mod.py", "def f():\n    return 0\n")
-    result = PythonAstIngestor().ingest_path(tmp_path)
+    result = PythonAstIngestor().ingest_path(tmp_path, SCOPE)
     module = next(node for node in result.nodes if node.kind == "module")
     assert module.anchor is not None and Path(module.anchor.path).is_absolute()
 
     links = InMemoryCrossLinkIndex()
     created = link_by_footprint(
-        [(MemoryId("e"), ["sub/mod.py"])], result.nodes, links, repo_root=tmp_path
+        [(MemoryRef(SCOPE, MemoryId("e")), ["sub/mod.py"])], result.nodes, links, repo_root=tmp_path
     )
     assert created == 1
 
 
 def test_non_python_or_unmatched_files_do_not_link(tmp_path: Path) -> None:
     _write(tmp_path, "foo.py", "x = 1\n")
-    result = PythonAstIngestor().ingest_path(tmp_path)
+    result = PythonAstIngestor().ingest_path(tmp_path, SCOPE)
     links = InMemoryCrossLinkIndex()
 
     created = link_by_footprint(
-        [(MemoryId("ep"), ["README.md", "missing.py"])], result.nodes, links, repo_root=tmp_path
+        [(MemoryRef(SCOPE, MemoryId("ep")), ["README.md", "missing.py"])],
+        result.nodes,
+        links,
+        repo_root=tmp_path,
     )
     assert created == 0  # links are never forced
-    assert links.nodes_for(MemoryId("ep")) == []
+    assert links.nodes_for(MemoryRef(SCOPE, MemoryId("ep"))) == []
 
 
 def test_idempotent_relink(tmp_path: Path) -> None:
     _write(tmp_path, "foo.py", "y = 1\n")
-    result = PythonAstIngestor().ingest_path(tmp_path)
+    result = PythonAstIngestor().ingest_path(tmp_path, SCOPE)
     links = InMemoryCrossLinkIndex()
-    items = [(MemoryId("ep"), ["foo.py"])]
+    items = [(MemoryRef(SCOPE, MemoryId("ep")), ["foo.py"])]
 
     link_by_footprint(items, result.nodes, links, repo_root=tmp_path)
     link_by_footprint(items, result.nodes, links, repo_root=tmp_path)  # re-run
-    assert links.nodes_for(MemoryId("ep")) == ["module:foo"]  # no duplicate edge
+    assert len(links.nodes_for(MemoryRef(SCOPE, MemoryId("ep")))) == 1

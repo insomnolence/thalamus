@@ -18,6 +18,8 @@ def append_jsonl(path: Path, obj: dict[str, Any]) -> None:
 def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     """Yield each non-blank line of ``path`` parsed as a JSON object (the inverse
     of :func:`append_jsonl`). Streams lazily so large logs need not fit in memory."""
+    if not path.exists():
+        return
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             stripped = line.strip()

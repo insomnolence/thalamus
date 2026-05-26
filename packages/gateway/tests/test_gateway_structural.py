@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
+from thalamus.core.types import (
+    Hemisphere,
+    MemoryId,
+    MemoryRecord,
+    RepoId,
+    Scope,
+    StructuralRef,
+    TenantId,
+)
 from thalamus.gateway import Gateway
 from thalamus.retrieval import L0Retriever
 from thalamus.routing import DeterministicEncoder
@@ -34,12 +42,15 @@ def test_recall_surfaces_linked_code(tmp_path: Path) -> None:
     src.write_text(
         "class SqliteStore:\n    def connect(self):\n        return 1\n", encoding="utf-8"
     )
-    graph = InMemoryStructuralGraph()
-    graph.add(PythonAstIngestor().ingest_path(src))
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(PythonAstIngestor().ingest_path(src, SCOPE))
 
     # the first cross-hemisphere link: this memory is about this class
     links = InMemoryCrossLinkIndex()
-    links.link(MemoryId("m_sqlite"), "class:backend.SqliteStore")
+    record = store.scan(SCOPE)[0]
+    node = graph.get(StructuralRef(SCOPE, "class:backend.SqliteStore"))
+    assert node is not None
+    links.link(record.ref, node.ref)
 
     gateway = Gateway(
         L0Retriever(encoder, store, now=lambda: NOW),
@@ -47,17 +58,20 @@ def test_recall_surfaces_linked_code(tmp_path: Path) -> None:
         graph=graph,
         links=links,
         structural_k_hop=1,
+        max_structural_items=1,
     )
     payload = gateway.recall(prompt="why did we move to sqlite", scope=SCOPE)
 
     assert payload.memories[0].memory_id == MemoryId("m_sqlite")
     struct_ids = {item.node_id for item in payload.structural}
     assert "class:backend.SqliteStore" in struct_ids
-    assert "method:backend.SqliteStore.connect" in struct_ids  # reached via k_hop=1
+    assert "method:backend.SqliteStore.connect" not in struct_ids  # bounded out of the payload
+    assert payload.structural_omitted >= 1
 
     text = payload.render()
     assert "## Related code" in text
     assert "SqliteStore" in text
+    assert "additional related item(s) omitted" in text
 
 
 def test_no_structural_without_graph() -> None:
@@ -67,3 +81,25 @@ def test_no_structural_without_graph() -> None:
     gateway = Gateway(L0Retriever(encoder, store, now=lambda: NOW))
     payload = gateway.recall(prompt="hello", scope=SCOPE)
     assert list(payload.structural) == []
+
+
+def test_zero_structural_limit_reports_omitted_context(tmp_path: Path) -> None:
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    _add(encoder, store, "m", "linked constraint")
+    src = tmp_path / "a.py"
+    src.write_text("x = 1\n", encoding="utf-8")
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(PythonAstIngestor().ingest_path(src, SCOPE))
+    links = InMemoryCrossLinkIndex()
+    links.link(store.scan(SCOPE)[0].ref, StructuralRef(SCOPE, "module:a"))
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW),
+        graph=graph,
+        links=links,
+        max_structural_items=0,
+    )
+    payload = gateway.recall(prompt="linked constraint", scope=SCOPE)
+    assert payload.structural == []
+    assert payload.structural_omitted == 1
+    assert "additional related item(s) omitted" in payload.render()

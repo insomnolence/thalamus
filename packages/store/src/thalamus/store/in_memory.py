@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 
 from thalamus.core.exceptions import DimensionMismatchError
-from thalamus.core.types import MemoryId, MemoryRecord, Scope, ScoredMemory, Vector
+from thalamus.core.types import MemoryRecord, MemoryRef, Scope, ScoredMemory, Vector
 
 
 def _cosine(a: tuple[float, ...], a_norm: float, b: tuple[float, ...]) -> float:
@@ -36,8 +36,8 @@ class InMemoryStore:
 
     def __init__(self, dim: int) -> None:
         self._dim = dim
-        self._records: dict[MemoryId, MemoryRecord] = {}
-        self._embeddings: dict[MemoryId, tuple[float, ...]] = {}
+        self._records: dict[MemoryRef, MemoryRecord] = {}
+        self._embeddings: dict[MemoryRef, tuple[float, ...]] = {}
 
     def __len__(self) -> int:
         return len(self._records)
@@ -50,20 +50,23 @@ class InMemoryStore:
 
     def add(self, record: MemoryRecord, embedding: Vector) -> None:
         vec = self._as_checked_vector(embedding, "InMemoryStore.add")
-        self._records[record.memory_id] = record
-        self._embeddings[record.memory_id] = vec
+        self._records[record.ref] = record
+        self._embeddings[record.ref] = vec
 
-    def get(self, memory_id: MemoryId) -> MemoryRecord | None:
-        return self._records.get(memory_id)
+    def get(self, ref: MemoryRef) -> MemoryRecord | None:
+        return self._records.get(ref)
+
+    def scan(self, scope: Scope) -> list[MemoryRecord]:
+        return [record for record in self._records.values() if record.scope == scope]
 
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredMemory]:
         q = self._as_checked_vector(query, "InMemoryStore.search")
         q_norm = math.sqrt(sum(value * value for value in q))
         scored: list[ScoredMemory] = []
-        for memory_id, record in self._records.items():
+        for ref, record in self._records.items():
             if record.scope != scope:
                 continue
-            score = _cosine(q, q_norm, self._embeddings[memory_id])
+            score = _cosine(q, q_norm, self._embeddings[ref])
             scored.append(ScoredMemory(record=record, score=score, features={"relevance": score}))
         scored.sort(key=lambda item: item.score, reverse=True)
         return scored[: max(k, 0)]

@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from thalamus.core.exceptions import StoreError
-from thalamus.core.types import MemoryId
+from thalamus.core.types import MemoryId, MemoryRef, RepoId, Scope, StructuralRef, TenantId
 from thalamus.structural.graph import Direction
 from thalamus.structural.schema import IngestResult, SourceAnchor, StructuralNode
 
@@ -56,8 +56,9 @@ class Neo4jStructuralGraph:
     (no ``kind``); reads filter ``kind IS NOT NULL`` so stubs never surface as results,
     matching the in-memory graph's tolerance of dangling targets."""
 
-    def __init__(self, driver: Driver, *, database: str = "neo4j") -> None:
+    def __init__(self, driver: Driver, scope: Scope, *, database: str = "neo4j") -> None:
         self._driver = driver
+        self._scope = scope
         self._database = database
 
     def add(self, result: IngestResult) -> None:
@@ -66,7 +67,8 @@ class Neo4jStructuralGraph:
             _run(
                 self._driver,
                 self._database,
-                f"UNWIND $nodes AS n MERGE (m:{_NODE} {{node_id: n.node_id}}) "
+                f"UNWIND $nodes AS n MERGE (m:{_NODE} "
+                "{tenant_id: n.tenant_id, repo_id: n.repo_id, node_id: n.node_id}) "
                 "SET m.kind = n.kind, m.label = n.label, m.anchor_path = n.anchor_path, "
                 "m.anchor_line_start = n.anchor_line_start, m.anchor_line_end = n.anchor_line_end, "
                 "m.metadata_json = n.metadata_json",
@@ -77,49 +79,76 @@ class Neo4jStructuralGraph:
             _run(
                 self._driver,
                 self._database,
-                f"UNWIND $edges AS e MERGE (a:{_NODE} {{node_id: e.s}}) "
-                f"MERGE (b:{_NODE} {{node_id: e.t}}) "
+                f"UNWIND $edges AS e MERGE (a:{_NODE} "
+                "{tenant_id: $tenant_id, repo_id: $repo_id, node_id: e.s}) "
+                f"MERGE (b:{_NODE} "
+                "{tenant_id: $tenant_id, repo_id: $repo_id, node_id: e.t}) "
                 f"MERGE (a)-[:{_EDGE} {{type: e.type}}]->(b)",
                 edges=edges,
+                tenant_id=str(self._scope.tenant_id),
+                repo_id=str(self._scope.repo_id),
             )
 
-    def get(self, node_id: str) -> StructuralNode | None:
+    def replace(self, result: IngestResult) -> None:
+        _run(
+            self._driver,
+            self._database,
+            f"MATCH (m:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id}}) DETACH DELETE m",
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
+        )
+        self.add(result)
+
+    def get(self, ref: StructuralRef) -> StructuralNode | None:
+        if ref.scope != self._scope:
+            return None
         rows = _run(
             self._driver,
             self._database,
-            f"MATCH (m:{_NODE} {{node_id: $node_id}}) WHERE m.kind IS NOT NULL RETURN m",
-            node_id=node_id,
+            f"MATCH (m:{_NODE} "
+            "{tenant_id: $tenant_id, repo_id: $repo_id, node_id: $node_id}) "
+            "WHERE m.kind IS NOT NULL RETURN m",
+            node_id=ref.node_id,
+            tenant_id=str(ref.scope.tenant_id),
+            repo_id=str(ref.scope.repo_id),
         )
         return None if not rows else self._to_node(dict(rows[0]["m"]))
 
     def neighbors(
         self,
-        node_id: str,
+        ref: StructuralRef,
         *,
         edge_types: Sequence[str] | None = None,
         direction: Direction = "out",
     ) -> list[StructuralNode]:
+        if ref.scope != self._scope:
+            return []
         left, right = _arrows(direction)
         type_filter = "AND r.type IN $types " if edge_types is not None else ""
         rows = _run(
             self._driver,
             self._database,
-            f"MATCH (n:{_NODE} {{node_id: $node_id}}){left}[r:{_EDGE}]{right}(m:{_NODE}) "
-            f"WHERE m.kind IS NOT NULL {type_filter}RETURN DISTINCT m",
-            node_id=node_id,
+            f"MATCH (n:{_NODE} "
+            f"{{tenant_id: $tenant_id, repo_id: $repo_id, node_id: $node_id}})"
+            f"{left}[r:{_EDGE}]{right}(m:{_NODE}) "
+            f"WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
+            f"AND m.kind IS NOT NULL {type_filter}RETURN DISTINCT m",
+            node_id=ref.node_id,
+            tenant_id=str(ref.scope.tenant_id),
+            repo_id=str(ref.scope.repo_id),
             types=list(edge_types) if edge_types is not None else None,
         )
         return [self._to_node(dict(row["m"])) for row in rows]
 
     def k_hop(
         self,
-        node_id: str,
+        ref: StructuralRef,
         k: int,
         *,
         edge_types: Sequence[str] | None = None,
         direction: Direction = "both",
     ) -> list[StructuralNode]:
-        if k <= 0:
+        if k <= 0 or ref.scope != self._scope:
             return []
         left, right = _arrows(direction)
         type_filter = (
@@ -130,10 +159,15 @@ class Neo4jStructuralGraph:
         rows = _run(
             self._driver,
             self._database,
-            f"MATCH p = (n:{_NODE} {{node_id: $node_id}}){left}[:{_EDGE}*1..{int(k)}]{right}"
+            f"MATCH p = (n:{_NODE} "
+            f"{{tenant_id: $tenant_id, repo_id: $repo_id, node_id: $node_id}})"
+            f"{left}[:{_EDGE}*1..{int(k)}]{right}"
             f"(m:{_NODE}) "
-            f"WHERE m.node_id <> $node_id AND m.kind IS NOT NULL {type_filter}RETURN DISTINCT m",
-            node_id=node_id,
+            f"WHERE m.node_id <> $node_id AND m.tenant_id = $tenant_id "
+            f"AND m.repo_id = $repo_id AND m.kind IS NOT NULL {type_filter}RETURN DISTINCT m",
+            node_id=ref.node_id,
+            tenant_id=str(ref.scope.tenant_id),
+            repo_id=str(ref.scope.repo_id),
             types=list(edge_types) if edge_types is not None else None,
         )
         return [self._to_node(dict(row["m"])) for row in rows]
@@ -146,6 +180,8 @@ class Neo4jStructuralGraph:
         anchor = node.anchor
         return {
             "node_id": node.node_id,
+            "tenant_id": str(node.scope.tenant_id),
+            "repo_id": str(node.scope.repo_id),
             "kind": node.kind,
             "label": node.label,
             "anchor_path": None if anchor is None else anchor.path,
@@ -167,6 +203,9 @@ class Neo4jStructuralGraph:
             node_id=str(props["node_id"]),
             kind=str(props["kind"]),
             label=str(props["label"]),
+            scope=Scope(
+                tenant_id=TenantId(str(props["tenant_id"])), repo_id=RepoId(str(props["repo_id"]))
+            ),
             anchor=anchor,
             metadata=json.loads(str(props.get("metadata_json", "{}"))),
         )
@@ -181,41 +220,66 @@ class Neo4jCrossLinkIndex:
     that already exist; it never fabricates a memory or code node."""
 
     def __init__(
-        self, driver: Driver, *, database: str = "neo4j", memory_label: str = "M_experiential"
+        self,
+        driver: Driver,
+        scope: Scope,
+        *,
+        database: str = "neo4j",
+        memory_label: str = "M_experiential",
     ) -> None:
         self._driver = driver
+        self._scope = scope
         self._database = database
         self._memory_label = memory_label
 
-    def link(self, memory_id: MemoryId, node_id: str) -> None:
+    def link(self, memory: MemoryRef, node: StructuralRef) -> None:
+        if memory.scope != self._scope or node.scope != self._scope:
+            raise ValueError("cross-link endpoints must match index scope")
         _run(
             self._driver,
             self._database,
-            f"MATCH (m:{self._memory_label} {{memory_id: $mid}}), (s:{_NODE} {{node_id: $nid}}) "
+            f"MATCH (m:{self._memory_label} "
+            "{tenant_id: $tenant_id, repo_id: $repo_id, memory_id: $mid}), "
+            f"(s:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id, node_id: $nid}}) "
             f"MERGE (m)-[:{_TOUCHES}]->(s)",
-            mid=str(memory_id),
-            nid=node_id,
+            mid=str(memory.memory_id),
+            nid=node.node_id,
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
         )
 
-    def nodes_for(self, memory_id: MemoryId) -> list[str]:
+    def nodes_for(self, memory: MemoryRef) -> list[StructuralRef]:
+        if memory.scope != self._scope:
+            return []
         rows = _run(
             self._driver,
             self._database,
-            f"MATCH (m:{self._memory_label} {{memory_id: $mid}})-[:{_TOUCHES}]->(s:{_NODE}) "
+            f"MATCH (m:{self._memory_label} "
+            "{tenant_id: $tenant_id, repo_id: $repo_id, memory_id: $mid})"
+            f"-[:{_TOUCHES}]->(s:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id}}) "
             "RETURN s.node_id AS node_id ORDER BY node_id",
-            mid=str(memory_id),
+            mid=str(memory.memory_id),
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
         )
-        return [str(row["node_id"]) for row in rows]
+        return [StructuralRef(self._scope, str(row["node_id"])) for row in rows]
 
-    def memories_for(self, node_id: str) -> list[MemoryId]:
+    def memories_for(self, node: StructuralRef) -> list[MemoryRef]:
+        if node.scope != self._scope:
+            return []
         rows = _run(
             self._driver,
             self._database,
-            f"MATCH (m:{self._memory_label})-[:{_TOUCHES}]->(s:{_NODE} {{node_id: $nid}}) "
+            f"MATCH (m:{self._memory_label} "
+            "{tenant_id: $tenant_id, repo_id: $repo_id})-[:"
+            f"{_TOUCHES}]->(s:{_NODE} "
+            "{tenant_id: $tenant_id, repo_id: $repo_id, node_id: $nid}) "
             "RETURN m.memory_id AS memory_id ORDER BY memory_id",
-            nid=node_id,
+            nid=node.node_id,
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
         )
-        return [MemoryId(str(row["memory_id"])) for row in rows]
+        return [MemoryRef(self._scope, MemoryId(str(row["memory_id"]))) for row in rows]
 
     def close(self) -> None:
         self._driver.close()

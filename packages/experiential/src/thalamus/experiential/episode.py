@@ -21,6 +21,7 @@ from enum import StrEnum
 from typing import Any
 
 from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord
+from thalamus.experiential.outcome import classify_outcome
 from thalamus.experiential.segmentation import EpisodeSpan
 from thalamus.instrumentation import TrajectoryEvent, TrajectoryEventKind
 
@@ -112,6 +113,7 @@ class EpisodeBuilder:
             "closed": span.closed,
             "footprint": footprint,
             "terminal_outcome": outcome,
+            "outcome": classify_outcome(events).value,  # Tier-2 truth signal (§13.8)
             "dead_ends": dead_ends,
             "source_event_ids": [str(event.event_id) for event in events],
             "why": [

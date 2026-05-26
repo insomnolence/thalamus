@@ -9,20 +9,23 @@ episodes + the current code, then serves structure-aware recall ("editing this s
 why we did it / what bit us here").
 
 Kept in the composition root (not a library) because it wires concretes across packages.
-``episodes`` are passed in — from the just-run sync, or (for a cold serve) a future scan
-of the experiential store. Neo4j-backed structural graph + native cross-edges are the
-next increment; for now Brain 2 + links are in-memory, re-derived each start.
+``episodes`` are passed in — from the just-run sync, or (for a cold serve) ``Store.scan``
+of the experiential store. ``graph``/``links`` may be in-memory (re-derived each start) or
+Neo4j-backed (persisted, with native cross-edges).
 """
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from thalamus.core.protocols import Encoder, Store
-from thalamus.core.types import MemoryRecord
-from thalamus.gateway import Gateway
+from thalamus.core.protocols import Encoder, Retriever, Store
+from thalamus.core.types import Hemisphere, MemoryRecord, Scope
+from thalamus.gateway import Gateway, StructuralLinkedRetriever
+from thalamus.instrumentation import EventSink, LoggingRetriever, UsageSink
 from thalamus.retrieval import L0Retriever
+from thalamus.store import InMemoryStore, Neo4jStore, connect
 from thalamus.structural import (
     CrossLinkIndex,
     Ingestor,
@@ -39,12 +42,17 @@ def build_two_hemisphere_gateway(
     *,
     store: Store,
     encoder: Encoder,
+    scope: Scope,
     episodes: Sequence[MemoryRecord],
     ingestor: Ingestor | None = None,
     graph: StructuralGraph | None = None,
     links: CrossLinkIndex | None = None,
     k: int = 5,
     k_hop: int = 1,
+    max_structural_items: int = 12,
+    max_memory_chars: int = 1000,
+    event_sink: EventSink | None = None,
+    usage_sink: UsageSink | None = None,
 ) -> Gateway:
     """Re-derive Brain 2 + cross-links from ``repo`` and return a two-hemisphere gateway.
 
@@ -54,15 +62,54 @@ def build_two_hemisphere_gateway(
     substrate. Returns a :class:`Gateway` whose recall fuses experiential memories with
     the structural nodes they touched (plus their ``k_hop`` neighbours)."""
     ingestor = ingestor or PythonAstIngestor()
-    result = ingestor.ingest_path(repo)
-    graph = graph if graph is not None else InMemoryStructuralGraph()
-    graph.add(result)
+    result = ingestor.ingest_path(repo, scope)
+    graph = graph if graph is not None else InMemoryStructuralGraph(scope)
+    graph.replace(result)
 
     links = links if links is not None else InMemoryCrossLinkIndex()
     footprints = [
-        (episode.memory_id, tuple(episode.metadata.get("footprint", ()))) for episode in episodes
+        (episode.ref, tuple(episode.metadata.get("footprint", ()))) for episode in episodes
     ]
     link_by_footprint(footprints, result.nodes, links, repo_root=repo)
 
-    retriever = L0Retriever(encoder, store)
-    return Gateway(retriever, k=k, graph=graph, links=links, structural_k_hop=k_hop)
+    base = L0Retriever(encoder, store)
+    retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)
+    if event_sink is not None:
+        retriever = LoggingRetriever(retriever, event_sink, policy_id="L0+structural")
+    return Gateway(
+        retriever,
+        k=k,
+        graph=graph,
+        links=links,
+        structural_k_hop=k_hop,
+        max_structural_items=max_structural_items,
+        max_memory_chars=max_memory_chars,
+        usage_sink=usage_sink,
+    )
+
+
+def build_store(
+    *,
+    dim: int,
+    neo4j_uri: str | None,
+    neo4j_user: str,
+    neo4j_password: str | None,
+    hemisphere: Hemisphere = Hemisphere.EXPERIENTIAL,
+    encoder_id: str | None = None,
+) -> Store:
+    """Neo4j-backed store when ``neo4j_uri`` is set (durable), else in-memory (warned)."""
+    if neo4j_uri is not None:
+        driver = connect(neo4j_uri, neo4j_user, neo4j_password or "")
+        return Neo4jStore(dim=dim, driver=driver, hemisphere=hemisphere, encoder_id=encoder_id)
+    print(
+        "warning: THALAMUS_NEO4J_URI not set — using in-memory store (not durable).",
+        file=sys.stderr,
+    )
+    return InMemoryStore(dim=dim)
+
+
+def close_store(store: Store) -> None:
+    """Close the store if it holds a closable resource (e.g. a Neo4j driver)."""
+    close = getattr(store, "close", None)
+    if callable(close):
+        close()

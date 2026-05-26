@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from thalamus.core.types import EventId, MemoryId, RepoId, Scope, TenantId
+from thalamus.core.types import EventId, MemoryId, MemoryRef, RepoId, Scope, TenantId
 from thalamus.experiential import (
     EpisodeBuilder,
     EpisodeSpan,
@@ -88,7 +88,7 @@ def test_ingest_populates_brain1_and_reingest_is_idempotent() -> None:
     records = ingest_episodes(events, encoder=encoder, store=store)
     assert len(records) == 2  # two commits -> two closed episodes
     assert len(store) == 2
-    assert store.get(MemoryId("episode:abc")) is not None
+    assert store.get(MemoryRef(SCOPE, MemoryId("episode:abc"))) is not None
 
     # the episode is retrievable by its content
     hits = store.search(encoder.encode(["aiosqlite async store"])[0], k=1, scope=SCOPE)

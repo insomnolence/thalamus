@@ -14,6 +14,7 @@ protocols, so neither ``GitObserver`` nor on-disk storage is baked in (§14.5).
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -22,7 +23,7 @@ from thalamus.core.types import MemoryRecord
 from thalamus.experiential.episode import EpisodeBuilder
 from thalamus.experiential.ingest import ingest_episodes
 from thalamus.experiential.segmentation import EpisodeSegmenter
-from thalamus.instrumentation import TrajectoryEvent, TrajectoryEventKind
+from thalamus.instrumentation import TrajectoryEvent, TrajectoryEventKind, TrajectorySink
 
 
 @runtime_checkable
@@ -82,6 +83,8 @@ class GitEpisodeIngestor:
         encoder: Encoder,
         store: Store,
         checkpoint: Checkpoint,
+        trajectory_sink: TrajectorySink | None = None,
+        raw_events: Callable[[], Sequence[TrajectoryEvent]] | None = None,
         segmenter: EpisodeSegmenter | None = None,
         builder: EpisodeBuilder | None = None,
     ) -> None:
@@ -89,16 +92,22 @@ class GitEpisodeIngestor:
         self._encoder = encoder
         self._store = store
         self._checkpoint = checkpoint
+        self._trajectory_sink = trajectory_sink
+        self._raw_events = raw_events
         self._segmenter = segmenter
         self._builder = builder
 
     def sync(self) -> list[MemoryRecord]:
         """Ingest commits since the checkpoint as episodes; advance the checkpoint."""
         events = self._source.poll(self._checkpoint.load())
-        if not events:
+        if not events and self._raw_events is None:
             return []
+        if self._trajectory_sink is not None:
+            for event in events:
+                self._trajectory_sink.emit(event)
+        source_events = self._raw_events() if self._raw_events is not None else events
         records = ingest_episodes(
-            events,
+            source_events,
             encoder=self._encoder,
             store=self._store,
             segmenter=self._segmenter,

@@ -68,3 +68,32 @@ def test_empty_payload_renders() -> None:
     payload = gateway.recall(prompt="anything", scope=SCOPE)
     assert list(payload.memories) == []
     assert "no relevant memories" in payload.render()
+
+
+def test_curated_memory_renders_separately_and_is_bounded() -> None:
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    content = "use the scoped store identity " + ("because it prevents collisions " * 4)
+    store.add(
+        MemoryRecord(
+            MemoryId("decision"),
+            Hemisphere.EXPERIENTIAL,
+            "decision",
+            content,
+            SCOPE,
+            NOW,
+            {"source": "curated", "why": "tenant isolation " * 6, "importance": 1.0},
+        ),
+        encoder.encode([content])[0],
+    )
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW), k=1, max_memory_chars=32
+    )
+    payload = gateway.recall(prompt="scoped store identity", scope=SCOPE)
+
+    assert payload.memories[0].retained is True
+    assert len(payload.memories[0].content) <= 32
+    assert len(payload.memories[0].why or "") <= 32
+    text = payload.render()
+    assert "## Retained memory" in text
+    assert "## Prior episodes" not in text

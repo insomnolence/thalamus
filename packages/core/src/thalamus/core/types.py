@@ -60,6 +60,22 @@ class Scope:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryRef:
+    """Stable identity of a memory within its isolation scope."""
+
+    scope: Scope
+    memory_id: MemoryId
+
+
+@dataclass(frozen=True, slots=True)
+class StructuralRef:
+    """Stable identity of a structural node within its isolation scope."""
+
+    scope: Scope
+    node_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryRecord:
     """A single stored memory in either hemisphere. (v0 schema.)"""
 
@@ -70,6 +86,11 @@ class MemoryRecord:
     scope: Scope
     created_at: datetime
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def ref(self) -> MemoryRef:
+        """Scoped identity used by stores and cross-hemisphere links."""
+        return MemoryRef(scope=self.scope, memory_id=self.memory_id)
 
 
 @dataclass(frozen=True, slots=True)

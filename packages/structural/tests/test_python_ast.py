@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from thalamus.core.types import RepoId, Scope, TenantId
 from thalamus.structural import PythonAstIngestor
+
+SCOPE = Scope(TenantId("t"), RepoId("r"))
 
 SOURCE = (
     "import os\n"
@@ -24,7 +27,7 @@ SOURCE = (
 def test_ingest_python_file(tmp_path: Path) -> None:
     src = tmp_path / "mymod.py"
     src.write_text(SOURCE, encoding="utf-8")
-    result = PythonAstIngestor().ingest_path(src)
+    result = PythonAstIngestor().ingest_path(src, SCOPE)
 
     ids = {node.node_id for node in result.nodes}
     assert {
@@ -56,7 +59,7 @@ def test_ingest_directory_with_root_package(tmp_path: Path) -> None:
     pkg.mkdir()
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "core.py").write_text("def f():\n    return 1\n", encoding="utf-8")
-    result = PythonAstIngestor(root_package="pkg").ingest_path(pkg)
+    result = PythonAstIngestor(root_package="pkg").ingest_path(pkg, SCOPE)
     ids = {node.node_id for node in result.nodes}
     assert "function:pkg.core.f" in ids
     assert "module:pkg" in ids
@@ -65,6 +68,15 @@ def test_ingest_directory_with_root_package(tmp_path: Path) -> None:
 def test_syntax_error_is_skipped(tmp_path: Path) -> None:
     (tmp_path / "broken.py").write_text("def (:\n", encoding="utf-8")
     (tmp_path / "ok.py").write_text("def g():\n    return 1\n", encoding="utf-8")
-    result = PythonAstIngestor().ingest_path(tmp_path)
+    result = PythonAstIngestor().ingest_path(tmp_path, SCOPE)
     ids = {node.node_id for node in result.nodes}
     assert "function:ok.g" in ids
+
+
+def test_same_filename_in_different_directories_has_distinct_identity(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "common.py").write_text("def one():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "b" / "common.py").write_text("def two():\n    return 2\n", encoding="utf-8")
+    ids = {node.node_id for node in PythonAstIngestor().ingest_path(tmp_path, SCOPE).nodes}
+    assert {"module:a.common", "module:b.common"} <= ids

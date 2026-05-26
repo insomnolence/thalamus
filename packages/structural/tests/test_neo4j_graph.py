@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from thalamus.core.types import MemoryId
+from thalamus.core.types import MemoryId, MemoryRef, RepoId, Scope, StructuralRef, TenantId
 from thalamus.store import connect
 from thalamus.structural import (
     IngestResult,
@@ -20,6 +20,7 @@ _URI = os.environ.get("THALAMUS_NEO4J_URI")
 pytestmark = pytest.mark.skipif(
     _URI is None, reason="set THALAMUS_NEO4J_URI to run Neo4j integration tests"
 )
+SCOPE = Scope(TenantId("t"), RepoId("r"))
 
 
 def _clean(driver: Any) -> None:
@@ -46,11 +47,11 @@ def driver() -> Iterator[Any]:
 def _result() -> IngestResult:
     return IngestResult(
         nodes=[
-            StructuralNode("module:m", "module", "m", SourceAnchor("m.py", 1, 10)),
+            StructuralNode("module:m", "module", "m", SCOPE, SourceAnchor("m.py", 1, 10)),
             StructuralNode(
-                "class:m.C", "class", "m.C", SourceAnchor("m.py", 2, 8), {"bases": ["B"]}
+                "class:m.C", "class", "m.C", SCOPE, SourceAnchor("m.py", 2, 8), {"bases": ["B"]}
             ),
-            StructuralNode("method:m.C.f", "method", "m.C.f", SourceAnchor("m.py", 3, 5)),
+            StructuralNode("method:m.C.f", "method", "m.C.f", SCOPE, SourceAnchor("m.py", 3, 5)),
         ],
         edges=[
             StructuralEdge("module:m", "class:m.C", "contains"),
@@ -61,49 +62,54 @@ def _result() -> IngestResult:
 
 
 def test_add_get_roundtrip(driver: Any) -> None:
-    graph = Neo4jStructuralGraph(driver)
+    graph = Neo4jStructuralGraph(driver, SCOPE)
     graph.add(_result())
 
-    node = graph.get("class:m.C")
+    node = graph.get(StructuralRef(SCOPE, "class:m.C"))
     assert node is not None
     assert node.kind == "class"
     assert node.metadata == {"bases": ["B"]}
     assert node.anchor == SourceAnchor("m.py", 2, 8)
-    assert graph.get("missing") is None
-    assert graph.get("module:os") is None  # dangling import target is a stub, not a real node
+    assert graph.get(StructuralRef(SCOPE, "missing")) is None
+    assert graph.get(StructuralRef(SCOPE, "module:os")) is None
 
 
 def test_neighbors_directed_and_typed(driver: Any) -> None:
-    graph = Neo4jStructuralGraph(driver)
+    graph = Neo4jStructuralGraph(driver, SCOPE)
     graph.add(_result())
 
-    out = graph.neighbors("module:m", direction="out")
+    out = graph.neighbors(StructuralRef(SCOPE, "module:m"), direction="out")
     assert {n.node_id for n in out} == {"class:m.C"}  # os stub excluded
-    typed = graph.neighbors("module:m", edge_types=["imports"], direction="out")
+    typed = graph.neighbors(
+        StructuralRef(SCOPE, "module:m"), edge_types=["imports"], direction="out"
+    )
     assert typed == []  # only edge is to a stub
 
 
 def test_k_hop_depth_and_type_filter(driver: Any) -> None:
-    graph = Neo4jStructuralGraph(driver)
+    graph = Neo4jStructuralGraph(driver, SCOPE)
     graph.add(_result())
 
-    one = {n.node_id for n in graph.k_hop("module:m", 1, direction="out")}
+    one = {n.node_id for n in graph.k_hop(StructuralRef(SCOPE, "module:m"), 1, direction="out")}
     assert one == {"class:m.C"}
-    two = {n.node_id for n in graph.k_hop("module:m", 2, direction="out")}
+    two = {n.node_id for n in graph.k_hop(StructuralRef(SCOPE, "module:m"), 2, direction="out")}
     assert two == {"class:m.C", "method:m.C.f"}
-    assert graph.k_hop("module:m", 0, direction="out") == []
+    assert graph.k_hop(StructuralRef(SCOPE, "module:m"), 0, direction="out") == []
 
 
 def test_native_cross_links(driver: Any) -> None:
-    Neo4jStructuralGraph(driver).add(_result())
+    Neo4jStructuralGraph(driver, SCOPE).add(_result())
     with driver.session() as session:
-        session.run("MERGE (m:M_experiential {memory_id: 'ep1'})")
-    links = Neo4jCrossLinkIndex(driver)
+        session.run(
+            "MERGE (m:M_experiential {tenant_id: 't', repo_id: 'r', memory_id: 'ep1'})"
+        )
+    links = Neo4jCrossLinkIndex(driver, SCOPE)
 
-    links.link(MemoryId("ep1"), "module:m")
-    links.link(MemoryId("ep1"), "module:m")  # idempotent
-    assert links.nodes_for(MemoryId("ep1")) == ["module:m"]
-    assert links.memories_for("module:m") == [MemoryId("ep1")]
+    memory, node = MemoryRef(SCOPE, MemoryId("ep1")), StructuralRef(SCOPE, "module:m")
+    links.link(memory, node)
+    links.link(memory, node)  # idempotent
+    assert links.nodes_for(memory) == [node]
+    assert links.memories_for(node) == [memory]
 
-    links.link(MemoryId("ghost"), "module:m")  # no such memory node -> no edge
-    assert links.memories_for("module:m") == [MemoryId("ep1")]
+    links.link(MemoryRef(SCOPE, MemoryId("ghost")), node)  # no memory -> no edge
+    assert links.memories_for(node) == [memory]

@@ -8,6 +8,7 @@ materializes them as Brain-1 records — the unfinished half of §10 step 1
 
 from thalamus.experiential.episode import EpisodeBuilder, WhyComponent, WhyProvenance
 from thalamus.experiential.ingest import ingest_episodes
+from thalamus.experiential.outcome import EpisodeOutcome, classify_outcome, is_success
 from thalamus.experiential.segmentation import (
     CommitBoundedSegmenter,
     EpisodeSegmenter,
@@ -26,6 +27,7 @@ __all__ = [
     "CommitBoundedSegmenter",
     "CommitSource",
     "EpisodeBuilder",
+    "EpisodeOutcome",
     "EpisodeSegmenter",
     "EpisodeSpan",
     "FileCheckpoint",
@@ -33,5 +35,7 @@ __all__ = [
     "InMemoryCheckpoint",
     "WhyComponent",
     "WhyProvenance",
+    "classify_outcome",
     "ingest_episodes",
+    "is_success",
 ]

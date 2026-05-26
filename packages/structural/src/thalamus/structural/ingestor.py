@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from thalamus.core.types import Scope
 from thalamus.structural.schema import IngestResult
 
 
@@ -22,6 +23,6 @@ class Ingestor(Protocol):
     directory; the ingestor decides what within it is in-scope.
     """
 
-    def ingest_path(self, root: Path) -> IngestResult:
+    def ingest_path(self, root: Path, scope: Scope) -> IngestResult:
         """Parse ``root`` into structural nodes + edges."""
         ...

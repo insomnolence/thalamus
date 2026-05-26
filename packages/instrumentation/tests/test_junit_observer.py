@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from thalamus.core.types import EventId, RepoId, Scope, TenantId
+from thalamus.core.types import EventId, RepoId, Scope, SessionId, TenantId
 from thalamus.instrumentation import JUnitObserver, TrajectoryEventKind
 
 SCOPE = Scope(tenant_id=TenantId("t1"), repo_id=RepoId("r1"))
@@ -49,3 +49,13 @@ def test_ingest_testsuites_wrapper_all_pass(tmp_path: Path) -> None:
     (event,) = JUnitObserver(SCOPE, event_id_factory=_ids).ingest(path)
     assert event.payload["suite"] == "s1"
     assert event.payload["failed"] == []
+
+
+def test_terminal_result_carries_session_for_tier2_join(tmp_path: Path) -> None:
+    path = tmp_path / "report.xml"
+    path.write_text(SUITES_WRAPPER, encoding="utf-8")
+    (event,) = JUnitObserver(SCOPE, event_id_factory=_ids).ingest(
+        path, session_id=SessionId("s1"), terminal=True
+    )
+    assert event.session_id == SessionId("s1")
+    assert event.payload["terminal"] is True

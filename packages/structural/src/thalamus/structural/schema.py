@@ -13,6 +13,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from thalamus.core.types import Scope, StructuralRef
+
 
 @dataclass(frozen=True, slots=True)
 class SourceAnchor:
@@ -35,8 +37,13 @@ class StructuralNode:
     node_id: str
     kind: str
     label: str
+    scope: Scope
     anchor: SourceAnchor | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def ref(self) -> StructuralRef:
+        return StructuralRef(scope=self.scope, node_id=self.node_id)
 
 
 @dataclass(frozen=True, slots=True)

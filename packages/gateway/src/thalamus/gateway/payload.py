@@ -24,17 +24,39 @@ class MemoryItem:
     content: str
     score: float
     why: str | None = None
+    source: str | None = None
 
     @classmethod
-    def from_scored(cls, scored: ScoredMemory) -> MemoryItem:
+    def from_scored(
+        cls, scored: ScoredMemory, *, max_content_chars: int | None = None
+    ) -> MemoryItem:
         why = scored.record.metadata.get("why")
+        content = scored.record.content
+        rationale = str(why) if why is not None else None
+        if max_content_chars is not None:
+            content = _truncate(content, max_content_chars)
+            if rationale is not None:
+                rationale = _truncate(rationale, max_content_chars)
         return cls(
             memory_id=scored.record.memory_id,
             kind=scored.record.kind,
-            content=scored.record.content,
+            content=content,
             score=scored.score,
-            why=str(why) if why is not None else None,
+            why=rationale,
+            source=str(scored.record.metadata.get("source", "")) or None,
         )
+
+    @property
+    def retained(self) -> bool:
+        """Whether this is explicitly retained knowledge rather than a derived episode."""
+        return self.source == "curated"
+
+
+def _truncate(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    suffix = "..." if limit >= 3 else ""
+    return value[: limit - len(suffix)].rstrip() + suffix
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +84,7 @@ class ContextPayload:
     cue_text: str
     memories: Sequence[MemoryItem]
     structural: Sequence[StructuralItem] = ()
+    structural_omitted: int = 0
     event_id: EventId | None = None  # correlate later outcome (usage) signals to this recall
 
     def render(self) -> str:
@@ -69,15 +92,21 @@ class ContextPayload:
         if not self.memories and not self.structural:
             return f"# Context for: {self.cue_text}\n\n(no relevant memories)\n"
         lines = [f"# Context for: {self.cue_text}"]
-        if self.memories:
-            lines += ["", "## Relevant experience"]
-            for item in self.memories:
+        retained = [item for item in self.memories if item.retained]
+        experience = [item for item in self.memories if not item.retained]
+        for heading, items in (("Retained memory", retained), ("Prior episodes", experience)):
+            if not items:
+                continue
+            lines += ["", f"## {heading}"]
+            for item in items:
                 lines.append(f"- ({item.kind}, relevance {item.score:.2f}) {item.content}")
                 if item.why:
                     lines.append(f"  why: {item.why}")
-        if self.structural:
+        if self.structural or self.structural_omitted:
             lines += ["", "## Related code"]
             for symbol in self.structural:
                 location = f" — {symbol.location}" if symbol.location else ""
                 lines.append(f"- ({symbol.kind}) {symbol.label}{location}")
+            if self.structural_omitted:
+                lines.append(f"- ... {self.structural_omitted} additional related item(s) omitted")
         return "\n".join(lines) + "\n"

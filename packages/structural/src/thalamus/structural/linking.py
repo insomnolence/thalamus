@@ -21,15 +21,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from thalamus.core.types import MemoryId
+from thalamus.core.types import MemoryRef, StructuralRef
 from thalamus.structural.cross_link import CrossLinkIndex
 from thalamus.structural.schema import StructuralNode
 
 
-def _module_index(nodes: Iterable[StructuralNode], repo_root: Path) -> dict[str, str]:
+def _module_index(nodes: Iterable[StructuralNode], repo_root: Path) -> dict[str, StructuralRef]:
     """Map each module's repo-relative POSIX path to its stable node id."""
     root = repo_root.resolve()
-    index: dict[str, str] = {}
+    index: dict[str, StructuralRef] = {}
     for node in nodes:
         if node.kind != "module" or node.anchor is None:
             continue
@@ -37,12 +37,12 @@ def _module_index(nodes: Iterable[StructuralNode], repo_root: Path) -> dict[str,
             rel = Path(node.anchor.path).resolve().relative_to(root).as_posix()
         except ValueError:
             continue  # anchored outside the repo root — not addressable by a footprint
-        index[rel] = node.node_id
+        index[rel] = node.ref
     return index
 
 
 def link_by_footprint(
-    items: Iterable[tuple[MemoryId, Sequence[str]]],
+    items: Iterable[tuple[MemoryRef, Sequence[str]]],
     nodes: Iterable[StructuralNode],
     links: CrossLinkIndex,
     *,
@@ -55,12 +55,12 @@ def link_by_footprint(
     so re-running over the same AST yields the same links (``CrossLinkIndex`` dedups)."""
     index = _module_index(nodes, repo_root)
     created = 0
-    for memory_id, files in items:
-        linked: set[str] = set()
+    for memory, files in items:
+        linked: set[StructuralRef] = set()
         for file in files:
-            node_id = index.get(file)
-            if node_id is not None and node_id not in linked:
-                links.link(memory_id, node_id)
-                linked.add(node_id)
+            node = index.get(file)
+            if node is not None and node not in linked:
+                links.link(memory, node)
+                linked.add(node)
                 created += 1
     return created

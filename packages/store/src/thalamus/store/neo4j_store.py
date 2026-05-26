@@ -25,6 +25,7 @@ from thalamus.core.types import (
     Hemisphere,
     MemoryId,
     MemoryRecord,
+    MemoryRef,
     RepoId,
     Scope,
     ScoredMemory,
@@ -59,6 +60,7 @@ class Neo4jStore:
         hemisphere: Hemisphere,
         *,
         database: str = "neo4j",
+        encoder_id: str | None = None,
     ) -> None:
         self._dim = dim
         self._driver = driver
@@ -67,6 +69,8 @@ class Neo4jStore:
         self._label = f"M_{hemisphere.value}"
         self._index = f"vec_{hemisphere.value}"
         self._ensure_index()
+        if encoder_id is not None:
+            self._ensure_encoder_config(encoder_id)
 
     def _run(self, cypher: str, **params: Any) -> list[Any]:
         try:
@@ -84,6 +88,10 @@ class Neo4jStore:
             f"OPTIONS {{indexConfig: {{`vector.dimensions`: {self._dim}, "
             f"`vector.similarity_function`: 'cosine'}}}}"
         )
+        self._run(
+            f"CREATE CONSTRAINT memory_scope_{self._hemisphere.value} IF NOT EXISTS "
+            f"FOR (m:{self._label}) REQUIRE (m.tenant_id, m.repo_id, m.memory_id) IS UNIQUE"
+        )
 
     def _checked_vector(self, embedding: Vector, context: str) -> list[float]:
         vec = [float(value) for value in embedding]
@@ -91,10 +99,28 @@ class Neo4jStore:
             raise DimensionMismatchError(self._dim, len(vec), context)
         return vec
 
+    def _ensure_encoder_config(self, encoder_id: str) -> None:
+        rows = self._run(
+            "MERGE (c:ThalamusIndexConfig {hemisphere: $hemisphere}) "
+            "ON CREATE SET c.dim = $dim, c.encoder_id = $encoder_id "
+            "RETURN c.dim AS dim, c.encoder_id AS encoder_id",
+            hemisphere=self._hemisphere.value,
+            dim=self._dim,
+            encoder_id=encoder_id,
+        )
+        actual_dim = int(rows[0]["dim"])
+        actual_encoder = str(rows[0]["encoder_id"])
+        if actual_dim != self._dim or actual_encoder != encoder_id:
+            raise StoreError(
+                "embedding index configuration mismatch: "
+                f"expected {encoder_id}/{self._dim}, found {actual_encoder}/{actual_dim}; rebuild"
+            )
+
     def add(self, record: MemoryRecord, embedding: Vector) -> None:
         vec = self._checked_vector(embedding, "Neo4jStore.add")
         self._run(
-            f"MERGE (m:{self._label} {{memory_id: $memory_id}}) "
+            f"MERGE (m:{self._label} "
+            "{tenant_id: $tenant_id, repo_id: $repo_id, memory_id: $memory_id}) "
             "SET m.hemisphere = $hemisphere, m.kind = $kind, m.content = $content, "
             "m.tenant_id = $tenant_id, m.repo_id = $repo_id, m.created_at = $created_at, "
             "m.metadata_json = $metadata_json, m.embedding = $embedding",
@@ -109,28 +135,38 @@ class Neo4jStore:
             embedding=vec,
         )
 
-    def get(self, memory_id: MemoryId) -> MemoryRecord | None:
+    def get(self, ref: MemoryRef) -> MemoryRecord | None:
         rows = self._run(
-            f"MATCH (m:{self._label} {{memory_id: $memory_id}}) RETURN m",
-            memory_id=str(memory_id),
+            f"MATCH (m:{self._label} "
+            "{tenant_id: $tenant_id, repo_id: $repo_id, memory_id: $memory_id}) RETURN m",
+            memory_id=str(ref.memory_id),
+            tenant_id=str(ref.scope.tenant_id),
+            repo_id=str(ref.scope.repo_id),
         )
         if not rows:
             return None
         return self._to_record(dict(rows[0]["m"]))
 
+    def scan(self, scope: Scope) -> list[MemoryRecord]:
+        rows = self._run(
+            f"MATCH (m:{self._label}) WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
+            "RETURN m",
+            tenant_id=str(scope.tenant_id),
+            repo_id=str(scope.repo_id),
+        )
+        return [self._to_record(dict(row["m"])) for row in rows]
+
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredMemory]:
         vec = self._checked_vector(query, "Neo4jStore.search")
         if k <= 0:
             return []
-        # Vector index returns global top-N; over-fetch then scope-filter (Tier-0
-        # exposure stays sound at small scale; native pre-filtering is a later upgrade).
-        overfetch = max(k * 10, 50)
+        # Scope before ranking. Global vector-index over-fetch can hide valid scoped
+        # matches once another tenant or repository dominates the top neighbours.
         rows = self._run(
-            f"CALL db.index.vector.queryNodes('{self._index}', $overfetch, $vec) "
-            "YIELD node, score "
+            f"MATCH (node:{self._label}) "
             "WHERE node.tenant_id = $tenant_id AND node.repo_id = $repo_id "
+            "WITH node, vector.similarity.cosine(node.embedding, $vec) AS score "
             "RETURN node, score ORDER BY score DESC LIMIT $k",
-            overfetch=overfetch,
             vec=vec,
             tenant_id=str(scope.tenant_id),
             repo_id=str(scope.repo_id),

@@ -17,10 +17,9 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
-from thalamus.core.types import EventId, Scope
-from thalamus.instrumentation.trajectory import TrajectoryEvent, TrajectoryEventKind
+from thalamus.core.types import EventId, Scope, SessionId
+from thalamus.instrumentation.trajectory import TrajectoryEvent, build_test_run_event
 
 
 def _uuid_event_id() -> EventId:
@@ -45,7 +44,13 @@ class JUnitObserver:
         self._event_id_factory = event_id_factory
         self._now = now
 
-    def ingest(self, junit_xml_path: Path) -> list[TrajectoryEvent]:
+    def ingest(
+        self,
+        junit_xml_path: Path,
+        *,
+        session_id: SessionId | None = None,
+        terminal: bool = False,
+    ) -> list[TrajectoryEvent]:
         root = ET.parse(junit_xml_path).getroot()
         suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
         timestamp = self._now()
@@ -69,21 +74,19 @@ class JUnitObserver:
                         "message": problem.get("message", ""),
                     }
                 )
-            payload: dict[str, Any] = {
-                "suite": suite.get("name", ""),
-                "tests": int(suite.get("tests", "0")),
-                "failures": int(suite.get("failures", "0")),
-                "errors": int(suite.get("errors", "0")),
-                "skipped": int(suite.get("skipped", "0")),
-                "failed": failed,
-            }
             events.append(
-                TrajectoryEvent(
+                build_test_run_event(
                     event_id=self._event_id_factory(),
                     timestamp=timestamp,
                     scope=self._scope,
-                    kind=TrajectoryEventKind.TEST_RUN,
-                    payload=payload,
+                    suite=suite.get("name", ""),
+                    tests=int(suite.get("tests", "0")),
+                    failures=int(suite.get("failures", "0")),
+                    errors=int(suite.get("errors", "0")),
+                    skipped=int(suite.get("skipped", "0")),
+                    failed=failed,
+                    terminal=terminal,
+                    session_id=session_id,
                 )
             )
         return events

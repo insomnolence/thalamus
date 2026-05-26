@@ -10,6 +10,7 @@ from thalamus.instrumentation import (
     JsonlTrajectorySink,
     TrajectoryEvent,
     TrajectoryEventKind,
+    read_trajectory_log,
     serialize_trajectory_event,
 )
 
@@ -49,3 +50,4 @@ def test_jsonl_sink_appends(tmp_path: Path) -> None:
     lines = path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2
     assert json.loads(lines[0])["scope"]["repo_id"] == "r1"
+    assert list(read_trajectory_log(path)) == [_event(), _event()]

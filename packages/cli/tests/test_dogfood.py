@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from thalamus.cli import SyncConfig, parse_args, run_sync
+from thalamus.instrumentation import read_trajectory_log
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -26,13 +27,14 @@ def _repo_with_commit(tmp_path: Path) -> Path:
 def _config(repo: Path, checkpoint: Path) -> SyncConfig:
     return SyncConfig(
         repo=repo, checkpoint=checkpoint, tenant="local", repo_id="r", dim=64,
+        encoder="deterministic",
         neo4j_uri=None, neo4j_user="neo4j", neo4j_password=None,
     )
 
 
 def test_parse_args_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("THALAMUS_NEO4J_URI", raising=False)
-    config = parse_args(["--repo", str(tmp_path), "--tenant", "acme"])
+    config = parse_args(["--repo", str(tmp_path), "--tenant", "acme", "--encoder", "deterministic"])
     assert config.repo == tmp_path.resolve()
     assert config.repo_id == tmp_path.name  # defaults to the repo dir name
     assert config.checkpoint == tmp_path.resolve() / ".thalamus" / "checkpoints" / "git.cursor"
@@ -43,7 +45,7 @@ def test_parse_args_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_parse_args_reads_neo4j_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("THALAMUS_NEO4J_URI", "bolt://localhost:7687")
     monkeypatch.setenv("THALAMUS_NEO4J_PASSWORD", "pw")
-    config = parse_args([])
+    config = parse_args(["--encoder", "deterministic"])
     assert config.neo4j_uri == "bolt://localhost:7687"
     assert config.neo4j_password == "pw"
 
@@ -58,5 +60,8 @@ def test_run_sync_ingests_real_commit_and_checkpoints(tmp_path: Path) -> None:
     assert records[0].content.startswith("Worked toward: add a")
     assert checkpoint.exists()  # cursor persisted
 
-    # re-running is a checkpointed no-op
-    assert run_sync(config) == []
+    # re-running rebuilds the derived record from the durable raw log without duplication.
+    assert len(run_sync(config)) == 1
+    trajectory = repo / ".thalamus" / "logs" / "trajectory.jsonl"
+    assert trajectory.exists()
+    assert len(list(read_trajectory_log(trajectory))) == 1
