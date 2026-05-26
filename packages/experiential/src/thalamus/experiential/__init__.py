@@ -21,6 +21,7 @@ from thalamus.experiential.sync import (
     FileCheckpoint,
     GitEpisodeIngestor,
     InMemoryCheckpoint,
+    SessionStampingSource,
 )
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "GitEpisodeIngestor",
     "InMemoryCheckpoint",
     "SessionBoundedSegmenter",
+    "SessionStampingSource",
     "WhyComponent",
     "WhyProvenance",
     "classify_outcome",

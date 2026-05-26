@@ -4,10 +4,23 @@ from __future__ import annotations
 
 import json
 import types
+from datetime import UTC, datetime
+from pathlib import Path
 
+import pytest
 from thalamus.core.types import RepoId, Scope, SessionId, TenantId
-from thalamus.instrumentation import InMemoryTrajectorySink, TrajectoryEventKind
-from thalamus.instrumentation.pytest_plugin import _ThalamusPytestCapture, _truthy
+from thalamus.instrumentation import (
+    FileSessionContextStore,
+    InMemoryTrajectorySink,
+    SessionContext,
+    TrajectoryEventKind,
+    default_session_path,
+)
+from thalamus.instrumentation.pytest_plugin import (
+    _resolve_session_id,
+    _ThalamusPytestCapture,
+    _truthy,
+)
 
 pytest_plugins = ["pytester"]
 
@@ -75,6 +88,34 @@ def test_capture_failure_never_breaks_the_run() -> None:
 def test_truthy() -> None:
     assert all(_truthy(v) for v in ("1", "true", "YES", "on", " On "))
     assert not any(_truthy(v) for v in (None, "", "0", "no", "off"))
+
+
+def test_resolve_session_id_prefers_explicit_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("THALAMUS_SESSION_ID", "from-env")
+    # a context file exists, but the explicit env still wins
+    FileSessionContextStore(default_session_path(tmp_path)).publish(
+        SessionContext(SessionId("from-file"), datetime(2026, 5, 26, tzinfo=UTC))
+    )
+    assert _resolve_session_id(tmp_path) == SessionId("from-env")
+
+
+def test_resolve_session_id_falls_back_to_published_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("THALAMUS_SESSION_ID", raising=False)
+    FileSessionContextStore(default_session_path(tmp_path)).publish(
+        SessionContext(SessionId("from-file"), datetime(2026, 5, 26, tzinfo=UTC))
+    )
+    assert _resolve_session_id(tmp_path) == SessionId("from-file")
+
+
+def test_resolve_session_id_none_when_no_env_and_no_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("THALAMUS_SESSION_ID", raising=False)
+    assert _resolve_session_id(tmp_path) is None
 
 
 def test_inert_without_enable_env(pytester, monkeypatch) -> None:

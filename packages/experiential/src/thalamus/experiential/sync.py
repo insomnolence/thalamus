@@ -15,15 +15,22 @@ protocols, so neither ``GitObserver`` nor on-disk storage is baked in (§14.5).
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from thalamus.core.protocols import Encoder, Store
-from thalamus.core.types import MemoryRecord
+from thalamus.core.types import MemoryRecord, SessionId
 from thalamus.experiential.episode import EpisodeBuilder
 from thalamus.experiential.ingest import ingest_episodes
 from thalamus.experiential.segmentation import EpisodeSegmenter
-from thalamus.instrumentation import TrajectoryEvent, TrajectoryEventKind, TrajectorySink
+from thalamus.instrumentation import (
+    SessionContextStore,
+    TrajectoryEvent,
+    TrajectoryEventKind,
+    TrajectorySink,
+)
 
 
 @runtime_checkable
@@ -124,3 +131,53 @@ class GitEpisodeIngestor:
             if event.kind is TrajectoryEventKind.COMMIT:
                 return str(event.payload["sha"])
         return None
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+class SessionStampingSource:
+    """A :class:`CommitSource` decorator that stamps the active serve session id onto
+    polled COMMIT events, so out-of-band commits join the session whose recalls informed
+    them (the cue↔outcome join the proxy↔truth monitor needs, §13.12).
+
+    The session is read from a :class:`SessionContextStore` (published by ``serve``). A
+    commit is stamped only when its timestamp falls within the session window
+    ``[started_at, now]`` and it is not already keyed; a commit from before the session
+    began — or when no session is published — is left unkeyed: *missing over wrong*
+    (§13.16). Composed in the composition root so ``GitObserver`` stays session-agnostic.
+
+    Honest limit: one active session per repo. A commit made after a serve process exits
+    while its context file lingers would attribute to that dead session; a freshness bound
+    on ``last_recall_at`` is the documented later refinement.
+    """
+
+    def __init__(
+        self,
+        inner: CommitSource,
+        sessions: SessionContextStore,
+        *,
+        now: Callable[[], datetime] = _utcnow,
+    ) -> None:
+        self._inner = inner
+        self._sessions = sessions
+        self._now = now
+
+    def poll(self, since: str | None = None) -> list[TrajectoryEvent]:
+        events = self._inner.poll(since)
+        ctx = self._sessions.read()
+        if ctx is None:
+            return events
+        now = self._now()
+        return [self._stamp(event, ctx.session_id, ctx.started_at, now) for event in events]
+
+    @staticmethod
+    def _stamp(
+        event: TrajectoryEvent, session_id: SessionId, started_at: datetime, now: datetime
+    ) -> TrajectoryEvent:
+        if event.session_id is not None:
+            return event  # already keyed (e.g. an explicit caller session)
+        if started_at <= event.timestamp <= now:
+            return replace(event, session_id=session_id)
+        return event  # outside the session window — leave it missing, never mis-attribute

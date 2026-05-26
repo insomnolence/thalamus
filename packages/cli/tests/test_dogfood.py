@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from thalamus.cli import SyncConfig, parse_args, run_sync
-from thalamus.instrumentation import read_trajectory_log
+from thalamus.core.types import SessionId
+from thalamus.instrumentation import (
+    FileSessionContextStore,
+    SessionContext,
+    default_session_path,
+    read_trajectory_log,
+)
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -65,3 +72,15 @@ def test_run_sync_ingests_real_commit_and_checkpoints(tmp_path: Path) -> None:
     trajectory = repo / ".thalamus" / "logs" / "trajectory.jsonl"
     assert trajectory.exists()
     assert len(list(read_trajectory_log(trajectory))) == 1
+
+
+def test_run_sync_stamps_commit_with_the_published_session(tmp_path: Path) -> None:
+    repo = _repo_with_commit(tmp_path)
+    # a serve session whose window (2020 → now) covers the just-made commit
+    FileSessionContextStore(default_session_path(repo)).publish(
+        SessionContext(SessionId("sess-1"), datetime(2020, 1, 1, tzinfo=UTC))
+    )
+    run_sync(_config(repo, tmp_path / "ckpt" / "git.cursor"))
+
+    (event,) = list(read_trajectory_log(repo / ".thalamus" / "logs" / "trajectory.jsonl"))
+    assert event.session_id == SessionId("sess-1")  # joined to the active session

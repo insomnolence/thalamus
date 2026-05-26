@@ -22,8 +22,14 @@ from pathlib import Path
 from thalamus.cli.brain import build_store, close_store
 from thalamus.core.protocols import Store
 from thalamus.core.types import MemoryRecord, RepoId, Scope, TenantId
-from thalamus.experiential import FileCheckpoint, GitEpisodeIngestor
-from thalamus.instrumentation import GitObserver, JsonlTrajectorySink, read_trajectory_log
+from thalamus.experiential import FileCheckpoint, GitEpisodeIngestor, SessionStampingSource
+from thalamus.instrumentation import (
+    FileSessionContextStore,
+    GitObserver,
+    JsonlTrajectorySink,
+    default_session_path,
+    read_trajectory_log,
+)
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 
 _DEFAULT_DIM = 128
@@ -107,10 +113,15 @@ def build_ingestor(config: SyncConfig) -> tuple[GitEpisodeIngestor, Store]:
         encoder_id=config.encoder,
     )
     scope = Scope(tenant_id=TenantId(config.tenant), repo_id=RepoId(config.repo_id))
-    observer = GitObserver(config.repo, scope)
+    # Stamp commits with the active serve session so they join that session's recalls
+    # (the cue↔outcome join); GitObserver itself stays session-agnostic.
+    source = SessionStampingSource(
+        GitObserver(config.repo, scope),
+        FileSessionContextStore(default_session_path(config.repo)),
+    )
     trajectory_path = config.repo / ".thalamus" / "logs" / "trajectory.jsonl"
     ingestor = GitEpisodeIngestor(
-        observer,
+        source,
         encoder=encoder,
         store=store,
         checkpoint=FileCheckpoint(config.checkpoint),

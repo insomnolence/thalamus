@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from thalamus.core.types import EventId, MemoryId, RepoId, Scope, TenantId
+from thalamus.core.types import EventId, MemoryId, RepoId, Scope, SessionId, TenantId
 from thalamus.experiential import (
     FileCheckpoint,
     GitEpisodeIngestor,
     InMemoryCheckpoint,
+    SessionStampingSource,
 )
-from thalamus.instrumentation import TrajectoryEvent, TrajectoryEventKind
+from thalamus.instrumentation import (
+    SessionContext,
+    SessionContextStore,
+    TrajectoryEvent,
+    TrajectoryEventKind,
+)
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
 
@@ -73,3 +80,58 @@ def test_file_checkpoint_persists_across_instances(tmp_path: Path) -> None:
     assert cp.load() is None
     cp.save("deadbeef")
     assert FileCheckpoint(path).load() == "deadbeef"  # a fresh instance reads it back
+
+
+# --- SessionStampingSource: join out-of-band commits to the active serve session ---
+
+
+class _Sessions(SessionContextStore):
+    def __init__(self, ctx: SessionContext | None) -> None:
+        self._ctx = ctx
+
+    def publish(self, ctx: SessionContext) -> None:
+        self._ctx = ctx
+
+    def read(self) -> SessionContext | None:
+        return self._ctx
+
+
+def _ctx(session: str, started_second: int) -> SessionContext:
+    return SessionContext(
+        SessionId(session), datetime(2026, 5, 25, 12, 0, started_second, tzinfo=UTC)
+    )
+
+
+_AT_59 = lambda: datetime(2026, 5, 25, 12, 0, 59, tzinfo=UTC)  # noqa: E731 (test clock)
+
+
+def test_stamps_commit_within_the_session_window() -> None:
+    source = SessionStampingSource(
+        _FakeSource([_commit("e1", 30, "aaa")]), _Sessions(_ctx("sess-1", 10)), now=_AT_59
+    )
+    (event,) = source.poll()
+    assert event.session_id == SessionId("sess-1")
+
+
+def test_does_not_stamp_a_commit_from_before_the_session_started() -> None:
+    # session started at :10, commit happened at :05 — not this session's work
+    source = SessionStampingSource(
+        _FakeSource([_commit("e1", 5, "aaa")]), _Sessions(_ctx("sess-1", 10)), now=_AT_59
+    )
+    (event,) = source.poll()
+    assert event.session_id is None  # missing over wrong
+
+
+def test_passes_through_when_no_session_is_published() -> None:
+    source = SessionStampingSource(_FakeSource([_commit("e1", 30, "aaa")]), _Sessions(None))
+    (event,) = source.poll()
+    assert event.session_id is None
+
+
+def test_never_overwrites_an_already_keyed_event() -> None:
+    keyed = replace(_commit("e1", 30, "aaa"), session_id=SessionId("explicit"))
+    source = SessionStampingSource(
+        _FakeSource([keyed]), _Sessions(_ctx("sess-1", 10)), now=_AT_59
+    )
+    (event,) = source.poll()
+    assert event.session_id == SessionId("explicit")

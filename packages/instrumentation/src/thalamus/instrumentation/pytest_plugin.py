@@ -20,7 +20,8 @@ Configuration via environment (mirrors the CLI conventions in ``thalamus.cli``):
 ``THALAMUS_REPO``           repo root for the default log path + repo id (default ``.``)
 ``THALAMUS_TENANT``         scope tenant id (default ``local``)
 ``THALAMUS_REPO_ID``        scope repo id (default: repo dir name)
-``THALAMUS_SESSION_ID``     correlate the run with a gateway recall session (optional)
+``THALAMUS_SESSION_ID``     correlate the run with a gateway recall session (optional;
+                            falls back to the serve-published session context file)
 ``THALAMUS_PYTEST_TERMINAL`` mark the run terminal Tier-2 validation (optional)
 ==========================  ===========================================================
 """
@@ -35,6 +36,7 @@ from pathlib import Path
 
 import pytest
 from thalamus.core.types import EventId, RepoId, Scope, SessionId, TenantId
+from thalamus.instrumentation.session import FileSessionContextStore, default_session_path
 from thalamus.instrumentation.trajectory import (
     JsonlTrajectorySink,
     TrajectorySink,
@@ -47,6 +49,17 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 def _truthy(value: str | None) -> bool:
     return value is not None and value.strip().lower() in _TRUTHY
+
+
+def _resolve_session_id(repo: Path) -> SessionId | None:
+    """The session to tag this run with: explicit ``THALAMUS_SESSION_ID`` wins, else the
+    session published by a running ``serve`` (read from its context file), else none. So a
+    live test run joins the active serve session without the actuator setting any env."""
+    env = os.environ.get("THALAMUS_SESSION_ID")
+    if env:
+        return SessionId(env)
+    ctx = FileSessionContextStore(default_session_path(repo)).read()
+    return ctx.session_id if ctx is not None else None
 
 
 def _failure_message(report: pytest.TestReport) -> str:
@@ -128,11 +141,10 @@ def pytest_configure(config: pytest.Config) -> None:
         tenant_id=TenantId(os.environ.get("THALAMUS_TENANT", "local")),
         repo_id=RepoId(os.environ.get("THALAMUS_REPO_ID", repo.name)),
     )
-    session_env = os.environ.get("THALAMUS_SESSION_ID")
     plugin = _ThalamusPytestCapture(
         sink=JsonlTrajectorySink(log_path),
         scope=scope,
-        session_id=SessionId(session_env) if session_env else None,
+        session_id=_resolve_session_id(repo),
         terminal=_truthy(os.environ.get("THALAMUS_PYTEST_TERMINAL")),
     )
     config.pluginmanager.register(plugin, "thalamus-pytest-capture")
