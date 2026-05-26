@@ -15,7 +15,7 @@ can join it to per-session Tier-2 outcomes (``experiential.classify_outcome``) b
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from statistics import fmean
 
@@ -87,3 +87,27 @@ def session_utility(
         used = sum(1 for item in top_k if (event.event_id, item.memory_id) in used_pairs)
         per_session.setdefault(event.session_id, []).append(used / len(top_k))
     return {session: fmean(values) for session, values in per_session.items()}
+
+
+def join_proxy_truth(
+    tier1: Mapping[SessionId, float], tier2: Mapping[SessionId, bool]
+) -> list[tuple[float, bool]]:
+    """Inner-join per-session Tier-1 utility to per-session Tier-2 success into the
+    ``units`` :func:`proxy_truth` consumes.
+
+    A session present on only one side is **dropped**: you cannot hold a proxy against a
+    truth you do not have (missing data, never zero — the §13.13 coverage discipline). The
+    fraction kept is the monitor's *coverage*, which the caller surfaces alongside the
+    verdict so a confident-looking number backed by few labelled sessions is visible."""
+    return [(tier1[session], tier2[session]) for session in tier1 if session in tier2]
+
+
+def session_proxy_truth(
+    tier1: Mapping[SessionId, float],
+    tier2: Mapping[SessionId, bool],
+    *,
+    utility_floor: float = 0.5,
+) -> ProxyTruthReport:
+    """The session-level monitor: join Tier-1 to Tier-2 by session, then correlate them
+    (§13.12). The pre-committed instrument the verdict runs on real logs."""
+    return proxy_truth(join_proxy_truth(tier1, tier2), utility_floor=utility_floor)

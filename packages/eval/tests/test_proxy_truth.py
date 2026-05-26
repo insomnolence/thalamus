@@ -4,7 +4,12 @@ from datetime import UTC, datetime
 
 import pytest
 from thalamus.core.types import EventId, MemoryId, RepoId, Scope, SessionId, TenantId
-from thalamus.eval import proxy_truth, session_utility
+from thalamus.eval import (
+    join_proxy_truth,
+    proxy_truth,
+    session_proxy_truth,
+    session_utility,
+)
 from thalamus.instrumentation import RetrievalEvent, ShownItem, UsageSignal
 
 SCOPE = Scope(tenant_id=TenantId("t"), repo_id=RepoId("r"))
@@ -59,3 +64,19 @@ def test_session_utility_groups_by_session() -> None:
     ]
     by_session = session_utility(events, signals, k=2)
     assert by_session == {SessionId("s1"): pytest.approx(0.75)}  # s2 has no outcome -> dropped
+
+
+def test_join_inner_joins_sessions_present_on_both_sides() -> None:
+    tier1 = {SessionId("s1"): 0.9, SessionId("s2"): 0.2, SessionId("s3"): 0.5}
+    tier2 = {SessionId("s1"): True, SessionId("s2"): False}  # s3 has no Tier-2 label
+    units = join_proxy_truth(tier1, tier2)
+    assert sorted(units) == [(0.2, False), (0.9, True)]  # s3 dropped (missing truth, not zero)
+
+
+def test_session_proxy_truth_joins_then_correlates() -> None:
+    tier1 = {SessionId("s1"): 0.9, SessionId("s2"): 0.2, SessionId("s3"): 0.5}
+    tier2 = {SessionId("s1"): True, SessionId("s2"): False}
+    report = session_proxy_truth(tier1, tier2)
+    assert report.n_units == 2  # only the two joined sessions
+    assert report.alignment == pytest.approx(0.9 - 0.2)
+    assert report.reward_hacking_suspected is False
