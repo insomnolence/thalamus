@@ -14,6 +14,7 @@ from thalamus.cli.dogfood import add_sync_arguments, run_sync, sync_config
 from thalamus.cli.remember import add_remember_arguments, remember_config, run_remember
 from thalamus.cli.serve import add_serve_arguments, run_serve, serve_config
 from thalamus.cli.test_capture import add_test_arguments, run_test_capture, test_config
+from thalamus.cli.verdict import add_verdict_arguments, run_verdict, verdict_config
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -27,6 +28,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     add_serve_arguments(sub.add_parser("serve", help="serve the two-hemisphere brain over MCP"))
     add_test_arguments(sub.add_parser("capture-tests", help="append JUnit evidence to the raw log"))
+    add_verdict_arguments(
+        sub.add_parser("verdict", help="report the 'does the brain help?' verdict on the real logs")
+    )
 
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "sync":
@@ -37,4 +41,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_serve(serve_config(args))
     elif args.command == "capture-tests":
         run_test_capture(test_config(args))
+    elif args.command == "verdict":
+        run_verdict(verdict_config(args))
     return 0
