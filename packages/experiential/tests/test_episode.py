@@ -72,6 +72,22 @@ def test_empty_span_builds_nothing() -> None:
     assert EpisodeBuilder().build(EpisodeSpan(events=(), closed=False)) is None
 
 
+def test_session_span_gets_session_namespaced_id_not_commit_collision() -> None:
+    # a session-bounded span that contains a commit must NOT reuse episode:{sha}
+    # (that id belongs to the commit-bounded episode) — the segmenter-supplied key wins.
+    span = EpisodeSpan(
+        events=(_commit("e1", 20, "abc123", "do a thing", ["a.py"]),),
+        closed=True,
+        segmentation="S0-session",
+        key="session:s1",
+    )
+    record = EpisodeBuilder().build(span)
+    assert record is not None
+    assert record.memory_id == MemoryId("episode:session:s1")  # not episode:abc123
+    assert record.metadata["segmentation"] == "S0-session"
+    assert record.metadata["terminal_outcome"]["sha"] == "abc123"  # the commit is still recorded
+
+
 def test_build_is_idempotent_on_id() -> None:
     span = EpisodeSpan(events=(_commit("e1", 10, "abc", "x", ["a.py"]),), closed=True)
     assert EpisodeBuilder().build(span).memory_id == EpisodeBuilder().build(span).memory_id

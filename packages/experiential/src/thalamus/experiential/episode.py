@@ -96,20 +96,25 @@ class EpisodeBuilder:
             for d in dead_ends
         )
 
-        if terminal is not None:
-            sha = str(terminal.payload["sha"])
+        sha = str(terminal.payload["sha"]) if terminal is not None else None
+        outcome: dict[str, Any] | None = (
+            {"kind": "commit", "sha": sha, "subject": subject or ""}
+            if terminal is not None
+            else None
+        )
+
+        if span.key is not None:  # the segmenter owns identity (e.g. session-bounded)
+            memory_id = MemoryId(f"episode:{span.key}")
+            created_at = terminal.timestamp if terminal is not None else events[-1].timestamp
+        elif terminal is not None:  # commit-bounded default: stable id from the sha
             memory_id = MemoryId(f"episode:{sha}")
             created_at = terminal.timestamp
-            outcome: dict[str, Any] | None = {
-                "kind": "commit", "sha": sha, "subject": subject or ""
-            }
-        else:
+        else:  # open, uncommitted work-in-progress
             memory_id = MemoryId(f"episode:open:{events[0].event_id}")
             created_at = events[-1].timestamp
-            outcome = None
 
         metadata: dict[str, Any] = {
-            "segmentation": "S1-commit",
+            "segmentation": span.segmentation,
             "closed": span.closed,
             "footprint": footprint,
             "terminal_outcome": outcome,
