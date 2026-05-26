@@ -56,7 +56,7 @@ def test_build_serve_gateway_scans_brain1_and_relinks(tmp_path: Path) -> None:
 
     config = ServeConfig(
         repo=repo, tenant="local", repo_id="repo", dim=64, encoder="deterministic", k=5, k_hop=1,
-        max_structural_items=12, max_memory_chars=1000,
+        structural_min_relevance=0.0, max_structural_items=12, max_memory_chars=1000,
         neo4j_uri=None, neo4j_user="neo4j", neo4j_password=None,
     )
     gateway, returned, episodes = build_serve_gateway(config, store=store, encoder=encoder)
@@ -85,7 +85,7 @@ async def test_served_mcp_path_persists_recall_and_usage_logs(tmp_path: Path) ->
     store.add(record, encoder.encode([record.content])[0])
     config = ServeConfig(
         repo=repo, tenant="local", repo_id="repo", dim=64, encoder="deterministic", k=1, k_hop=1,
-        max_structural_items=12, max_memory_chars=1000,
+        structural_min_relevance=0.0, max_structural_items=12, max_memory_chars=1000,
         neo4j_uri=None, neo4j_user="neo4j", neo4j_password=None,
     )
     gateway, _, _ = build_serve_gateway(config, store=store, encoder=encoder)
@@ -110,7 +110,7 @@ async def test_served_mcp_remember_is_immediately_recallable(tmp_path: Path) -> 
     store = InMemoryStore(dim=64)
     config = ServeConfig(
         repo=repo, tenant="local", repo_id="repo", dim=64, encoder="deterministic", k=1, k_hop=1,
-        max_structural_items=12, max_memory_chars=1000,
+        structural_min_relevance=0.0, max_structural_items=12, max_memory_chars=1000,
         neo4j_uri=None, neo4j_user="neo4j", neo4j_password=None,
     )
     gateway, _, _ = build_serve_gateway(config, store=store, encoder=encoder)

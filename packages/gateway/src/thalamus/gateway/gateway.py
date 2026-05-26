@@ -23,7 +23,7 @@ from thalamus.core.types import (
 )
 from thalamus.gateway.payload import ContextPayload, MemoryItem, StructuralItem
 from thalamus.instrumentation import UsageSignal, UsageSink, attribute_overlap
-from thalamus.structural import CrossLinkIndex, StructuralGraph, StructuralNode
+from thalamus.structural import CrossLinkIndex, StructuralGraph, StructuralNode, StructuralRetriever
 
 
 def _focus_node_ref(scope: Scope, focus: str) -> StructuralRef:
@@ -95,7 +95,9 @@ class Gateway:
         k: int = 5,
         graph: StructuralGraph | None = None,
         links: CrossLinkIndex | None = None,
+        structural_retriever: StructuralRetriever | None = None,
         structural_k_hop: int = 0,
+        structural_min_relevance: float = 0.0,
         max_structural_items: int = 12,
         max_memory_chars: int = 1000,
         usage_sink: UsageSink | None = None,
@@ -106,7 +108,12 @@ class Gateway:
         self._k = k
         self._graph = graph
         self._links = links
+        self._structural_retriever = structural_retriever
         self._structural_k_hop = structural_k_hop
+        # Floor for direct structural hits: don't append weakly-related code to every recall
+        # (the bounded/selective constraint). Default is an encoder-agnostic noise floor
+        # (strictly positive); a meaningful BGE threshold is deferred to real-usage tuning.
+        self._structural_min_relevance = structural_min_relevance
         self._max_structural_items = max_structural_items
         self._max_memory_chars = max_memory_chars
         self._usage_sink = usage_sink
@@ -126,6 +133,9 @@ class Gateway:
             for scored in result.shown
         ]
         structural = self._structural_for([scored.record.ref for scored in result.shown])
+        # Cross-linked nodes (the §13.19 headline — "the code this memory is about") come
+        # first; direct semantic hits from structural retrieval fill the rest, deduped.
+        structural += self._direct_structural(cue, exclude={item.node_id for item in structural})
         return ContextPayload(
             cue_text=prompt,
             memories=memories,
@@ -133,6 +143,17 @@ class Gateway:
             structural_omitted=max(len(structural) - self._max_structural_items, 0),
             event_id=result.event_id,
         )
+
+    def _direct_structural(self, cue: Cue, exclude: set[str]) -> list[StructuralItem]:
+        retriever = self._structural_retriever
+        if retriever is None:
+            return []
+        items: list[StructuralItem] = []
+        for scored in retriever.retrieve(cue, self._max_structural_items):
+            if scored.score > self._structural_min_relevance and scored.node.node_id not in exclude:
+                exclude.add(scored.node.node_id)
+                items.append(StructuralItem.from_scored_node(scored))
+        return items
 
     def _structural_for(self, memories: Sequence[MemoryRef]) -> list[StructuralItem]:
         graph, links = self._graph, self._links

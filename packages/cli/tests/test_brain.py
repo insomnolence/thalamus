@@ -41,7 +41,9 @@ def test_recall_fuses_episode_with_touched_code(tmp_path: Path) -> None:
     assert any("Store" in item.label for item in payload.structural)
 
 
-def test_no_episodes_means_no_structural_section(tmp_path: Path) -> None:
+def test_irrelevant_query_yields_no_structural_noise(tmp_path: Path) -> None:
+    # Direct structural retrieval is wired in, but an irrelevant query (zero similarity to
+    # the lone node) is held out by the relevance floor — recall stays selective, not flooded.
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
     gateway = build_two_hemisphere_gateway(
         tmp_path,

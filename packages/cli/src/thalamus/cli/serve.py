@@ -42,6 +42,7 @@ class ServeConfig:
     encoder: str
     k: int
     k_hop: int
+    structural_min_relevance: float
     max_structural_items: int
     max_memory_chars: int
     neo4j_uri: str | None
@@ -65,6 +66,14 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--k", type=int, default=5, help="memories per recall")
     parser.add_argument("--k-hop", type=int, default=1, help="structural hops to expand")
     parser.add_argument(
+        "--structural-min-relevance", type=float, default=0.6,
+        help=(
+            "minimum cosine for a direct structural hit. Default 0.6 is a conservative floor "
+            "for BGE (observed: on-topic code >=0.70, off-topic noise ~0.57); lower it for other "
+            "encoders. The encoder-agnostic Gateway default stays 0.0 — this is the BGE policy."
+        ),
+    )
+    parser.add_argument(
         "--max-structural-items", type=int, default=12,
         help="maximum related code items returned in one context payload",
     )
@@ -84,6 +93,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         encoder=str(args.encoder),
         k=int(args.k),
         k_hop=int(args.k_hop),
+        structural_min_relevance=float(args.structural_min_relevance),
         max_structural_items=int(args.max_structural_items),
         max_memory_chars=int(args.max_memory_chars),
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
@@ -123,6 +133,7 @@ def build_serve_gateway(
         episodes=episodes,
         k=config.k,
         k_hop=config.k_hop,
+        structural_min_relevance=config.structural_min_relevance,
         max_structural_items=config.max_structural_items,
         max_memory_chars=config.max_memory_chars,
         event_sink=JsonlEventSink(logs / "retrieval.jsonl"),

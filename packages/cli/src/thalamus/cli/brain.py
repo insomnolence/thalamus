@@ -31,9 +31,12 @@ from thalamus.structural import (
     Ingestor,
     InMemoryCrossLinkIndex,
     InMemoryStructuralGraph,
+    InMemoryStructuralIndex,
     PythonAstIngestor,
     StructuralGraph,
+    StructuralRetriever,
     link_by_footprint,
+    node_text,
 )
 
 
@@ -49,6 +52,7 @@ def build_two_hemisphere_gateway(
     links: CrossLinkIndex | None = None,
     k: int = 5,
     k_hop: int = 1,
+    structural_min_relevance: float = 0.0,
     max_structural_items: int = 12,
     max_memory_chars: int = 1000,
     event_sink: EventSink | None = None,
@@ -72,6 +76,17 @@ def build_two_hemisphere_gateway(
     ]
     link_by_footprint(footprints, result.nodes, links, repo_root=repo)
 
+    # Direct structural retrieval: embed Brain 2 nodes into their own (separate) index so a
+    # cue can hit code directly, not only via cross-links. A derived view over the re-derived
+    # graph (§14.1) — rebuilt here each start, cheap for repo-scale node counts.
+    structural_index = InMemoryStructuralIndex(dim=encoder.dim)
+    nodes = list(result.nodes)
+    if nodes:
+        embeddings = encoder.encode([node_text(node) for node in nodes])
+        for node, embedding in zip(nodes, embeddings, strict=True):
+            structural_index.add(node, embedding)
+    structural_retriever = StructuralRetriever(encoder, structural_index)
+
     base = L0Retriever(encoder, store)
     retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)
     if event_sink is not None:
@@ -81,7 +96,9 @@ def build_two_hemisphere_gateway(
         k=k,
         graph=graph,
         links=links,
+        structural_retriever=structural_retriever,
         structural_k_hop=k_hop,
+        structural_min_relevance=structural_min_relevance,
         max_structural_items=max_structural_items,
         max_memory_chars=max_memory_chars,
         usage_sink=usage_sink,

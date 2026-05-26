@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from thalamus.core.types import EventId, MemoryId, ScoredMemory
+from thalamus.structural.index import ScoredNode
 from thalamus.structural.schema import StructuralNode
 
 
@@ -59,22 +60,40 @@ def _truncate(value: str, limit: int) -> str:
     return value[: limit - len(suffix)].rstrip() + suffix
 
 
+def _node_location(node: StructuralNode) -> str | None:
+    if node.anchor is None:
+        return None
+    anchor = node.anchor
+    return f"{anchor.path}:{anchor.line_start}-{anchor.line_end}"
+
+
 @dataclass(frozen=True, slots=True)
 class StructuralItem:
-    """A structural node surfaced via a cross-hemisphere link (§13.19)."""
+    """A structural node in the payload — via a cross-hemisphere link (§13.19) or, when
+    ``relevance`` is set, a direct semantic hit from structural retrieval."""
 
     node_id: str
     kind: str
     label: str
     location: str | None = None
+    relevance: float | None = None  # set for direct structural hits; None for linked nodes
 
     @classmethod
     def from_node(cls, node: StructuralNode) -> StructuralItem:
-        location: str | None = None
-        if node.anchor is not None:
-            anchor = node.anchor
-            location = f"{anchor.path}:{anchor.line_start}-{anchor.line_end}"
-        return cls(node_id=node.node_id, kind=node.kind, label=node.label, location=location)
+        return cls(
+            node_id=node.node_id, kind=node.kind, label=node.label, location=_node_location(node)
+        )
+
+    @classmethod
+    def from_scored_node(cls, scored: ScoredNode) -> StructuralItem:
+        node = scored.node
+        return cls(
+            node_id=node.node_id,
+            kind=node.kind,
+            label=node.label,
+            location=_node_location(node),
+            relevance=scored.score,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +125,10 @@ class ContextPayload:
             lines += ["", "## Related code"]
             for symbol in self.structural:
                 location = f" — {symbol.location}" if symbol.location else ""
-                lines.append(f"- ({symbol.kind}) {symbol.label}{location}")
+                relevance = (
+                    f" [relevance {symbol.relevance:.2f}]" if symbol.relevance is not None else ""
+                )
+                lines.append(f"- ({symbol.kind}) {symbol.label}{location}{relevance}")
             if self.structural_omitted:
                 lines.append(f"- ... {self.structural_omitted} additional related item(s) omitted")
         return "\n".join(lines) + "\n"
