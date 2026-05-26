@@ -21,9 +21,20 @@ from thalamus.core.types import (
     SessionId,
     StructuralRef,
 )
-from thalamus.gateway.payload import ContextPayload, MemoryItem, StructuralItem
+from thalamus.gateway.payload import CallRelation, ContextPayload, MemoryItem, StructuralItem
 from thalamus.instrumentation import UsageSignal, UsageSink, attribute_overlap
-from thalamus.structural import CrossLinkIndex, StructuralGraph, StructuralNode, StructuralRetriever
+from thalamus.structural import (
+    CrossLinkIndex,
+    ScoredNode,
+    StructuralGraph,
+    StructuralNode,
+    StructuralRetriever,
+)
+
+# Bounds for the call-graph payload section — kept selective (the §5.6 packaging discipline):
+# only the cue's top few code hits, each with a capped caller/callee list.
+_MAX_CALL_RELATIONS = 3
+_MAX_CALL_NEIGHBORS = 6
 
 
 def _focus_node_ref(scope: Scope, focus: str) -> StructuralRef:
@@ -132,28 +143,62 @@ class Gateway:
             MemoryItem.from_scored(scored, max_content_chars=self._max_memory_chars)
             for scored in result.shown
         ]
+        direct = self._direct_hits(cue)
         structural = self._structural_for([scored.record.ref for scored in result.shown])
         # Cross-linked nodes (the §13.19 headline — "the code this memory is about") come
         # first; direct semantic hits from structural retrieval fill the rest, deduped.
-        structural += self._direct_structural(cue, exclude={item.node_id for item in structural})
+        exclude = {item.node_id for item in structural}
+        for scored in direct:
+            if scored.node.node_id not in exclude:
+                exclude.add(scored.node.node_id)
+                structural.append(StructuralItem.from_scored_node(scored))
         return ContextPayload(
             cue_text=prompt,
             memories=memories,
             structural=structural[: self._max_structural_items],
             structural_omitted=max(len(structural) - self._max_structural_items, 0),
+            calls=self._call_relations(direct),
             event_id=result.event_id,
         )
 
-    def _direct_structural(self, cue: Cue, exclude: set[str]) -> list[StructuralItem]:
+    def _direct_hits(self, cue: Cue) -> list[ScoredNode]:
+        """Direct structural retrieval hits above the relevance floor (empty if disabled)."""
         retriever = self._structural_retriever
         if retriever is None:
             return []
-        items: list[StructuralItem] = []
-        for scored in retriever.retrieve(cue, self._max_structural_items):
-            if scored.score > self._structural_min_relevance and scored.node.node_id not in exclude:
-                exclude.add(scored.node.node_id)
-                items.append(StructuralItem.from_scored_node(scored))
-        return items
+        return [
+            scored
+            for scored in retriever.retrieve(cue, self._max_structural_items)
+            if scored.score > self._structural_min_relevance
+        ]
+
+    def _call_relations(self, direct: Sequence[ScoredNode]) -> list[CallRelation]:
+        """Callers/callees of the cue's top direct code hits — the call graph, surfaced.
+
+        Reverse `calls` edges (callers) answer "what breaks if I change this"; forward
+        edges (callees) are what it uses. Bounded to a few hits with capped neighbours."""
+        graph = self._graph
+        if graph is None:
+            return []
+        relations: list[CallRelation] = []
+        for scored in direct:
+            node = scored.node
+            if node.kind not in ("function", "method", "class"):
+                continue
+            callers = graph.neighbors(node.ref, edge_types=("calls",), direction="in")
+            callees = graph.neighbors(node.ref, edge_types=("calls",), direction="out")
+            if not callers and not callees:
+                continue
+            relations.append(
+                CallRelation(
+                    label=node.label,
+                    callers=tuple(n.label for n in callers[:_MAX_CALL_NEIGHBORS]),
+                    callees=tuple(n.label for n in callees[:_MAX_CALL_NEIGHBORS]),
+                )
+            )
+            if len(relations) >= _MAX_CALL_RELATIONS:
+                break
+        return relations
 
     def _structural_for(self, memories: Sequence[MemoryRef]) -> list[StructuralItem]:
         graph, links = self._graph, self._links

@@ -27,6 +27,7 @@ from thalamus.structural import (
     ScoredNode,
     StructuralNode,
 )
+from thalamus.structural.schema import IngestResult, StructuralEdge
 
 SCOPE = Scope(TenantId("acme"), RepoId("widgets"))
 NOW = datetime(2026, 5, 26, tzinfo=UTC)
@@ -131,3 +132,52 @@ def test_merged_structural_respects_max_items(tmp_path: Path) -> None:
 
     assert len(payload.structural) == 1  # the cross-link, bounded
     assert payload.structural_omitted == 1  # the direct hit overflowed the bound
+
+
+def _calls_graph() -> InMemoryStructuralGraph:
+    """A graph where function m.a calls function m.b."""
+    a = _snode("function:m.a", "m.a")
+    b = _snode("function:m.b", "m.b")
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(
+        IngestResult(nodes=[a, b], edges=[StructuralEdge("function:m.a", "function:m.b", "calls")])
+    )
+    return graph
+
+
+def test_call_graph_surfaces_callees_of_a_direct_hit() -> None:
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    _add(encoder, store, "m", "anything")
+    retriever = _StubStructuralRetriever([ScoredNode(_snode("function:m.a", "m.a"), 0.9)])
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW),
+        graph=_calls_graph(),
+        structural_retriever=retriever,
+    )
+    payload = gateway.recall(prompt="about a", scope=SCOPE)
+
+    assert len(payload.calls) == 1
+    assert payload.calls[0].label == "m.a"
+    assert payload.calls[0].callees == ("m.b",)
+    assert payload.calls[0].callers == ()
+    rendered = payload.render()
+    assert "## Call graph" in rendered
+    assert "calls: m.b" in rendered
+
+
+def test_call_graph_surfaces_callers_of_a_direct_hit() -> None:
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    _add(encoder, store, "m", "anything")
+    retriever = _StubStructuralRetriever([ScoredNode(_snode("function:m.b", "m.b"), 0.9)])
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW),
+        graph=_calls_graph(),
+        structural_retriever=retriever,
+    )
+    payload = gateway.recall(prompt="about b", scope=SCOPE)
+
+    assert payload.calls[0].callers == ("m.a",)
+    assert payload.calls[0].callees == ()
+    assert "called by: m.a" in payload.render()

@@ -97,6 +97,19 @@ class StructuralItem:
 
 
 @dataclass(frozen=True, slots=True)
+class CallRelation:
+    """A surfaced code symbol with its direct callers and callees (the Brain-2 call graph).
+
+    Answers "what breaks if I change this" (callers) and "what does this use" (callees)
+    for the symbols a cue is about — the §13.19 call graph made visible at recall time.
+    """
+
+    label: str
+    callers: tuple[str, ...]
+    callees: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ContextPayload:
     """The assembled context returned for a cue."""
 
@@ -104,11 +117,12 @@ class ContextPayload:
     memories: Sequence[MemoryItem]
     structural: Sequence[StructuralItem] = ()
     structural_omitted: int = 0
+    calls: Sequence[CallRelation] = ()
     event_id: EventId | None = None  # correlate later outcome (usage) signals to this recall
 
     def render(self) -> str:
         """Render the payload as a clean text block for the actuator."""
-        if not self.memories and not self.structural:
+        if not self.memories and not self.structural and not self.calls:
             return f"# Context for: {self.cue_text}\n\n(no relevant memories)\n"
         lines = [f"# Context for: {self.cue_text}"]
         retained = [item for item in self.memories if item.retained]
@@ -131,4 +145,12 @@ class ContextPayload:
                 lines.append(f"- ({symbol.kind}) {symbol.label}{location}{relevance}")
             if self.structural_omitted:
                 lines.append(f"- ... {self.structural_omitted} additional related item(s) omitted")
+        if self.calls:
+            lines += ["", "## Call graph"]
+            for relation in self.calls:
+                lines.append(f"- {relation.label}")
+                if relation.callers:
+                    lines.append(f"    called by: {', '.join(relation.callers)}")
+                if relation.callees:
+                    lines.append(f"    calls: {', '.join(relation.callees)}")
         return "\n".join(lines) + "\n"
