@@ -64,3 +64,26 @@ def link_by_footprint(
                 linked.add(node)
                 created += 1
     return created
+
+
+def footprint_staleness(
+    items: Iterable[tuple[MemoryRef, Sequence[str]]],
+    *,
+    repo_root: Path,
+) -> dict[MemoryRef, list[str]]:
+    """For each memory, the footprint files no longer present on disk under ``repo_root``.
+
+    The §13.18-D2 staleness signal as a deterministic disk check: a memory whose footprint
+    references a file that has been deleted or moved is a *staleness candidate* — the code it
+    was about is gone. The mirror of :func:`link_by_footprint` (which links the files that *do*
+    resolve). Surfaced as a review flag, never auto-deleted (§14.4: conservative against silent
+    poisons — heavy refactors throw false positives, so time + outcomes arbitrate). Returns only
+    memories with at least one missing file; order preserved for stable reporting.
+    """
+    root = repo_root.resolve()
+    stale: dict[MemoryRef, list[str]] = {}
+    for memory, files in items:
+        missing = [file for file in files if not (root / file).exists()]
+        if missing:
+            stale[memory] = missing
+    return stale

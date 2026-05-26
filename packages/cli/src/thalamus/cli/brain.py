@@ -39,6 +39,7 @@ from thalamus.structural import (
     PythonAstIngestor,
     StructuralGraph,
     StructuralRetriever,
+    footprint_staleness,
     link_by_footprint,
     node_text,
 )
@@ -97,6 +98,18 @@ def build_two_hemisphere_gateway(
     ]
     link_by_footprint(footprints, result.nodes, links, repo_root=repo)
 
+    # §13.18-D2: flag curated memories whose footprint files are gone from disk (stale beliefs
+    # about code that no longer exists). Episodes are immutable history, so only curated memories
+    # are staleness-checked. Computed here where the repo root is known; the gateway just surfaces.
+    stale_references = footprint_staleness(
+        [
+            (record.ref, tuple(record.metadata.get("footprint", ())))
+            for record in episodes
+            if record.metadata.get("source") == "curated"
+        ],
+        repo_root=repo,
+    )
+
     # Direct structural retrieval: embed Brain 2 nodes into their own (separate) index so a
     # cue can hit code directly, not only via cross-links. A derived view over the re-derived
     # graph (§14.1) — rebuilt here each start, cheap for repo-scale node counts.
@@ -120,6 +133,7 @@ def build_two_hemisphere_gateway(
         structural_retriever=structural_retriever,
         structural_k_hop=k_hop,
         structural_min_relevance=structural_min_relevance,
+        stale_references=stale_references,
         max_structural_items=max_structural_items,
         max_memory_chars=max_memory_chars,
         usage_sink=usage_sink,

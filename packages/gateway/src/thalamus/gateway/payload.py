@@ -26,10 +26,15 @@ class MemoryItem:
     score: float
     why: str | None = None
     source: str | None = None
+    stale_references: tuple[str, ...] = ()  # footprint files no longer on disk (§13.18-D2)
 
     @classmethod
     def from_scored(
-        cls, scored: ScoredMemory, *, max_content_chars: int | None = None
+        cls,
+        scored: ScoredMemory,
+        *,
+        max_content_chars: int | None = None,
+        stale_references: Sequence[str] = (),
     ) -> MemoryItem:
         why = scored.record.metadata.get("why")
         content = scored.record.content
@@ -45,6 +50,7 @@ class MemoryItem:
             score=scored.score,
             why=rationale,
             source=str(scored.record.metadata.get("source", "")) or None,
+            stale_references=tuple(stale_references),
         )
 
     @property
@@ -135,6 +141,9 @@ class ContextPayload:
                 lines.append(f"- ({item.kind}, relevance {item.score:.2f}) {item.content}")
                 if item.why:
                     lines.append(f"  why: {item.why}")
+                if item.stale_references:
+                    gone = ", ".join(item.stale_references)
+                    lines.append(f"  ⚠ may be stale — references no longer in the codebase: {gone}")
         if self.structural or self.structural_omitted:
             lines += ["", "## Related code"]
             for symbol in self.structural:

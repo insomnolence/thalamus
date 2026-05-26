@@ -9,7 +9,7 @@ is pure and testable. Without the structural collaborators it works experiential
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from thalamus.core.protocols import Retriever, Store
 from thalamus.core.types import (
@@ -109,6 +109,7 @@ class Gateway:
         structural_retriever: StructuralRetriever | None = None,
         structural_k_hop: int = 0,
         structural_min_relevance: float = 0.0,
+        stale_references: Mapping[MemoryRef, Sequence[str]] | None = None,
         max_structural_items: int = 12,
         max_memory_chars: int = 1000,
         usage_sink: UsageSink | None = None,
@@ -121,6 +122,9 @@ class Gateway:
         self._links = links
         self._structural_retriever = structural_retriever
         self._structural_k_hop = structural_k_hop
+        # memory_ref -> its footprint files that are gone from disk (§13.18-D2). Precomputed at
+        # composition (where the repo root is known) so the gateway stays filesystem-free.
+        self._stale_references = dict(stale_references) if stale_references else {}
         # Floor for direct structural hits: don't append weakly-related code to every recall
         # (the bounded/selective constraint). Default is an encoder-agnostic noise floor
         # (strictly positive); a meaningful BGE threshold is deferred to real-usage tuning.
@@ -140,7 +144,11 @@ class Gateway:
         cue = Cue(text=prompt, scope=scope, focus=focus, session_id=session_id)
         result = self._retriever.retrieve(cue, self._k)
         memories = [
-            MemoryItem.from_scored(scored, max_content_chars=self._max_memory_chars)
+            MemoryItem.from_scored(
+                scored,
+                max_content_chars=self._max_memory_chars,
+                stale_references=self._stale_references.get(scored.record.ref, ()),
+            )
             for scored in result.shown
         ]
         direct = self._direct_hits(cue)

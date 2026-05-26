@@ -18,7 +18,7 @@ from thalamus.structural.index import (
 )
 from thalamus.structural.ingestor import Ingestor
 from thalamus.structural.jedi_calls import JediCallIngestor
-from thalamus.structural.linking import link_by_footprint
+from thalamus.structural.linking import footprint_staleness, link_by_footprint
 from thalamus.structural.neo4j_graph import Neo4jCrossLinkIndex, Neo4jStructuralGraph
 from thalamus.structural.python_ast import PythonAstIngestor
 from thalamus.structural.schema import (
@@ -48,6 +48,7 @@ __all__ = [
     "StructuralIndex",
     "StructuralNode",
     "StructuralRetriever",
+    "footprint_staleness",
     "link_by_footprint",
     "node_text",
 ]
