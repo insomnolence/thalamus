@@ -5,6 +5,12 @@ description = "Brain 2 (structural hemisphere): AST/code dependency graph."
 requires-python = ">=3.12"
 dependencies = ["thalamus-core"]
 
+# jedi powers resolved call/reference edges (JediCallIngestor). Optional: the
+# zero-dep AST ingestor works without it; the calls layer degrades gracefully when
+# jedi is absent. (Interim Python resolver; SCIP is the precise/multi-language path.)
+[project.optional-dependencies]
+jedi = ["jedi>=0.19"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

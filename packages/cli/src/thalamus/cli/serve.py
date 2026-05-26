@@ -42,6 +42,7 @@ class ServeConfig:
     encoder: str
     k: int
     k_hop: int
+    resolve_calls: bool
     structural_min_relevance: float
     max_structural_items: int
     max_memory_chars: int
@@ -65,6 +66,10 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--k", type=int, default=5, help="memories per recall")
     parser.add_argument("--k-hop", type=int, default=1, help="structural hops to expand")
+    parser.add_argument(
+        "--resolve-calls", action=argparse.BooleanOptionalAction, default=True,
+        help="resolve Brain-2 call edges with jedi at startup (--no-resolve-calls skips the cost)",
+    )
     parser.add_argument(
         "--structural-min-relevance", type=float, default=0.6,
         help=(
@@ -93,6 +98,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         encoder=str(args.encoder),
         k=int(args.k),
         k_hop=int(args.k_hop),
+        resolve_calls=bool(args.resolve_calls),
         structural_min_relevance=float(args.structural_min_relevance),
         max_structural_items=int(args.max_structural_items),
         max_memory_chars=int(args.max_memory_chars),
@@ -133,6 +139,7 @@ def build_serve_gateway(
         episodes=episodes,
         k=config.k,
         k_hop=config.k_hop,
+        resolve_calls=config.resolve_calls,
         structural_min_relevance=config.structural_min_relevance,
         max_structural_items=config.max_structural_items,
         max_memory_chars=config.max_memory_chars,

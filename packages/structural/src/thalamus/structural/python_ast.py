@@ -23,34 +23,16 @@ import logging
 from pathlib import Path
 
 from thalamus.core.types import Scope
+from thalamus.structural.ids import class_id, function_id, method_id, module_dotted, module_id
 from thalamus.structural.schema import (
     IngestResult,
     SourceAnchor,
     StructuralEdge,
     StructuralNode,
 )
+from thalamus.structural.sources import IGNORE_DIRS, python_files
 
 logger = logging.getLogger(__name__)
-
-# Directories never part of a project's own re-derivable corpus. Hidden dirs
-# (``.venv``/``.git``/``.mypy_cache``/…) are pruned separately by the leading dot,
-# so this only needs the non-hidden noise.
-_IGNORE_DIRS = frozenset({"venv", "__pycache__", "build", "dist", "node_modules", "site-packages"})
-
-
-def _dotted(path: Path, root: Path, root_package: str | None) -> str:
-    """Stable module identity from a corpus-relative path, optionally package-prefixed."""
-    relative = path.name if root.is_file() else str(path.relative_to(root))
-    parts = list(Path(relative).with_suffix("").parts)
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]
-    if root_package is not None:
-        pkg = root_package.split(".")
-        if parts[: len(pkg)] != pkg:
-            parts = [*pkg, *parts]
-    if not parts:
-        parts = root_package.split(".") if root_package is not None else [path.parent.name]
-    return ".".join(parts)
 
 
 def _anchor(path: Path, node: ast.AST) -> SourceAnchor:
@@ -63,7 +45,7 @@ class PythonAstIngestor:
     """Ingests Python source into the structural graph (containment/inherit/imports)."""
 
     def __init__(
-        self, root_package: str | None = None, *, ignore_dirs: frozenset[str] = _IGNORE_DIRS
+        self, root_package: str | None = None, *, ignore_dirs: frozenset[str] = IGNORE_DIRS
     ) -> None:
         self._root_package = root_package
         self._ignore_dirs = ignore_dirs
@@ -71,24 +53,9 @@ class PythonAstIngestor:
     def ingest_path(self, root: Path, scope: Scope) -> IngestResult:
         nodes: list[StructuralNode] = []
         edges: list[StructuralEdge] = []
-        for path in self._python_files(root):
+        for path in python_files(root, self._ignore_dirs):
             self._ingest_file(path, root, scope, nodes, edges)
         return IngestResult(nodes=nodes, edges=edges)
-
-    def _python_files(self, root: Path) -> list[Path]:
-        """Python files under ``root``, never descending into ignored/hidden dirs
-        (``.venv``, ``.git``, caches, …) — the corpus is the project, not its deps."""
-        if root.is_file():
-            return [root]
-        files: list[Path] = []
-        for dirpath, dirnames, filenames in root.walk():
-            dirnames[:] = [
-                name
-                for name in dirnames
-                if name not in self._ignore_dirs and not name.startswith(".")
-            ]
-            files.extend(dirpath / name for name in filenames if name.endswith(".py"))
-        return sorted(files)
 
     def _ingest_file(
         self,
@@ -109,11 +76,11 @@ class PythonAstIngestor:
             logger.warning("syntax error, skipping %s", path)
             return
 
-        module = _dotted(path, root, self._root_package)
-        module_id = f"module:{module}"
+        module = module_dotted(path, root, self._root_package)
+        mod_id = module_id(module)
         nodes.append(
             StructuralNode(
-                node_id=module_id,
+                node_id=mod_id,
                 kind="module",
                 label=module,
                 scope=scope,
@@ -122,9 +89,9 @@ class PythonAstIngestor:
         )
         for child in ast.iter_child_nodes(tree):
             if isinstance(child, ast.ClassDef):
-                self._add_class(path, child, module, module_id, scope, nodes, edges)
+                self._add_class(path, child, module, mod_id, scope, nodes, edges)
             elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
-                func_id = f"function:{module}.{child.name}"
+                func_id = function_id(module, child.name)
                 nodes.append(
                     StructuralNode(
                         node_id=func_id,
@@ -134,28 +101,28 @@ class PythonAstIngestor:
                         anchor=_anchor(path, child),
                     )
                 )
-                edges.append(StructuralEdge(module_id, func_id, "contains"))
+                edges.append(StructuralEdge(mod_id, func_id, "contains"))
             elif isinstance(child, ast.Import):
                 for alias in child.names:
-                    edges.append(StructuralEdge(module_id, f"module:{alias.name}", "imports"))
+                    edges.append(StructuralEdge(mod_id, module_id(alias.name), "imports"))
             elif isinstance(child, ast.ImportFrom) and child.module:
-                edges.append(StructuralEdge(module_id, f"module:{child.module}", "imports"))
+                edges.append(StructuralEdge(mod_id, module_id(child.module), "imports"))
 
     def _add_class(
         self,
         path: Path,
         class_node: ast.ClassDef,
         module: str,
-        module_id: str,
+        mod_id: str,
         scope: Scope,
         nodes: list[StructuralNode],
         edges: list[StructuralEdge],
     ) -> None:
-        class_id = f"class:{module}.{class_node.name}"
+        cls_id = class_id(module, class_node.name)
         base_names = [base.id for base in class_node.bases if isinstance(base, ast.Name)]
         nodes.append(
             StructuralNode(
-                node_id=class_id,
+                node_id=cls_id,
                 kind="class",
                 label=f"{module}.{class_node.name}",
                 scope=scope,
@@ -163,20 +130,20 @@ class PythonAstIngestor:
                 metadata={"bases": base_names},
             )
         )
-        edges.append(StructuralEdge(module_id, class_id, "contains"))
+        edges.append(StructuralEdge(mod_id, cls_id, "contains"))
         for base in base_names:
             # Same-module resolution only; cross-module bases are deferred to jedi/SCIP.
-            edges.append(StructuralEdge(class_id, f"class:{module}.{base}", "inherits"))
+            edges.append(StructuralEdge(cls_id, class_id(module, base), "inherits"))
         for item in class_node.body:
             if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
-                method_id = f"method:{module}.{class_node.name}.{item.name}"
+                meth_id = method_id(module, class_node.name, item.name)
                 nodes.append(
                     StructuralNode(
-                        node_id=method_id,
+                        node_id=meth_id,
                         kind="method",
                         label=f"{module}.{class_node.name}.{item.name}",
                         scope=scope,
                         anchor=_anchor(path, item),
                     )
                 )
-                edges.append(StructuralEdge(class_id, method_id, "contains"))
+                edges.append(StructuralEdge(cls_id, meth_id, "contains"))

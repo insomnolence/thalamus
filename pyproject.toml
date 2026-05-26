@@ -24,6 +24,7 @@ dev = [
     "mypy>=1.11",
     "neo4j>=5",
     "fastmcp>=2",
+    "jedi>=0.19",
 ]
 
 # Virtual workspace root — an aggregator, not itself an installable package.
@@ -98,4 +99,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "fastmcp.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "jedi.*"
 ignore_missing_imports = true

@@ -16,6 +16,8 @@ Neo4j-backed (persisted, with native cross-edges).
 
 from __future__ import annotations
 
+import importlib.util
+import logging
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -27,17 +29,35 @@ from thalamus.instrumentation import EventSink, LoggingRetriever, UsageSink
 from thalamus.retrieval import L0Retriever
 from thalamus.store import InMemoryStore, Neo4jStore, connect
 from thalamus.structural import (
+    CompositeIngestor,
     CrossLinkIndex,
     Ingestor,
     InMemoryCrossLinkIndex,
     InMemoryStructuralGraph,
     InMemoryStructuralIndex,
+    JediCallIngestor,
     PythonAstIngestor,
     StructuralGraph,
     StructuralRetriever,
     link_by_footprint,
     node_text,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _default_ingestor(resolve_calls: bool) -> Ingestor:
+    """The AST structure pass, composed with jedi call resolution when available.
+
+    Degrades gracefully: if ``resolve_calls`` is on but jedi isn't installed, structure
+    is still ingested (calls omitted) with a warning, rather than failing."""
+    ast_pass = PythonAstIngestor()
+    if not resolve_calls:
+        return ast_pass
+    if importlib.util.find_spec("jedi") is None:
+        logger.warning("resolve_calls requested but jedi is not installed; calls edges disabled")
+        return ast_pass
+    return CompositeIngestor([ast_pass, JediCallIngestor()])
 
 
 def build_two_hemisphere_gateway(
@@ -52,6 +72,7 @@ def build_two_hemisphere_gateway(
     links: CrossLinkIndex | None = None,
     k: int = 5,
     k_hop: int = 1,
+    resolve_calls: bool = True,
     structural_min_relevance: float = 0.0,
     max_structural_items: int = 12,
     max_memory_chars: int = 1000,
@@ -65,7 +86,7 @@ def build_two_hemisphere_gateway(
     Neo4j-backed implementations to persist Brain 2 + native cross-edges in the shared
     substrate. Returns a :class:`Gateway` whose recall fuses experiential memories with
     the structural nodes they touched (plus their ``k_hop`` neighbours)."""
-    ingestor = ingestor or PythonAstIngestor()
+    ingestor = ingestor if ingestor is not None else _default_ingestor(resolve_calls)
     result = ingestor.ingest_path(repo, scope)
     graph = graph if graph is not None else InMemoryStructuralGraph(scope)
     graph.replace(result)

@@ -6,6 +6,7 @@
 memories to structural nodes (§13.19). See ``deep-dives/structural-hemisphere.md``.
 """
 
+from thalamus.structural.composite import CompositeIngestor
 from thalamus.structural.cross_link import CrossLinkIndex, InMemoryCrossLinkIndex
 from thalamus.structural.graph import Direction, InMemoryStructuralGraph, StructuralGraph
 from thalamus.structural.index import (
@@ -16,6 +17,7 @@ from thalamus.structural.index import (
     node_text,
 )
 from thalamus.structural.ingestor import Ingestor
+from thalamus.structural.jedi_calls import JediCallIngestor
 from thalamus.structural.linking import link_by_footprint
 from thalamus.structural.neo4j_graph import Neo4jCrossLinkIndex, Neo4jStructuralGraph
 from thalamus.structural.python_ast import PythonAstIngestor
@@ -27,6 +29,7 @@ from thalamus.structural.schema import (
 )
 
 __all__ = [
+    "CompositeIngestor",
     "CrossLinkIndex",
     "Direction",
     "IngestResult",
@@ -34,6 +37,7 @@ __all__ = [
     "InMemoryStructuralGraph",
     "InMemoryStructuralIndex",
     "Ingestor",
+    "JediCallIngestor",
     "Neo4jCrossLinkIndex",
     "Neo4jStructuralGraph",
     "PythonAstIngestor",
