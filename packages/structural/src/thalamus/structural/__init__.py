@@ -16,6 +16,7 @@ from thalamus.structural.composite import CompositeIngestor
 from thalamus.structural.cross_link import CrossLinkIndex, InMemoryCrossLinkIndex
 from thalamus.structural.doc_ingestor import DocIngestor
 from thalamus.structural.graph import Direction, InMemoryStructuralGraph, StructuralGraph
+from thalamus.structural.incremental import CorpusSpec, IngestStats, incremental_ingest
 from thalamus.structural.index import (
     InMemoryStructuralIndex,
     ScoredNode,
@@ -45,6 +46,7 @@ from thalamus.structural.schema import (
 __all__ = [
     "AttributedUse",
     "CompositeIngestor",
+    "CorpusSpec",
     "CrossLinkIndex",
     "Direction",
     "DocIngestor",
@@ -52,6 +54,7 @@ __all__ = [
     "FootprintAttributor",
     "InMemoryFileManifest",
     "IngestResult",
+    "IngestStats",
     "InMemoryCrossLinkIndex",
     "InMemoryStructuralGraph",
     "InMemoryStructuralIndex",
@@ -73,6 +76,7 @@ __all__ = [
     "StructuralRetriever",
     "UsageAttributor",
     "footprint_staleness",
+    "incremental_ingest",
     "link_by_footprint",
     "module_index",
     "node_text",
