@@ -59,6 +59,13 @@ class InMemoryStore:
     def scan(self, scope: Scope) -> list[MemoryRecord]:
         return [record for record in self._records.values() if record.scope == scope]
 
+    def scan_with_embeddings(self, scope: Scope) -> list[tuple[MemoryRecord, Vector]]:
+        return [
+            (record, self._embeddings[ref])
+            for ref, record in self._records.items()
+            if record.scope == scope
+        ]
+
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredMemory]:
         q = self._as_checked_vector(query, "InMemoryStore.search")
         q_norm = math.sqrt(sum(value * value for value in q))

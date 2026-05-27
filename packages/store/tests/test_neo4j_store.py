@@ -120,6 +120,15 @@ def test_identical_memory_ids_coexist_across_scopes(store: Neo4jStore) -> None:
     assert store.get(MemoryRef(OTHER, MemoryId("same"))).content == "theirs"
 
 
+def test_scan_with_embeddings_returns_stored_vectors(store: Neo4jStore) -> None:
+    store.add(_record("a", "a"), [1.0, 0.0, 0.0, 0.0])
+    store.add(_record("b", "b"), [0.0, 1.0, 0.0, 0.0])
+    store.add(_record("other", "other", OTHER), [1.0, 0.0, 0.0, 0.0])
+    pairs = {r.memory_id: emb for r, emb in store.scan_with_embeddings(SCOPE)}
+    assert set(pairs) == {MemoryId("a"), MemoryId("b")}  # scope-filtered
+    assert pairs[MemoryId("a")] == [1.0, 0.0, 0.0, 0.0]  # embedding round-trips for restore
+
+
 def test_dim_mismatch(store: Neo4jStore) -> None:
     with pytest.raises(DimensionMismatchError):
         store.add(_record("x", "x"), [1.0, 2.0])

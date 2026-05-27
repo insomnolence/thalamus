@@ -12,7 +12,8 @@ from thalamus.core.exceptions import (
     StoreError,
     ThalamusError,
 )
-from thalamus.core.protocols import Encoder, Retriever, Router, Store
+from thalamus.core.protocols import EmbeddingStore, Encoder, Retriever, Router, Store
+from thalamus.core.serde import deserialize_memory_record, serialize_memory_record
 from thalamus.core.types import (
     Cue,
     EpisodeId,
@@ -35,6 +36,7 @@ __all__ = [
     "ConfigurationError",
     "Cue",
     "DimensionMismatchError",
+    "EmbeddingStore",
     "Encoder",
     "EncoderError",
     "EpisodeId",
@@ -56,4 +58,6 @@ __all__ = [
     "TenantId",
     "ThalamusError",
     "Vector",
+    "deserialize_memory_record",
+    "serialize_memory_record",
 ]

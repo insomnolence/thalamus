@@ -156,6 +156,18 @@ class Neo4jStore:
         )
         return [self._to_record(dict(row["m"])) for row in rows]
 
+    def scan_with_embeddings(self, scope: Scope) -> list[tuple[MemoryRecord, Vector]]:
+        rows = self._run(
+            f"MATCH (m:{self._label}) WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
+            "RETURN m, m.embedding AS embedding",
+            tenant_id=str(scope.tenant_id),
+            repo_id=str(scope.repo_id),
+        )
+        return [
+            (self._to_record(dict(row["m"])), [float(value) for value in row["embedding"]])
+            for row in rows
+        ]
+
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredMemory]:
         vec = self._checked_vector(query, "Neo4jStore.search")
         if k <= 0:

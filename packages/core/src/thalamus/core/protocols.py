@@ -74,6 +74,22 @@ class Store(Protocol):
 
 
 @runtime_checkable
+class EmbeddingStore(Protocol):
+    """A :class:`Store` that can additionally enumerate records *with* their embeddings.
+
+    The normal read path (:meth:`Store.scan`) deliberately omits embeddings; this exposes
+    them for faithful export (backup/restore, store migration) so a snapshot can be restored
+    bit-for-bit without re-encoding — independent of which encoder is installed. A separate
+    protocol so ordinary ``Store`` consumers are not forced to surface vectors; a store opts
+    in by implementing it.
+    """
+
+    def scan_with_embeddings(self, scope: Scope) -> list[tuple[MemoryRecord, Vector]]:
+        """Return all ``(record, embedding)`` pairs within ``scope`` (unordered)."""
+        ...
+
+
+@runtime_checkable
 class Router(Protocol):
     """Classifies a cue's intent for routing (BGE + labeled classifier)."""
 

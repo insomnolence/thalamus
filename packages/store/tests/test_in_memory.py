@@ -74,6 +74,15 @@ def test_scan_returns_scoped_records() -> None:
     assert store.scan(OTHER) == [_record("other", OTHER)]
 
 
+def test_scan_with_embeddings_returns_records_and_vectors() -> None:
+    store = InMemoryStore(dim=2)
+    store.add(_record("a", SCOPE), [1.0, 0.0])
+    store.add(_record("b", SCOPE), [0.0, 1.0])
+    store.add(_record("other", OTHER), [1.0, 0.0])
+    pairs = {r.memory_id: emb for r, emb in store.scan_with_embeddings(SCOPE)}
+    assert pairs == {MemoryId("a"): (1.0, 0.0), MemoryId("b"): (0.0, 1.0)}  # scoped, with vectors
+
+
 def test_dim_mismatch() -> None:
     store = InMemoryStore(dim=3)
     with pytest.raises(DimensionMismatchError):
