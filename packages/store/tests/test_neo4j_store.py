@@ -1,3 +1,13 @@
+"""Neo4j store integration tests.
+
+ISOLATION (do not regress): these tests DELETE data, so they must NEVER run against the
+dogfood/dev Neo4j. They require ``THALAMUS_TEST_NEO4J_URI`` — point it at a DISPOSABLE
+Neo4j (a throwaway container), never the instance ``THALAMUS_NEO4J_URI`` serves. As a
+second guard, cleanup is scoped to the test tenant (``t1``), so even a misconfigured URI
+cannot wipe another tenant's memories. (A shared instance + unscoped ``DETACH DELETE``
+once destroyed accumulated curated memories — hence both guards.)
+"""
+
 from __future__ import annotations
 
 import os
@@ -19,12 +29,14 @@ from thalamus.core.types import (
 )
 from thalamus.store import Neo4jStore, connect
 
-_URI = os.environ.get("THALAMUS_NEO4J_URI")
-SCOPE = Scope(tenant_id=TenantId("t1"), repo_id=RepoId("r1"))
-OTHER = Scope(tenant_id=TenantId("t1"), repo_id=RepoId("r2"))
+_URI = os.environ.get("THALAMUS_TEST_NEO4J_URI")
+_TEST_TENANT = "t1"
+SCOPE = Scope(tenant_id=TenantId(_TEST_TENANT), repo_id=RepoId("r1"))
+OTHER = Scope(tenant_id=TenantId(_TEST_TENANT), repo_id=RepoId("r2"))
 
 pytestmark = pytest.mark.skipif(
-    _URI is None, reason="set THALAMUS_NEO4J_URI to run Neo4j integration tests"
+    _URI is None,
+    reason="set THALAMUS_TEST_NEO4J_URI (a DISPOSABLE Neo4j, never the dogfood instance)",
 )
 
 
@@ -40,20 +52,24 @@ def _record(mid: str, content: str, scope: Scope = SCOPE) -> MemoryRecord:
     )
 
 
+def _clean(driver: object) -> None:
+    # Scoped to the test tenant only — never a blanket M_experiential wipe.
+    with driver.session() as session:  # type: ignore[attr-defined]
+        session.run("MATCH (m:M_experiential {tenant_id: $t}) DETACH DELETE m", t=_TEST_TENANT)
+
+
 @pytest.fixture
 def store() -> Iterator[Neo4jStore]:
-    uri = os.environ["THALAMUS_NEO4J_URI"]
-    user = os.environ.get("THALAMUS_NEO4J_USER", "neo4j")
-    password = os.environ.get("THALAMUS_NEO4J_PASSWORD", "")
+    uri = os.environ["THALAMUS_TEST_NEO4J_URI"]
+    user = os.environ.get("THALAMUS_TEST_NEO4J_USER", "neo4j")
+    password = os.environ.get("THALAMUS_TEST_NEO4J_PASSWORD", "")
     driver = connect(uri, user, password)
-    with driver.session() as session:
-        session.run("MATCH (m:M_experiential) DETACH DELETE m")
+    _clean(driver)
     instance = Neo4jStore(dim=4, driver=driver, hemisphere=Hemisphere.EXPERIENTIAL)
     try:
         yield instance
     finally:
-        with driver.session() as session:
-            session.run("MATCH (m:M_experiential) DETACH DELETE m")
+        _clean(driver)
         instance.close()
 
 

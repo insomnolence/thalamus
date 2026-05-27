@@ -1,3 +1,11 @@
+"""Neo4j structural-graph integration tests.
+
+ISOLATION (do not regress): these tests DELETE data, so they require a DISPOSABLE Neo4j via
+``THALAMUS_TEST_NEO4J_URI`` — never the dogfood instance ``THALAMUS_NEO4J_URI`` serves.
+Cleanup is also scoped to the test tenant (``t``) as a second guard. (A shared instance +
+unscoped ``DETACH DELETE`` once destroyed accumulated curated memories.)
+"""
+
 from __future__ import annotations
 
 import os
@@ -16,25 +24,28 @@ from thalamus.structural import (
     StructuralNode,
 )
 
-_URI = os.environ.get("THALAMUS_NEO4J_URI")
+_URI = os.environ.get("THALAMUS_TEST_NEO4J_URI")
 pytestmark = pytest.mark.skipif(
-    _URI is None, reason="set THALAMUS_NEO4J_URI to run Neo4j integration tests"
+    _URI is None,
+    reason="set THALAMUS_TEST_NEO4J_URI (a DISPOSABLE Neo4j, never the dogfood instance)",
 )
-SCOPE = Scope(TenantId("t"), RepoId("r"))
+_TEST_TENANT = "t"
+SCOPE = Scope(TenantId(_TEST_TENANT), RepoId("r"))
 
 
 def _clean(driver: Any) -> None:
+    # Scoped to the test tenant only — never a blanket wipe of another tenant's data.
     with driver.session() as session:
-        session.run("MATCH (n:SNode) DETACH DELETE n")
-        session.run("MATCH (m:M_experiential) DETACH DELETE m")
+        session.run("MATCH (n:SNode {tenant_id: $t}) DETACH DELETE n", t=_TEST_TENANT)
+        session.run("MATCH (m:M_experiential {tenant_id: $t}) DETACH DELETE m", t=_TEST_TENANT)
 
 
 @pytest.fixture
 def driver() -> Iterator[Any]:
     handle = connect(
-        os.environ["THALAMUS_NEO4J_URI"],
-        os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
-        os.environ.get("THALAMUS_NEO4J_PASSWORD", ""),
+        os.environ["THALAMUS_TEST_NEO4J_URI"],
+        os.environ.get("THALAMUS_TEST_NEO4J_USER", "neo4j"),
+        os.environ.get("THALAMUS_TEST_NEO4J_PASSWORD", ""),
     )
     _clean(handle)
     try:
