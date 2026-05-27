@@ -167,6 +167,20 @@ def build_two_hemisphere_gateway(
     )
 
 
+def build_code_graph(
+    repo: Path, scope: Scope, *, resolve_calls: bool = True
+) -> tuple[StructuralGraph, list[StructuralNode]]:
+    """Re-derive just the code structural graph (AST + jedi calls; no docs, no vector index).
+
+    The substrate footprint operations need — memory footprints and work footprints both link
+    to code module nodes, and k-hop spreads over the code edges. Shared by serve's full
+    two-hemisphere build (conceptually) and the footprint usage-attribution pass."""
+    result = _default_ingestor(resolve_calls).ingest_path(repo, scope)
+    graph: StructuralGraph = InMemoryStructuralGraph(scope)
+    graph.add(result)
+    return graph, list(result.nodes)
+
+
 def build_store(
     *,
     dim: int,

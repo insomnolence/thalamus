@@ -48,7 +48,8 @@ class VerdictConfig:
     repo: Path
     k: int
     retrieval_log: Path
-    usage_log: Path
+    usage_log: Path  # raw citation signals (record_usage, append-only)
+    attributed_log: Path  # derived footprint signals (thalamus attribute, overwritten)
     trajectory_log: Path
 
 
@@ -70,6 +71,7 @@ def add_verdict_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--k", type=int, default=5, help="top-k cutoff for utility@k")
     parser.add_argument("--retrieval-log", type=Path, default=None, help="override path")
     parser.add_argument("--usage-log", type=Path, default=None, help="override path")
+    parser.add_argument("--attributed-log", type=Path, default=None, help="override path")
     parser.add_argument("--trajectory-log", type=Path, default=None, help="override path")
 
 
@@ -81,6 +83,9 @@ def verdict_config(args: argparse.Namespace) -> VerdictConfig:
         k=int(args.k),
         retrieval_log=Path(args.retrieval_log) if args.retrieval_log else logs / "retrieval.jsonl",
         usage_log=Path(args.usage_log) if args.usage_log else logs / "usage.jsonl",
+        attributed_log=(
+            Path(args.attributed_log) if args.attributed_log else logs / "usage_attributed.jsonl"
+        ),
         trajectory_log=(
             Path(args.trajectory_log) if args.trajectory_log else logs / "trajectory.jsonl"
         ),
@@ -160,7 +165,9 @@ def _render(report: VerdictReport) -> str:
 def run_verdict(config: VerdictConfig) -> VerdictReport:
     """Load the real logs and report the measurement-loop verdict."""
     events = _load(config.retrieval_log, read_event_log)
-    signals = _load(config.usage_log, read_usage_log)
+    # Both Tier-1 producers feed the join: the deterministic footprint signal (primary,
+    # derived by `attribute`) and the citation signal (secondary, from record_usage).
+    signals = _load(config.usage_log, read_usage_log) + _load(config.attributed_log, read_usage_log)
     trajectory = _load(config.trajectory_log, read_trajectory_log)
     report = compute_verdict(events, signals, trajectory, k=config.k)
     print(_render(report))

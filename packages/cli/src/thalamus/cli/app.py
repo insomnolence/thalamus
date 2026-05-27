@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
+from thalamus.cli.attribute import add_attribute_arguments, attribute_config, run_attribute
 from thalamus.cli.dogfood import add_sync_arguments, run_sync, sync_config
 from thalamus.cli.remember import add_remember_arguments, remember_config, run_remember
 from thalamus.cli.serve import add_serve_arguments, run_serve, serve_config
@@ -31,6 +32,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     add_verdict_arguments(
         sub.add_parser("verdict", help="report the 'does the brain help?' verdict on the real logs")
     )
+    add_attribute_arguments(
+        sub.add_parser("attribute", help="compute the deterministic footprint usage signal")
+    )
 
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "sync":
@@ -43,4 +47,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_test_capture(test_config(args))
     elif args.command == "verdict":
         run_verdict(verdict_config(args))
+    elif args.command == "attribute":
+        run_attribute(attribute_config(args))
     return 0
