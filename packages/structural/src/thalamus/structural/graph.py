@@ -13,7 +13,7 @@ modules); traversal tolerates these dangling targets.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Literal, Protocol, runtime_checkable
 
 from thalamus.core.types import Scope, StructuralRef
@@ -28,6 +28,7 @@ class StructuralGraph(Protocol):
 
     def add(self, result: IngestResult) -> None: ...
     def replace(self, result: IngestResult) -> None: ...
+    def remove(self, refs: Iterable[StructuralRef]) -> None: ...
     def get(self, ref: StructuralRef) -> StructuralNode | None: ...
     def neighbors(
         self,
@@ -61,14 +62,35 @@ class InMemoryStructuralGraph:
                 raise ValueError("structural node scope does not match graph scope")
             self._nodes[node.node_id] = node
         for edge in result.edges:
-            self._out.setdefault(edge.source_id, []).append(edge)
-            self._in.setdefault(edge.target_id, []).append(edge)
+            # Dedup so repeated incremental re-adds are idempotent (like Neo4j's MERGE).
+            out = self._out.setdefault(edge.source_id, [])
+            if edge not in out:
+                out.append(edge)
+            inbound = self._in.setdefault(edge.target_id, [])
+            if edge not in inbound:
+                inbound.append(edge)
 
     def replace(self, result: IngestResult) -> None:
         self._nodes.clear()
         self._out.clear()
         self._in.clear()
         self.add(result)
+
+    def remove(self, refs: Iterable[StructuralRef]) -> None:
+        ids = {ref.node_id for ref in refs if ref.scope == self._scope}
+        if not ids:
+            return
+        for node_id in ids:
+            self._nodes.pop(node_id, None)
+            self._out.pop(node_id, None)
+            self._in.pop(node_id, None)
+        # Drop edges referencing a removed node from the surviving adjacency lists.
+        for adjacency in (self._out, self._in):
+            for node_id, edges in adjacency.items():
+                adjacency[node_id] = [
+                    edge for edge in edges
+                    if edge.source_id not in ids and edge.target_id not in ids
+                ]
 
     def get(self, ref: StructuralRef) -> StructuralNode | None:
         return self._nodes.get(ref.node_id) if ref.scope == self._scope else None

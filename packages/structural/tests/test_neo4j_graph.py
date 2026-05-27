@@ -160,3 +160,25 @@ def test_structural_index_corpus_isolation(driver: Any) -> None:
     query = [1.0, 0.0, 0.0, 0.0]
     assert [r.node.node_id for r in code.search(query, k=5, scope=SCOPE)] == ["function:f"]
     assert [r.node.node_id for r in docs.search(query, k=5, scope=SCOPE)] == ["section:s"]
+
+
+def test_graph_remove_detaches_nodes(driver: Any) -> None:
+    graph = Neo4jStructuralGraph(driver, SCOPE)
+    graph.add(_result())
+    graph.remove([StructuralRef(SCOPE, "class:m.C")])
+    assert graph.get(StructuralRef(SCOPE, "class:m.C")) is None
+    # the contains edge module:m -> class:m.C is gone with the node
+    out = graph.neighbors(StructuralRef(SCOPE, "module:m"), direction="out")
+    assert out == []  # the only out-edge pointed at the removed class
+
+
+def test_file_manifest_persists_and_replaces(driver: Any) -> None:
+    from thalamus.structural import ManifestEntry, Neo4jFileManifest
+
+    manifest = Neo4jFileManifest(driver, SCOPE)
+    assert manifest.load(SCOPE) == {}
+    entries = {"m.py": ManifestEntry("sha1", ("module:m", "class:m.C"))}
+    manifest.save(SCOPE, entries)
+    assert manifest.load(SCOPE) == entries
+    manifest.save(SCOPE, {"n.py": ManifestEntry("sha2", ("module:n",))})  # wholesale replace
+    assert set(manifest.load(SCOPE)) == {"n.py"}

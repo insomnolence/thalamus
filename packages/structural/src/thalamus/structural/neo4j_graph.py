@@ -16,7 +16,7 @@ for typing here; all calls go through the injected driver (matching ``Neo4jStore
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from thalamus.core.exceptions import StoreError
@@ -135,6 +135,20 @@ class Neo4jStructuralGraph:
             repo_id=str(self._scope.repo_id),
         )
         self.add(result)
+
+    def remove(self, refs: Iterable[StructuralRef]) -> None:
+        ids = [ref.node_id for ref in refs if ref.scope == self._scope]
+        if not ids:
+            return
+        _run(
+            self._driver,
+            self._database,
+            f"MATCH (m:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id}}) "
+            "WHERE m.node_id IN $ids DETACH DELETE m",
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
+            ids=ids,
+        )
 
     def get(self, ref: StructuralRef) -> StructuralNode | None:
         if ref.scope != self._scope:

@@ -17,10 +17,11 @@ truth. Requires the ``neo4j`` extra (driver injected, matching the graph + store
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from thalamus.core.exceptions import DimensionMismatchError, StoreError
-from thalamus.core.types import Scope, Vector
+from thalamus.core.types import Scope, StructuralRef, Vector
 from thalamus.structural.index import ScoredNode
 from thalamus.structural.neo4j_graph import _NODE, _node_props, _run, _to_node
 from thalamus.structural.schema import StructuralNode
@@ -102,6 +103,22 @@ class Neo4jStructuralIndex:
             embedding=vec,
             corpus=self._corpus,
             **_node_props(node),
+        )
+
+    def remove(self, refs: Iterable[StructuralRef]) -> None:
+        # Clear only the index properties; the graph owns node deletion (which, being a
+        # DETACH DELETE, already drops the embedding — so this no-ops on already-gone nodes).
+        ids = [ref.node_id for ref in refs if ref.scope == self._scope]
+        if not ids:
+            return
+        _run(
+            self._driver,
+            self._database,
+            f"MATCH (m:{_NODE}) WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
+            "AND m.node_id IN $ids REMOVE m.embedding, m.corpus",
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
+            ids=ids,
         )
 
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredNode]:

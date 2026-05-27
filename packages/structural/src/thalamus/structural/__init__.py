@@ -26,6 +26,12 @@ from thalamus.structural.index import (
 from thalamus.structural.ingestor import Ingestor
 from thalamus.structural.jedi_calls import JediCallIngestor
 from thalamus.structural.linking import footprint_staleness, link_by_footprint, module_index
+from thalamus.structural.manifest import (
+    FileManifest,
+    InMemoryFileManifest,
+    ManifestEntry,
+    Neo4jFileManifest,
+)
 from thalamus.structural.neo4j_graph import Neo4jCrossLinkIndex, Neo4jStructuralGraph
 from thalamus.structural.neo4j_index import Neo4jStructuralIndex
 from thalamus.structural.python_ast import PythonAstIngestor
@@ -42,14 +48,18 @@ __all__ = [
     "CrossLinkIndex",
     "Direction",
     "DocIngestor",
+    "FileManifest",
     "FootprintAttributor",
+    "InMemoryFileManifest",
     "IngestResult",
     "InMemoryCrossLinkIndex",
     "InMemoryStructuralGraph",
     "InMemoryStructuralIndex",
     "Ingestor",
     "JediCallIngestor",
+    "ManifestEntry",
     "Neo4jCrossLinkIndex",
+    "Neo4jFileManifest",
     "Neo4jStructuralGraph",
     "Neo4jStructuralIndex",
     "PythonAstIngestor",

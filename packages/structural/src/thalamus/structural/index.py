@@ -15,7 +15,7 @@ behind the same protocol later.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -71,6 +71,10 @@ class StructuralIndex(Protocol):
         """Return the ``k`` nearest nodes within ``scope`` by vector similarity."""
         ...
 
+    def remove(self, refs: Iterable[StructuralRef]) -> None:
+        """Drop the given nodes from the index (for incremental re-embedding)."""
+        ...
+
 
 class InMemoryStructuralIndex:
     """In-memory scope-filtered cosine index over structural nodes.
@@ -98,6 +102,11 @@ class InMemoryStructuralIndex:
         vec = self._as_checked_vector(embedding, "InMemoryStructuralIndex.add")
         self._nodes[node.ref] = node
         self._embeddings[node.ref] = vec
+
+    def remove(self, refs: Iterable[StructuralRef]) -> None:
+        for ref in refs:
+            self._nodes.pop(ref, None)
+            self._embeddings.pop(ref, None)
 
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredNode]:
         q = self._as_checked_vector(query, "InMemoryStructuralIndex.search")
