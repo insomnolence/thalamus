@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 from datetime import UTC, datetime
 from pathlib import Path
 
 from thalamus.cli.attribute import AttributeConfig, compute_attribution, run_attribute
+from thalamus.cli.verdict import add_verdict_arguments, run_verdict, verdict_config
 from thalamus.core.types import (
     EventId,
     Hemisphere,
@@ -21,6 +23,7 @@ from thalamus.instrumentation import (
     ShownItem,
     TrajectoryEvent,
     TrajectoryEventKind,
+    build_test_run_event,
     read_usage_log,
 )
 from thalamus.routing import DeterministicEncoder
@@ -118,3 +121,42 @@ def test_run_attribute_writes_derived_log_and_is_idempotent(tmp_path: Path) -> N
     # derived view: re-running overwrites (no duplication)
     run_attribute(config, store=store, encoder=encoder, graph=graph, nodes=nodes)
     assert len(list(read_usage_log(config.attributed_log))) == 1
+
+
+def test_attribute_then_verdict_lifts_utility_where_lexical_read_zero(tmp_path: Path) -> None:
+    # The regression gate: a recall whose memory footprint matches the session's committed work
+    # reads used=True (utility > 0) — where the lexical citation signal would read 0 (no overlap
+    # between the memory's prose and any record_usage paraphrase, which never happened here).
+    logs = tmp_path / ".thalamus" / "logs"
+    logs.mkdir(parents=True)
+    JsonlEventSink(logs / "retrieval.jsonl").emit(_event("e1", "s1", "m_hit"))
+    traj = JsonlTrajectorySink(logs / "trajectory.jsonl")
+    traj.emit(_commit("t1", "s1", ["a.py"]))  # the work touched a.py (m_hit's footprint)
+    traj.emit(  # a terminal PASSED run gives the session a Tier-2 success label
+        build_test_run_event(
+            event_id=EventId("tr1"), timestamp=NOW, scope=SCOPE, tests=1, failures=0, errors=0,
+            skipped=0, failed=[], terminal=True, session_id=SessionId("s1"),
+        )
+    )
+
+    encoder = DeterministicEncoder(dim=64)
+    store = InMemoryStore(dim=64)
+    record = MemoryRecord(
+        MemoryId("m_hit"), Hemisphere.EXPERIENTIAL, "episode",
+        "an episode whose prose shares no tokens with any usage note", SCOPE, NOW,
+        metadata={"footprint": ["a.py"]},
+    )
+    store.add(record, encoder.encode([record.content])[0])
+    graph, nodes = _graph(tmp_path)
+
+    run_attribute(_config(tmp_path), store=store, encoder=encoder, graph=graph, nodes=nodes)
+
+    parser = argparse.ArgumentParser()
+    add_verdict_arguments(parser)
+    report = run_verdict(verdict_config(parser.parse_args(["--repo", str(tmp_path)])))
+
+    assert report.utility.utility_at_k == 1.0  # the surfaced memory was used (footprint matched)
+    assert report.n_tier1_sessions == 1
+    assert report.n_tier2_sessions == 1
+    assert report.monitor.n_units == 1  # the loop now joins, on a deterministic signal
+    assert report.monitor.mean_utility_success == 1.0
