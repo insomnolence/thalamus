@@ -17,8 +17,10 @@ from thalamus.core.types import MemoryId, MemoryRef, RepoId, Scope, StructuralRe
 from thalamus.store import connect
 from thalamus.structural import (
     IngestResult,
+    InMemoryStructuralIndex,
     Neo4jCrossLinkIndex,
     Neo4jStructuralGraph,
+    Neo4jStructuralIndex,
     SourceAnchor,
     StructuralEdge,
     StructuralNode,
@@ -124,3 +126,37 @@ def test_native_cross_links(driver: Any) -> None:
 
     links.link(MemoryRef(SCOPE, MemoryId("ghost")), node)  # no memory -> no edge
     assert links.memories_for(node) == [memory]
+
+
+def _fn(node_id: str, label: str) -> StructuralNode:
+    return StructuralNode(node_id, "function", label, SCOPE, SourceAnchor("m.py", 1, 2))
+
+
+def test_structural_index_matches_in_memory(driver: Any) -> None:
+    # the persisted index returns the same top-k (order + reconstructed node) as the in-memory one
+    nodes = {"function:m.alpha": [1.0, 0.0, 0.0, 0.0], "function:m.beta": [0.0, 1.0, 0.0, 0.0]}
+    neo = Neo4jStructuralIndex(driver, SCOPE, dim=4, corpus="code")
+    mem = InMemoryStructuralIndex(dim=4)
+    for node_id, emb in nodes.items():
+        node = _fn(node_id, node_id.split(".")[-1])
+        neo.add(node, emb)
+        mem.add(node, emb)
+    query = [1.0, 0.0, 0.0, 0.0]
+    neo_top = [r.node.node_id for r in neo.search(query, k=2, scope=SCOPE)]
+    mem_top = [r.node.node_id for r in mem.search(query, k=2, scope=SCOPE)]
+    assert neo_top == mem_top == ["function:m.alpha", "function:m.beta"]
+    best = neo.search(query, k=1, scope=SCOPE)[0].node
+    assert best.kind == "function" and best.anchor == SourceAnchor("m.py", 1, 2)  # faithful node
+
+
+def test_structural_index_corpus_isolation(driver: Any) -> None:
+    code = Neo4jStructuralIndex(driver, SCOPE, dim=4, corpus="code")
+    docs = Neo4jStructuralIndex(driver, SCOPE, dim=4, corpus="docs")
+    code.add(_fn("function:f", "f"), [1.0, 0.0, 0.0, 0.0])
+    docs.add(
+        StructuralNode("section:s", "section", "s", SCOPE, SourceAnchor("d.md", 1, 1)),
+        [1.0, 0.0, 0.0, 0.0],
+    )
+    query = [1.0, 0.0, 0.0, 0.0]
+    assert [r.node.node_id for r in code.search(query, k=5, scope=SCOPE)] == ["function:f"]
+    assert [r.node.node_id for r in docs.search(query, k=5, scope=SCOPE)] == ["section:s"]

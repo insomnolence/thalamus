@@ -49,6 +49,43 @@ def _arrows(direction: Direction) -> tuple[str, str]:
     return "-", "-"  # both (undirected)
 
 
+def _node_props(node: StructuralNode) -> dict[str, Any]:
+    """Flatten a node to SNode properties (one schema, shared by graph + index)."""
+    anchor = node.anchor
+    return {
+        "node_id": node.node_id,
+        "tenant_id": str(node.scope.tenant_id),
+        "repo_id": str(node.scope.repo_id),
+        "kind": node.kind,
+        "label": node.label,
+        "anchor_path": None if anchor is None else anchor.path,
+        "anchor_line_start": None if anchor is None else anchor.line_start,
+        "anchor_line_end": None if anchor is None else anchor.line_end,
+        "metadata_json": json.dumps(dict(node.metadata)),
+    }
+
+
+def _to_node(props: Mapping[str, Any]) -> StructuralNode:
+    """Reconstruct a :class:`StructuralNode` from SNode properties."""
+    anchor: SourceAnchor | None = None
+    if props.get("anchor_path") is not None:
+        anchor = SourceAnchor(
+            path=str(props["anchor_path"]),
+            line_start=int(props["anchor_line_start"]),
+            line_end=int(props["anchor_line_end"]),
+        )
+    return StructuralNode(
+        node_id=str(props["node_id"]),
+        kind=str(props["kind"]),
+        label=str(props["label"]),
+        scope=Scope(
+            tenant_id=TenantId(str(props["tenant_id"])), repo_id=RepoId(str(props["repo_id"]))
+        ),
+        anchor=anchor,
+        metadata=json.loads(str(props.get("metadata_json", "{}"))),
+    )
+
+
 class Neo4jStructuralGraph:
     """``StructuralGraph`` over Neo4j: persisted nodes/edges + Cypher k-hop traversal.
 
@@ -62,7 +99,7 @@ class Neo4jStructuralGraph:
         self._database = database
 
     def add(self, result: IngestResult) -> None:
-        nodes = [self._node_props(node) for node in result.nodes]
+        nodes = [_node_props(node) for node in result.nodes]
         if nodes:
             _run(
                 self._driver,
@@ -112,7 +149,7 @@ class Neo4jStructuralGraph:
             tenant_id=str(ref.scope.tenant_id),
             repo_id=str(ref.scope.repo_id),
         )
-        return None if not rows else self._to_node(dict(rows[0]["m"]))
+        return None if not rows else _to_node(dict(rows[0]["m"]))
 
     def neighbors(
         self,
@@ -138,7 +175,7 @@ class Neo4jStructuralGraph:
             repo_id=str(ref.scope.repo_id),
             types=list(edge_types) if edge_types is not None else None,
         )
-        return [self._to_node(dict(row["m"])) for row in rows]
+        return [_to_node(dict(row["m"])) for row in rows]
 
     def k_hop(
         self,
@@ -170,45 +207,10 @@ class Neo4jStructuralGraph:
             repo_id=str(ref.scope.repo_id),
             types=list(edge_types) if edge_types is not None else None,
         )
-        return [self._to_node(dict(row["m"])) for row in rows]
+        return [_to_node(dict(row["m"])) for row in rows]
 
     def close(self) -> None:
         self._driver.close()
-
-    @staticmethod
-    def _node_props(node: StructuralNode) -> dict[str, Any]:
-        anchor = node.anchor
-        return {
-            "node_id": node.node_id,
-            "tenant_id": str(node.scope.tenant_id),
-            "repo_id": str(node.scope.repo_id),
-            "kind": node.kind,
-            "label": node.label,
-            "anchor_path": None if anchor is None else anchor.path,
-            "anchor_line_start": None if anchor is None else anchor.line_start,
-            "anchor_line_end": None if anchor is None else anchor.line_end,
-            "metadata_json": json.dumps(dict(node.metadata)),
-        }
-
-    @staticmethod
-    def _to_node(props: Mapping[str, Any]) -> StructuralNode:
-        anchor: SourceAnchor | None = None
-        if props.get("anchor_path") is not None:
-            anchor = SourceAnchor(
-                path=str(props["anchor_path"]),
-                line_start=int(props["anchor_line_start"]),
-                line_end=int(props["anchor_line_end"]),
-            )
-        return StructuralNode(
-            node_id=str(props["node_id"]),
-            kind=str(props["kind"]),
-            label=str(props["label"]),
-            scope=Scope(
-                tenant_id=TenantId(str(props["tenant_id"])), repo_id=RepoId(str(props["repo_id"]))
-            ),
-            anchor=anchor,
-            metadata=json.loads(str(props.get("metadata_json", "{}"))),
-        )
 
 
 class Neo4jCrossLinkIndex:

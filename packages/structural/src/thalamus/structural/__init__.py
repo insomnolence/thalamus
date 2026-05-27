@@ -27,6 +27,7 @@ from thalamus.structural.ingestor import Ingestor
 from thalamus.structural.jedi_calls import JediCallIngestor
 from thalamus.structural.linking import footprint_staleness, link_by_footprint, module_index
 from thalamus.structural.neo4j_graph import Neo4jCrossLinkIndex, Neo4jStructuralGraph
+from thalamus.structural.neo4j_index import Neo4jStructuralIndex
 from thalamus.structural.python_ast import PythonAstIngestor
 from thalamus.structural.schema import (
     IngestResult,
@@ -50,6 +51,7 @@ __all__ = [
     "JediCallIngestor",
     "Neo4jCrossLinkIndex",
     "Neo4jStructuralGraph",
+    "Neo4jStructuralIndex",
     "PythonAstIngestor",
     "ScoredNode",
     "ShownMemory",
