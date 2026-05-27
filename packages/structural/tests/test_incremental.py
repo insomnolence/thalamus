@@ -21,6 +21,7 @@ from thalamus.structural import (
     InMemoryStructuralIndex,
     PythonAstIngestor,
     incremental_ingest,
+    python_files,
 )
 
 SCOPE = Scope(TenantId("t"), RepoId("r"))
@@ -42,6 +43,43 @@ class _CountingEncoder:
         return self._inner.encode(texts)
 
 
+class _CountingIngestor:
+    """Counts how many times it actually parses — to prove a no-change build never parses."""
+
+    def __init__(self) -> None:
+        self._inner = PythonAstIngestor()
+        self.parses = 0
+
+    def ingest_path(self, root: Path, scope: object) -> object:
+        self.parses += 1
+        return self._inner.ingest_path(root, scope)  # type: ignore[arg-type]
+
+
+def test_no_change_build_skips_parsing_entirely(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write(repo, "a.py", "def a():\n    return 1\n")
+    graph = InMemoryStructuralGraph(SCOPE)
+    index = InMemoryStructuralIndex(dim=32)
+    manifest = InMemoryFileManifest()
+    ingestor = _CountingIngestor()
+    enc = _CountingEncoder()
+
+    def build() -> object:
+        return incremental_ingest(
+            repo, SCOPE,
+            corpora=[CorpusSpec(ingestor, index, python_files, "code")],  # type: ignore[arg-type]
+            graph=graph, manifest=manifest, encoder=enc,
+        )
+
+    first = build()
+    assert first.rebuilt is True and ingestor.parses == 1  # cold build parses (+ jedi at scale)
+
+    second = build()  # nothing changed
+    assert second.rebuilt is False  # skipped the whole re-derive
+    assert ingestor.parses == 1  # NOT re-parsed — the O(repo) work (incl jedi) is avoided
+    assert enc.encoded == first.stats.embedded  # and nothing re-embedded
+
+
 def _write(repo: Path, rel: str, src: str) -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,10 +90,10 @@ def _fresh() -> tuple[InMemoryStructuralGraph, InMemoryStructuralIndex, InMemory
     return InMemoryStructuralGraph(SCOPE), InMemoryStructuralIndex(dim=32), InMemoryFileManifest()
 
 
-def _build(repo: Path, graph, index, manifest, encoder) -> None:
-    incremental_ingest(
+def _build(repo: Path, graph, index, manifest, encoder) -> object:
+    return incremental_ingest(
         repo, SCOPE,
-        corpora=[CorpusSpec(PythonAstIngestor(), index, "code")],
+        corpora=[CorpusSpec(PythonAstIngestor(), index, python_files, "code")],
         graph=graph, manifest=manifest, encoder=encoder,
     )
 

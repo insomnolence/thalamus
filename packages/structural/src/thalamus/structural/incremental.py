@@ -17,7 +17,7 @@ test asserts, and what a forced ``--rebuild`` does (drop the manifest, rebuild f
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,10 +32,13 @@ from thalamus.structural.schema import IngestResult, StructuralEdge, StructuralN
 
 @dataclass(frozen=True, slots=True)
 class CorpusSpec:
-    """One Brain-2 corpus: its ingestor + the (separate, no-pollution) index it embeds into."""
+    """One Brain-2 corpus: its ingestor, the (separate, no-pollution) index it embeds into,
+    and a ``files`` enumerator (e.g. ``python_files``) used to detect changes *without* parsing —
+    so a no-change rebuild never runs the ingestor (and its ~9s jedi pass)."""
 
     ingestor: Ingestor
     index: StructuralIndex
+    files: Callable[[Path], list[Path]]
     corpus: str = "code"
 
 
@@ -59,7 +62,8 @@ class IncrementalResult:
     embedding is incremental."""
 
     stats: IngestStats
-    results: dict[str, IngestResult]
+    results: dict[str, IngestResult]  # per corpus; empty when nothing changed (rebuilt=False)
+    rebuilt: bool  # False when a no-change build skipped parse/jedi/embed entirely
 
 
 def _sha256(path: Path) -> str:
@@ -78,12 +82,30 @@ def incremental_ingest(
     """Re-derive Brain 2 into ``graph`` + the corpora's indexes, re-embedding only changed files.
 
     With a persistent graph/index/manifest (Neo4j, or held across calls) a no-change rebuild
-    does zero embedding work; with fresh ones it is a full build (the re-derive oracle)."""
-    # 1. Parse every corpus (whole-repo). Route each node to its corpus index; group anchored
-    #    nodes by source file (the unit of change detection).
+    returns early without parsing — O(hash files), independent of repo size; with fresh ones it
+    is a full build (the re-derive oracle)."""
+    # 1. Cheap: enumerate + hash corpus files (NO parse, NO jedi) and diff against the last build.
+    current_sha: dict[str, str] = {}
+    for spec in corpora:
+        for path in spec.files(repo):
+            current_sha[str(path)] = _sha256(path)
+    previous = manifest.load(scope)
+    changed = {
+        path for path, sha in current_sha.items()
+        if previous.get(path) is None or previous[path].sha256 != sha
+    }
+    vanished = {path for path in previous if path not in current_sha}
+
+    # 2. No change -> the persisted graph + indexes are already current. Skip parse/jedi/embed/write
+    #    entirely (the scale win: a warm restart does no O(repo) work).
+    if not changed and not vanished:
+        return IncrementalResult(
+            stats=IngestStats(len(current_sha), 0, 0, 0, 0), results={}, rebuilt=False
+        )
+
+    # 3. Something changed -> parse every corpus (the ~9s jedi pass runs HERE, only when needed).
     all_nodes: list[StructuralNode] = []
     all_edges: list[StructuralEdge] = []
-    index_of: dict[str, StructuralIndex] = {}
     path_node_ids: dict[str, list[str]] = {}
     results: dict[str, IngestResult] = {}
     for spec in corpora:
@@ -92,20 +114,10 @@ def incremental_ingest(
         all_edges.extend(result.edges)
         for node in result.nodes:
             all_nodes.append(node)
-            index_of[node.node_id] = spec.index
             if node.anchor is not None:
                 path_node_ids.setdefault(node.anchor.path, []).append(node.node_id)
 
-    # 2. Hash current files; diff against the last build.
-    current_sha = {path: _sha256(Path(path)) for path in path_node_ids}
-    previous = manifest.load(scope)
-    changed = {
-        path for path, sha in current_sha.items()
-        if previous.get(path) is None or previous[path].sha256 != sha
-    }
-    vanished = {path for path in previous if path not in current_sha}
-
-    # 3. Drop the nodes of changed + vanished files (old nodes/edges, and Neo4j embeddings).
+    # 4. Drop the nodes of changed + vanished files (old nodes/edges, and Neo4j embeddings).
     removed_ids = [
         node_id
         for path in (changed | vanished)
@@ -117,24 +129,28 @@ def incremental_ingest(
     for spec in corpora:
         spec.index.remove(removed_refs)
 
-    # 4. Re-MERGE all current nodes + edges (idempotent; preserves unchanged embeddings, and
-    #    re-creates any cross-file edge dropped in step 3).
+    # 5. Re-MERGE all current nodes + edges (idempotent; preserves unchanged embeddings, and
+    #    re-creates any cross-file edge dropped in step 4).
     graph.add(IngestResult(nodes=all_nodes, edges=all_edges))
 
-    # 5. Re-embed ONLY changed/new files' nodes (the dominant cost, skipped for unchanged).
-    to_embed = [
-        node for node in all_nodes if node.anchor is not None and node.anchor.path in changed
-    ]
-    if to_embed:
-        embeddings = encoder.encode([node_text(node) for node in to_embed])
-        for node, embedding in zip(to_embed, embeddings, strict=True):
-            index_of[node.node_id].add(node, embedding)
+    # 6. Re-embed ONLY changed/new files' nodes (the dominant cost, skipped for unchanged),
+    #    batched per corpus index (one write, not one round-trip per node).
+    embedded = 0
+    for spec in corpora:
+        nodes = [
+            node for node in results[spec.corpus].nodes
+            if node.anchor is not None and node.anchor.path in changed
+        ]
+        if nodes:
+            embeddings = encoder.encode([node_text(node) for node in nodes])
+            spec.index.add_many(list(zip(nodes, embeddings, strict=True)))
+            embedded += len(nodes)
 
-    # 6. Persist the current manifest (every file -> sha + node ids) for the next diff.
+    # 7. Persist the manifest keyed by the authoritative file set (every file -> sha + node ids).
     manifest.save(
         scope,
         {
-            path: ManifestEntry(current_sha[path], tuple(path_node_ids[path]))
+            path: ManifestEntry(current_sha[path], tuple(path_node_ids.get(path, ())))
             for path in current_sha
         },
     )
@@ -143,7 +159,7 @@ def incremental_ingest(
         files=len(current_sha),
         changed=len(changed),
         vanished=len(vanished),
-        embedded=len(to_embed),
+        embedded=embedded,
         removed=len(removed_ids),
     )
-    return IncrementalResult(stats=stats, results=results)
+    return IncrementalResult(stats=stats, results=results, rebuilt=True)

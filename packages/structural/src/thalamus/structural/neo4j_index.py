@@ -90,19 +90,30 @@ class Neo4jStructuralIndex:
         return vec
 
     def add(self, node: StructuralNode, embedding: Vector) -> None:
-        vec = self._checked_vector(embedding, "Neo4jStructuralIndex.add")
-        # MERGE the SNode (the graph may already have written it) and set its embedding + corpus.
+        self.add_many([(node, embedding)])
+
+    def add_many(self, items: Iterable[tuple[StructuralNode, Vector]]) -> None:
+        # One UNWIND for all nodes — O(1) round-trips, not O(nodes) (the cold-build cost fix).
+        rows = [
+            {
+                **_node_props(node),
+                "embedding": self._checked_vector(embedding, "Neo4jStructuralIndex.add_many"),
+                "corpus": self._corpus,
+            }
+            for node, embedding in items
+        ]
+        if not rows:
+            return
+        # MERGE each SNode (the graph may already have written it) and set its embedding + corpus.
         _run(
             self._driver,
             self._database,
-            f"MERGE (m:{_NODE} "
-            "{tenant_id: $tenant_id, repo_id: $repo_id, node_id: $node_id}) "
-            "SET m.kind = $kind, m.label = $label, m.anchor_path = $anchor_path, "
-            "m.anchor_line_start = $anchor_line_start, m.anchor_line_end = $anchor_line_end, "
-            "m.metadata_json = $metadata_json, m.embedding = $embedding, m.corpus = $corpus",
-            embedding=vec,
-            corpus=self._corpus,
-            **_node_props(node),
+            f"UNWIND $rows AS r MERGE (m:{_NODE} "
+            "{tenant_id: r.tenant_id, repo_id: r.repo_id, node_id: r.node_id}) "
+            "SET m.kind = r.kind, m.label = r.label, m.anchor_path = r.anchor_path, "
+            "m.anchor_line_start = r.anchor_line_start, m.anchor_line_end = r.anchor_line_end, "
+            "m.metadata_json = r.metadata_json, m.embedding = r.embedding, m.corpus = r.corpus",
+            rows=rows,
         )
 
     def remove(self, refs: Iterable[StructuralRef]) -> None:

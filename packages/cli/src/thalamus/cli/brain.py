@@ -49,6 +49,8 @@ from thalamus.structural import (
     footprint_staleness,
     incremental_ingest,
     link_by_footprint,
+    markdown_files,
+    python_files,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,21 +109,23 @@ def build_two_hemisphere_gateway(
     graph = graph if graph is not None else InMemoryStructuralGraph(scope)
     manifest = manifest if manifest is not None else InMemoryFileManifest()
     code_index = code_index if code_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
-    corpora_indexes: list[tuple[str, Ingestor, StructuralIndex]] = [
-        ("code", code_ingestor, code_index)
-    ]
+    corpora = [CorpusSpec(code_ingestor, code_index, python_files, "code")]
     if resolve_docs:
         doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
-        corpora_indexes.append(("docs", DocIngestor(), doc_index))
+        corpora.append(CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs"))
 
     if rebuild:  # force the full re-derive: clear persisted graph + manifest so all files are "new"
         graph.replace(IngestResult(nodes=[], edges=[]))
         manifest.save(scope, {})
 
     ingest = incremental_ingest(
-        repo, scope,
-        corpora=[CorpusSpec(ing, index, name) for name, ing, index in corpora_indexes],
-        graph=graph, manifest=manifest, encoder=encoder,
+        repo, scope, corpora=corpora, graph=graph, manifest=manifest, encoder=encoder
+    )
+    # Code module nodes to link episode footprints against: the fresh parse if Brain 2 was
+    # rebuilt, else the persisted graph (a no-change build skips parsing, but episodes may be new).
+    code_modules = (
+        ingest.results["code"].nodes if ingest.rebuilt
+        else graph.nodes_of_kind(scope, "module")
     )
 
     links = links if links is not None else InMemoryCrossLinkIndex()
@@ -129,7 +133,7 @@ def build_two_hemisphere_gateway(
         (episode.ref, tuple(episode.metadata.get("footprint", ()))) for episode in episodes
     ]
     # Footprints link to code modules only (episodes touch source files).
-    link_by_footprint(footprints, ingest.results["code"].nodes, links, repo_root=repo)
+    link_by_footprint(footprints, code_modules, links, repo_root=repo)
 
     # §13.18-D2: flag curated memories whose footprint files are gone from disk (stale beliefs
     # about code that no longer exists). Episodes are immutable history, so only curated memories
@@ -146,7 +150,7 @@ def build_two_hemisphere_gateway(
     # Direct structural retrieval, per corpus: a cue can hit code or docs directly (not only via
     # cross-links), each from its own (now incrementally-maintained) index so they don't pollute.
     structural_retrievers = [
-        StructuralRetriever(encoder, index, corpus=name) for name, _, index in corpora_indexes
+        StructuralRetriever(encoder, spec.index, corpus=spec.corpus) for spec in corpora
     ]
 
     base = L0Retriever(encoder, store)

@@ -67,6 +67,10 @@ class StructuralIndex(Protocol):
         """Index a structural node by its embedding."""
         ...
 
+    def add_many(self, items: Iterable[tuple[StructuralNode, Vector]]) -> None:
+        """Index many nodes at once (one batched write for persistent indexes)."""
+        ...
+
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredNode]:
         """Return the ``k`` nearest nodes within ``scope`` by vector similarity."""
         ...
@@ -102,6 +106,10 @@ class InMemoryStructuralIndex:
         vec = self._as_checked_vector(embedding, "InMemoryStructuralIndex.add")
         self._nodes[node.ref] = node
         self._embeddings[node.ref] = vec
+
+    def add_many(self, items: Iterable[tuple[StructuralNode, Vector]]) -> None:
+        for node, embedding in items:
+            self.add(node, embedding)
 
     def remove(self, refs: Iterable[StructuralRef]) -> None:
         for ref in refs:

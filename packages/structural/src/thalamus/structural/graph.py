@@ -29,6 +29,7 @@ class StructuralGraph(Protocol):
     def add(self, result: IngestResult) -> None: ...
     def replace(self, result: IngestResult) -> None: ...
     def remove(self, refs: Iterable[StructuralRef]) -> None: ...
+    def nodes_of_kind(self, scope: Scope, kind: str) -> list[StructuralNode]: ...
     def get(self, ref: StructuralRef) -> StructuralNode | None: ...
     def neighbors(
         self,
@@ -91,6 +92,11 @@ class InMemoryStructuralGraph:
                     edge for edge in edges
                     if edge.source_id not in ids and edge.target_id not in ids
                 ]
+
+    def nodes_of_kind(self, scope: Scope, kind: str) -> list[StructuralNode]:
+        if scope != self._scope:
+            return []
+        return [node for node in self._nodes.values() if node.kind == kind]
 
     def get(self, ref: StructuralRef) -> StructuralNode | None:
         return self._nodes.get(ref.node_id) if ref.scope == self._scope else None

@@ -150,6 +150,19 @@ class Neo4jStructuralGraph:
             ids=ids,
         )
 
+    def nodes_of_kind(self, scope: Scope, kind: str) -> list[StructuralNode]:
+        if scope != self._scope:
+            return []
+        rows = _run(
+            self._driver,
+            self._database,
+            f"MATCH (m:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id, kind: $kind}}) RETURN m",
+            tenant_id=str(scope.tenant_id),
+            repo_id=str(scope.repo_id),
+            kind=kind,
+        )
+        return [_to_node(dict(row["m"])) for row in rows]
+
     def get(self, ref: StructuralRef) -> StructuralNode | None:
         if ref.scope != self._scope:
             return None
