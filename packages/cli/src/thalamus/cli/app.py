@@ -11,6 +11,14 @@ import argparse
 from collections.abc import Sequence
 
 from thalamus.cli.attribute import add_attribute_arguments, attribute_config, run_attribute
+from thalamus.cli.backup import (
+    add_backup_arguments,
+    add_restore_arguments,
+    backup_config,
+    restore_config,
+    run_backup,
+    run_restore,
+)
 from thalamus.cli.dogfood import add_sync_arguments, run_sync, sync_config
 from thalamus.cli.remember import add_remember_arguments, remember_config, run_remember
 from thalamus.cli.serve import add_serve_arguments, run_serve, serve_config
@@ -35,6 +43,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     add_attribute_arguments(
         sub.add_parser("attribute", help="compute the deterministic footprint usage signal")
     )
+    add_backup_arguments(sub.add_parser("backup", help="export durable Brain 1 to a snapshot"))
+    add_restore_arguments(sub.add_parser("restore", help="restore durable Brain 1 from a snapshot"))
 
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "sync":
@@ -49,4 +59,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_verdict(verdict_config(args))
     elif args.command == "attribute":
         run_attribute(attribute_config(args))
+    elif args.command == "backup":
+        run_backup(backup_config(args))
+    elif args.command == "restore":
+        run_restore(restore_config(args))
     return 0
