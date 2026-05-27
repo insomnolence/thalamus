@@ -50,6 +50,18 @@ class IngestStats:
     removed: int  # nodes dropped
 
 
+@dataclass(frozen=True, slots=True)
+class IncrementalResult:
+    """The outcome of an incremental build: what it did + the per-corpus parse results.
+
+    ``results`` (corpus -> the full :class:`IngestResult`) lets the caller reuse the parse for
+    footprint linking + staleness without re-parsing — the parse is whole-repo either way; only
+    embedding is incremental."""
+
+    stats: IngestStats
+    results: dict[str, IngestResult]
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -62,7 +74,7 @@ def incremental_ingest(
     graph: StructuralGraph,
     manifest: FileManifest,
     encoder: Encoder,
-) -> IngestStats:
+) -> IncrementalResult:
     """Re-derive Brain 2 into ``graph`` + the corpora's indexes, re-embedding only changed files.
 
     With a persistent graph/index/manifest (Neo4j, or held across calls) a no-change rebuild
@@ -73,8 +85,10 @@ def incremental_ingest(
     all_edges: list[StructuralEdge] = []
     index_of: dict[str, StructuralIndex] = {}
     path_node_ids: dict[str, list[str]] = {}
+    results: dict[str, IngestResult] = {}
     for spec in corpora:
         result = spec.ingestor.ingest_path(repo, scope)
+        results[spec.corpus] = result
         all_edges.extend(result.edges)
         for node in result.nodes:
             all_nodes.append(node)
@@ -125,10 +139,11 @@ def incremental_ingest(
         },
     )
 
-    return IngestStats(
+    stats = IngestStats(
         files=len(current_sha),
         changed=len(changed),
         vanished=len(vanished),
         embedded=len(to_embed),
         removed=len(removed_ids),
     )
+    return IncrementalResult(stats=stats, results=results)

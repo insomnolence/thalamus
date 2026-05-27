@@ -30,21 +30,25 @@ from thalamus.retrieval import L0Retriever
 from thalamus.store import InMemoryStore, Neo4jStore, connect
 from thalamus.structural import (
     CompositeIngestor,
+    CorpusSpec,
     CrossLinkIndex,
     DocIngestor,
+    FileManifest,
     Ingestor,
     IngestResult,
     InMemoryCrossLinkIndex,
+    InMemoryFileManifest,
     InMemoryStructuralGraph,
     InMemoryStructuralIndex,
     JediCallIngestor,
     PythonAstIngestor,
     StructuralGraph,
+    StructuralIndex,
     StructuralNode,
     StructuralRetriever,
     footprint_staleness,
+    incremental_ingest,
     link_by_footprint,
-    node_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,18 +68,6 @@ def _default_ingestor(resolve_calls: bool) -> Ingestor:
     return CompositeIngestor([ast_pass, JediCallIngestor()])
 
 
-def _corpus_index(encoder: Encoder, nodes: Sequence[StructuralNode]) -> InMemoryStructuralIndex:
-    """Embed one corpus's nodes into its own structural index (a separate vector space, so
-    code and docs retrieval never pollute each other's top-k)."""
-    index = InMemoryStructuralIndex(dim=encoder.dim)
-    node_list = list(nodes)
-    if node_list:
-        embeddings = encoder.encode([node_text(node) for node in node_list])
-        for node, embedding in zip(node_list, embeddings, strict=True):
-            index.add(node, embedding)
-    return index
-
-
 def build_two_hemisphere_gateway(
     repo: Path,
     *,
@@ -86,6 +78,10 @@ def build_two_hemisphere_gateway(
     ingestor: Ingestor | None = None,
     graph: StructuralGraph | None = None,
     links: CrossLinkIndex | None = None,
+    code_index: StructuralIndex | None = None,
+    doc_index: StructuralIndex | None = None,
+    manifest: FileManifest | None = None,
+    rebuild: bool = False,
     k: int = 5,
     k_hop: int = 1,
     resolve_calls: bool = True,
@@ -98,24 +94,34 @@ def build_two_hemisphere_gateway(
 ) -> Gateway:
     """Re-derive Brain 2 + cross-links from ``repo`` and return a two-hemisphere gateway.
 
-    ``store`` holds Brain 1 (episodes); ``episodes`` are the records whose footprints to
-    link. ``graph``/``links`` default to in-memory (re-derived per call); pass
-    Neo4j-backed implementations to persist Brain 2 + native cross-edges in the shared
-    substrate. Returns a :class:`Gateway` whose recall fuses experiential memories with
-    the structural nodes they touched (plus their ``k_hop`` neighbours)."""
+    ``store`` holds Brain 1 (episodes); ``episodes`` are the records whose footprints to link.
+    ``graph``/``code_index``/``doc_index``/``manifest`` default to in-memory (a full build each
+    call); pass Neo4j-backed implementations to persist Brain 2 and rebuild **incrementally** —
+    only files whose content hash changed are re-embedded (the dominant start cost at scale).
+    ``rebuild=True`` forces the full re-derive oracle (drop the persisted graph + manifest).
+    Returns a :class:`Gateway` whose recall fuses experiential memories with the structural
+    nodes they touched (plus their ``k_hop`` neighbours)."""
     # Two re-derivable Brain-2 corpora: code (AST + jedi calls) and docs (Markdown). They share
     # the one graph substrate (typed nodes) but get SEPARATE vector indexes (no-pollution).
     code_ingestor = ingestor if ingestor is not None else _default_ingestor(resolve_calls)
-    code_result = code_ingestor.ingest_path(repo, scope)
-    doc_result = (
-        DocIngestor().ingest_path(repo, scope) if resolve_docs else IngestResult(nodes=[], edges=[])
-    )
     graph = graph if graph is not None else InMemoryStructuralGraph(scope)
-    graph.replace(
-        IngestResult(
-            nodes=[*code_result.nodes, *doc_result.nodes],
-            edges=[*code_result.edges, *doc_result.edges],
-        )
+    manifest = manifest if manifest is not None else InMemoryFileManifest()
+    code_index = code_index if code_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
+    corpora_indexes: list[tuple[str, Ingestor, StructuralIndex]] = [
+        ("code", code_ingestor, code_index)
+    ]
+    if resolve_docs:
+        doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
+        corpora_indexes.append(("docs", DocIngestor(), doc_index))
+
+    if rebuild:  # force the full re-derive: clear persisted graph + manifest so all files are "new"
+        graph.replace(IngestResult(nodes=[], edges=[]))
+        manifest.save(scope, {})
+
+    ingest = incremental_ingest(
+        repo, scope,
+        corpora=[CorpusSpec(ing, index, name) for name, ing, index in corpora_indexes],
+        graph=graph, manifest=manifest, encoder=encoder,
     )
 
     links = links if links is not None else InMemoryCrossLinkIndex()
@@ -123,7 +129,7 @@ def build_two_hemisphere_gateway(
         (episode.ref, tuple(episode.metadata.get("footprint", ()))) for episode in episodes
     ]
     # Footprints link to code modules only (episodes touch source files).
-    link_by_footprint(footprints, code_result.nodes, links, repo_root=repo)
+    link_by_footprint(footprints, ingest.results["code"].nodes, links, repo_root=repo)
 
     # §13.18-D2: flag curated memories whose footprint files are gone from disk (stale beliefs
     # about code that no longer exists). Episodes are immutable history, so only curated memories
@@ -138,15 +144,10 @@ def build_two_hemisphere_gateway(
     )
 
     # Direct structural retrieval, per corpus: a cue can hit code or docs directly (not only via
-    # cross-links), each from its own index so they don't pollute each other. A derived view over
-    # the re-derived graph (§14.1) — rebuilt each start, cheap at repo scale.
+    # cross-links), each from its own (now incrementally-maintained) index so they don't pollute.
     structural_retrievers = [
-        StructuralRetriever(encoder, _corpus_index(encoder, code_result.nodes), corpus="code")
+        StructuralRetriever(encoder, index, corpus=name) for name, _, index in corpora_indexes
     ]
-    if resolve_docs:
-        structural_retrievers.append(
-            StructuralRetriever(encoder, _corpus_index(encoder, doc_result.nodes), corpus="docs")
-        )
 
     base = L0Retriever(encoder, store)
     retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)

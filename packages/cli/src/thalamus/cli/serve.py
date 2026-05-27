@@ -24,7 +24,7 @@ from pathlib import Path
 from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_store
 from thalamus.cli.remember import RememberConfig, run_remember
 from thalamus.core.protocols import Encoder, Store
-from thalamus.core.types import MemoryRecord, RepoId, Scope, SessionId, TenantId
+from thalamus.core.types import Hemisphere, MemoryRecord, RepoId, Scope, SessionId, TenantId
 from thalamus.gateway import Gateway
 from thalamus.gateway.server import RememberWriter
 from thalamus.instrumentation import (
@@ -36,6 +36,17 @@ from thalamus.instrumentation import (
     mint_session_id,
 )
 from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.store import Neo4jStore, connect
+from thalamus.structural import (
+    CrossLinkIndex,
+    FileManifest,
+    Neo4jCrossLinkIndex,
+    Neo4jFileManifest,
+    Neo4jStructuralGraph,
+    Neo4jStructuralIndex,
+    StructuralGraph,
+    StructuralIndex,
+)
 
 _DEFAULT_DIM = 128
 _DEFAULT_ENCODER = "bge-small"
@@ -59,6 +70,7 @@ class ServeConfig:
     neo4j_password: str | None
     session: bool = True
     session_id: str | None = None
+    rebuild: bool = False
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -108,6 +120,11 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "--session-id", default=None,
         help="explicit session id to use (default: mint a fresh one per serve process)",
     )
+    parser.add_argument(
+        "--rebuild", action="store_true",
+        help="force a full Brain-2 re-derive (drop the persisted graph + manifest) instead of "
+        "an incremental rebuild — the re-derive oracle / recovery path",
+    )
 
 
 def serve_config(args: argparse.Namespace) -> ServeConfig:
@@ -129,6 +146,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
         session=bool(args.session),
         session_id=str(args.session_id) if args.session_id else None,
+        rebuild=bool(args.rebuild),
     )
 
 
@@ -144,15 +162,35 @@ def build_serve_gateway(
         if config.encoder == "bge-small"
         else DeterministicEncoder(dim=config.dim)
     )
-    if store is None:
-        store = build_store(
-            dim=encoder.dim,
-            neo4j_uri=config.neo4j_uri,
-            neo4j_user=config.neo4j_user,
-            neo4j_password=config.neo4j_password,
+    scope = Scope(tenant_id=TenantId(config.tenant), repo_id=RepoId(config.repo_id))
+    # Persist Brain 2 (so restarts rebuild incrementally) when Neo4j is configured: one shared
+    # driver backs the store, the structural graph + per-corpus indexes, the cross-links, and the
+    # file manifest. Injected store (tests) or no Neo4j -> in-memory (a full re-derive each start).
+    graph: StructuralGraph | None = None
+    links: CrossLinkIndex | None = None
+    code_index: StructuralIndex | None = None
+    doc_index: StructuralIndex | None = None
+    manifest: FileManifest | None = None
+    if store is None and config.neo4j_uri is not None:
+        driver = connect(config.neo4j_uri, config.neo4j_user, config.neo4j_password or "")
+        store = Neo4jStore(
+            dim=encoder.dim, driver=driver, hemisphere=Hemisphere.EXPERIENTIAL,
             encoder_id=config.encoder,
         )
-    scope = Scope(tenant_id=TenantId(config.tenant), repo_id=RepoId(config.repo_id))
+        graph = Neo4jStructuralGraph(driver, scope)
+        links = Neo4jCrossLinkIndex(driver, scope)
+        code_index = Neo4jStructuralIndex(
+            driver, scope, dim=encoder.dim, corpus="code", encoder_id=config.encoder
+        )
+        doc_index = Neo4jStructuralIndex(
+            driver, scope, dim=encoder.dim, corpus="docs", encoder_id=config.encoder
+        )
+        manifest = Neo4jFileManifest(driver, scope)
+    elif store is None:
+        store = build_store(
+            dim=encoder.dim, neo4j_uri=None, neo4j_user=config.neo4j_user,
+            neo4j_password=config.neo4j_password, encoder_id=config.encoder,
+        )
     episodes = store.scan(scope)  # cold-load Brain 1 to re-resolve cross-hemisphere links
     logs = config.repo / ".thalamus" / "logs"
     gateway = build_two_hemisphere_gateway(
@@ -161,6 +199,12 @@ def build_serve_gateway(
         encoder=encoder,
         scope=scope,
         episodes=episodes,
+        graph=graph,
+        links=links,
+        code_index=code_index,
+        doc_index=doc_index,
+        manifest=manifest,
+        rebuild=config.rebuild,
         k=config.k,
         k_hop=config.k_hop,
         resolve_calls=config.resolve_calls,

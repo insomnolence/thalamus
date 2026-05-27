@@ -1,15 +1,64 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 from thalamus.cli import build_two_hemisphere_gateway
-from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
+from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId, Vector
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
+from thalamus.structural import (
+    InMemoryFileManifest,
+    InMemoryStructuralGraph,
+    InMemoryStructuralIndex,
+)
 
 SCOPE = Scope(tenant_id=TenantId("t"), repo_id=RepoId("r"))
 NOW = datetime(2026, 5, 25, tzinfo=UTC)
+
+
+class _CountingEncoder:
+    """Counts embedded texts, to prove the gateway rebuild re-embeds only what changed."""
+
+    def __init__(self) -> None:
+        self._inner = DeterministicEncoder(dim=32)
+        self.encoded = 0
+
+    @property
+    def dim(self) -> int:
+        return self._inner.dim
+
+    def encode(self, texts: Sequence[str]) -> list[Vector]:
+        self.encoded += len(texts)
+        return self._inner.encode(texts)
+
+
+def test_persisted_gateway_rebuild_is_incremental_and_rebuild_forces_full(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "store.py").write_text("def write():\n    return 1\n", encoding="utf-8")
+    encoder = _CountingEncoder()
+    store = InMemoryStore(dim=32)
+    # Held (persistent) Brain-2 backing — simulates Neo4j across "restarts".
+    graph = InMemoryStructuralGraph(SCOPE)
+    code_index = InMemoryStructuralIndex(dim=32)
+    doc_index = InMemoryStructuralIndex(dim=32)
+    manifest = InMemoryFileManifest()
+    kwargs = dict(
+        store=store, encoder=encoder, scope=SCOPE, episodes=[], resolve_calls=False,
+        graph=graph, code_index=code_index, doc_index=doc_index, manifest=manifest,
+    )
+
+    build_two_hemisphere_gateway(repo, **kwargs)  # type: ignore[arg-type]
+    first = encoder.encoded
+    assert first > 0  # cold build embeds the nodes
+
+    build_two_hemisphere_gateway(repo, **kwargs)  # type: ignore[arg-type]  # unchanged repo
+    assert encoder.encoded == first  # incremental: nothing re-embedded
+
+    build_two_hemisphere_gateway(repo, rebuild=True, **kwargs)  # type: ignore[arg-type]
+    assert encoder.encoded > first  # --rebuild forces a full re-derive
 
 
 def test_recall_fuses_episode_with_touched_code(tmp_path: Path) -> None:
