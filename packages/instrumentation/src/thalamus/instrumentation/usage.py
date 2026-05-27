@@ -1,11 +1,20 @@
 """Tier-1 usage signals — closing the loop from "we surfaced this" to "was it used".
 
-The deterministic, *primary* Tier-1 signal (OLR §13.8 / §13.10): does the actuator's
-output overlap a surfaced memory's content? Joined to the retrieval-event log by
-``event_id``. This is the training target for outcome-learned retrieval and the
-numerator of `utility@k` in the eval. Citation (actuator self-report) is a secondary,
-cooperation-dependent signal added later. Overlap is a coarse v0 proxy; symbol-level
-overlap and constraint-honored checks refine it.
+:class:`UsageSignal` is the shared Tier-1 unit (joined to the retrieval-event log by
+``event_id``, the numerator of ``utility@k``). It carries a ``kind`` naming the signal's
+source, ordered by the §13.8 taxonomy:
+
+- **primary, deterministic:** structural footprint overlap between a memory's footprint
+  and the work's footprint (``kind="footprint"``/``"footprint-khop"``) — produced by
+  ``thalamus.structural.FootprintAttributor`` (it needs the structural graph, so it lives
+  there; this module only holds the shared unit + sinks).
+- **secondary, cooperation-dependent:** :func:`attribute_overlap` — does the actuator's
+  ``record_usage`` output overlap a surfaced memory's content? This is the §13.8 *citation*
+  tier (``kind="citation"``): an actuator self-report, useful but not the training target.
+
+Lexical output-overlap was the v0 *primary* signal; it under-counted real semantic use
+(genuine use rarely re-quotes a memory verbatim), so the deterministic primary moved to
+structural footprint attribution and this dropped to the citation tier (OLR §13.8/§13.10).
 """
 
 from __future__ import annotations
@@ -39,8 +48,8 @@ class UsageSignal:
 
     event_id: EventId
     memory_id: MemoryId
-    kind: str  # "overlap" (deterministic Tier-1); "citation" / "constraint-honored" later
-    value: float  # overlap ratio in [0, 1]
+    kind: str  # signal source: "footprint"/"footprint-khop" (primary); "citation" (secondary)
+    value: float  # signal strength in [0, 1]
     used: bool
 
 
@@ -51,14 +60,18 @@ def attribute_overlap(
     *,
     threshold: float = 0.5,
 ) -> list[UsageSignal]:
-    """Per shown memory, the fraction of its content tokens that appear in ``output``;
-    ``used`` when that fraction ≥ ``threshold``. Deterministic and content-based."""
+    """The **secondary citation** signal (§13.8): per shown memory, the fraction of its
+    content tokens that appear in the actuator's ``output``; ``used`` when ≥ ``threshold``.
+
+    Emits ``kind="citation"`` — it is the actuator's self-report (cooperation-dependent),
+    not the deterministic primary signal (that is structural footprint attribution). Useful
+    enrichment that degrades to nothing when the actuator never calls ``record_usage``."""
     out_tokens = _tokens(output)
     signals: list[UsageSignal] = []
     for memory_id, content in shown:
         mem_tokens = _tokens(content)
         value = len(mem_tokens & out_tokens) / len(mem_tokens) if mem_tokens else 0.0
-        signals.append(UsageSignal(event_id, memory_id, "overlap", value, value >= threshold))
+        signals.append(UsageSignal(event_id, memory_id, "citation", value, value >= threshold))
     return signals
 
 

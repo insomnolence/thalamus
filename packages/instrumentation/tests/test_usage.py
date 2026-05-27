@@ -26,6 +26,8 @@ def test_attribute_overlap_detects_use() -> None:
     assert signals[MemoryId("m_unused")].used is False
     assert signals[MemoryId("m_unused")].value == 0.0
     assert all(s.event_id == EventId("e1") for s in signals.values())
+    # output-overlap is the secondary citation signal, not the deterministic primary
+    assert all(s.kind == "citation" for s in signals.values())
 
 
 def test_in_memory_sink() -> None:
