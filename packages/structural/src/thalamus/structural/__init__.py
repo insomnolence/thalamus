@@ -6,6 +6,12 @@
 memories to structural nodes (§13.19). See ``deep-dives/structural-hemisphere.md``.
 """
 
+from thalamus.structural.attribution import (
+    AttributedUse,
+    FootprintAttributor,
+    ShownMemory,
+    UsageAttributor,
+)
 from thalamus.structural.composite import CompositeIngestor
 from thalamus.structural.cross_link import CrossLinkIndex, InMemoryCrossLinkIndex
 from thalamus.structural.doc_ingestor import DocIngestor
@@ -19,7 +25,7 @@ from thalamus.structural.index import (
 )
 from thalamus.structural.ingestor import Ingestor
 from thalamus.structural.jedi_calls import JediCallIngestor
-from thalamus.structural.linking import footprint_staleness, link_by_footprint
+from thalamus.structural.linking import footprint_staleness, link_by_footprint, module_index
 from thalamus.structural.neo4j_graph import Neo4jCrossLinkIndex, Neo4jStructuralGraph
 from thalamus.structural.python_ast import PythonAstIngestor
 from thalamus.structural.schema import (
@@ -30,10 +36,12 @@ from thalamus.structural.schema import (
 )
 
 __all__ = [
+    "AttributedUse",
     "CompositeIngestor",
     "CrossLinkIndex",
     "Direction",
     "DocIngestor",
+    "FootprintAttributor",
     "IngestResult",
     "InMemoryCrossLinkIndex",
     "InMemoryStructuralGraph",
@@ -44,13 +52,16 @@ __all__ = [
     "Neo4jStructuralGraph",
     "PythonAstIngestor",
     "ScoredNode",
+    "ShownMemory",
     "SourceAnchor",
     "StructuralEdge",
     "StructuralGraph",
     "StructuralIndex",
     "StructuralNode",
     "StructuralRetriever",
+    "UsageAttributor",
     "footprint_staleness",
     "link_by_footprint",
+    "module_index",
     "node_text",
 ]

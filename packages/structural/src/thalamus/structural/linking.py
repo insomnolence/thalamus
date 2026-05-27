@@ -26,8 +26,12 @@ from thalamus.structural.cross_link import CrossLinkIndex
 from thalamus.structural.schema import StructuralNode
 
 
-def _module_index(nodes: Iterable[StructuralNode], repo_root: Path) -> dict[str, StructuralRef]:
-    """Map each module's repo-relative POSIX path to its stable node id."""
+def module_index(nodes: Iterable[StructuralNode], repo_root: Path) -> dict[str, StructuralRef]:
+    """Map each module's repo-relative POSIX path to its stable node ref.
+
+    Shared by :func:`link_by_footprint` and the footprint usage attributor so that
+    footprint files and work files normalize to node refs identically — one source of
+    truth for the repo-relative POSIX normalization."""
     root = repo_root.resolve()
     index: dict[str, StructuralRef] = {}
     for node in nodes:
@@ -53,7 +57,7 @@ def link_by_footprint(
     ``nodes`` is the ingested graph's nodes (e.g. ``IngestResult.nodes``). Returns the
     number of links created. Deterministic and idempotent: it keys on stable node ids,
     so re-running over the same AST yields the same links (``CrossLinkIndex`` dedups)."""
-    index = _module_index(nodes, repo_root)
+    index = module_index(nodes, repo_root)
     created = 0
     for memory, files in items:
         linked: set[StructuralRef] = set()
