@@ -20,6 +20,7 @@ from thalamus.cli.backup import (
     run_restore,
 )
 from thalamus.cli.dogfood import add_sync_arguments, run_sync, sync_config
+from thalamus.cli.dream import add_dream_arguments, dream_config, run_dream
 from thalamus.cli.probe_eval import add_probe_eval_arguments, probe_eval_config, run_probe_eval
 from thalamus.cli.remember import add_remember_arguments, remember_config, run_remember
 from thalamus.cli.serve import add_serve_arguments, run_serve, serve_config
@@ -49,6 +50,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     add_probe_eval_arguments(sub.add_parser(
         "probe-eval", help="L1 verdict: replay transcript questions against the brain"
     ))
+    add_dream_arguments(
+        sub.add_parser("dream", help="run one dreaming cycle (refresh views + audit beliefs)")
+    )
 
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "sync":
@@ -69,4 +73,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_restore(restore_config(args))
     elif args.command == "probe-eval":
         run_probe_eval(probe_eval_config(args))
+    elif args.command == "dream":
+        run_dream(dream_config(args))
     return 0

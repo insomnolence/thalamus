@@ -26,6 +26,7 @@ from thalamus.dreaming.log import (
     read_dream_log,
     serialize_dream_record,
 )
+from thalamus.dreaming.runtime import DreamTicker
 from thalamus.dreaming.scheduler import Scheduler
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "CycleReport",
     "DreamLog",
     "DreamRecord",
+    "DreamTicker",
     "DreamingPass",
     "InMemoryDreamLog",
     "JsonlDreamLog",

@@ -16,15 +16,17 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_store
+from thalamus.cli.dream import build_dream_scheduler, dream_log_path, make_dream_context_factory
 from thalamus.cli.remember import RememberConfig, run_remember
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
 from thalamus.core.types import Hemisphere, MemoryRecord, RepoId, Scope, SessionId, TenantId
+from thalamus.dreaming import DreamTicker, JsonlDreamLog
 from thalamus.experiential import Neo4jSupersessionIndex
 from thalamus.gateway import Gateway
 from thalamus.gateway.server import RememberWriter
@@ -72,6 +74,8 @@ class ServeConfig:
     session: bool = True
     session_id: str | None = None
     rebuild: bool = False
+    dream_tick: bool = True
+    dream_tick_minutes: float = 30.0
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -126,6 +130,16 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         help="force a full Brain-2 re-derive (drop the persisted graph + manifest) instead of "
         "an incremental rebuild — the re-derive oracle / recovery path",
     )
+    parser.add_argument(
+        "--dream-tick", action=argparse.BooleanOptionalAction, default=True,
+        help="run dreaming on a background thread to keep derived views (superseded frontier, "
+        "footprint staleness) fresh in the long-running serve (--no-dream-tick disables it)",
+    )
+    parser.add_argument(
+        "--dream-tick-minutes", type=float, default=30.0,
+        help="periodic dream-cycle interval in minutes (a remember/supersede also triggers one "
+        "immediately); default 30",
+    )
 
 
 def serve_config(args: argparse.Namespace) -> ServeConfig:
@@ -148,6 +162,8 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         session=bool(args.session),
         session_id=str(args.session_id) if args.session_id else None,
         rebuild=bool(args.rebuild),
+        dream_tick=bool(args.dream_tick),
+        dream_tick_minutes=float(args.dream_tick_minutes),
     )
 
 
@@ -229,12 +245,15 @@ def build_remember_writer(
     store: Store,
     encoder: Encoder,
     supersession: SupersessionIndex | None = None,
+    on_write: Callable[[], None] | None = None,
 ) -> RememberWriter:
     """Return the live MCP writer for explicit durable retained memories.
 
     ``supersession`` (when provided) lets a ``remember`` call mark a prior belief replaced
     (§13.18 D1) — the edge is persisted so the next serve demotes the old belief below
-    current truth."""
+    current truth. ``on_write`` (the dream-tick trigger) is signalled after each write so a
+    live ``remember --supersedes`` refreshes the served views promptly, not only on the next
+    periodic cycle."""
     def write(
         kind: str,
         text: str,
@@ -261,9 +280,12 @@ def build_remember_writer(
             neo4j_user=config.neo4j_user,
             neo4j_password=config.neo4j_password,
         )
-        return run_remember(
+        record = run_remember(
             request, store=store, encoder=encoder, supersession=supersession, announce=False
         )
+        if on_write is not None:
+            on_write()  # write-trigger: dream a refresh soon so the new belief takes effect
+        return record
 
     return write
 
@@ -278,6 +300,7 @@ def run_serve(config: ServeConfig) -> None:
         else DeterministicEncoder(dim=config.dim)
     )
     gateway, store, episodes, supersession = build_serve_gateway(config, encoder=encoder)
+    scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
 
     # Mint + publish a session id so recalls are keyed and out-of-band capture
     # (pytest plugin / git sync) can join to the same session — the measurement loop.
@@ -290,24 +313,48 @@ def run_serve(config: ServeConfig) -> None:
             SessionContext(session_id=default_session_id, started_at=datetime.now(UTC))
         )
 
+    # Dreaming on a background thread keeps the gateway's derived views (superseded frontier +
+    # footprint staleness) fresh as writes accumulate — the long-running-serve refresh the frozen
+    # composition-time dicts otherwise never get. Off the FastMCP event loop by construction.
+    # Only meaningful with a durable supersession index (in-memory shell has nothing to refresh).
+    ticker: DreamTicker | None = None
+    if config.dream_tick and supersession is not None:
+        ticker = DreamTicker(
+            build_dream_scheduler(gateway, dream_log=JsonlDreamLog(dream_log_path(config.repo))),
+            make_dream_context_factory(
+                store=store, supersession=supersession, scope=scope, repo=config.repo
+            ),
+            interval_seconds=max(config.dream_tick_minutes, 0.0) * 60.0,
+        )
+
     try:
         session_note = (
             f"session {default_session_id}" if default_session_id else "session tagging off"
         )
+        dream_note = (
+            f"dream-tick every {config.dream_tick_minutes:g}m" if ticker else "dream-tick off"
+        )
         print(
             f"thalamus: serving [{config.repo_id}] over MCP (stdio) — {len(episodes)} episodes, "
-            f"Brain 2 re-derived from {config.repo}, {session_note}. Ctrl-C to stop.",
+            f"Brain 2 re-derived from {config.repo}, {session_note}, {dream_note}. Ctrl-C to stop.",
             file=sys.stderr,
         )
-        scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
+        if ticker is not None:
+            ticker.start()
         build_server(
             gateway,
             scope,
             name=f"thalamus:{config.repo_id}",
             remember_writer=build_remember_writer(
-                config, store=store, encoder=encoder, supersession=supersession
+                config,
+                store=store,
+                encoder=encoder,
+                supersession=supersession,
+                on_write=ticker.trigger if ticker is not None else None,
             ),
             default_session_id=default_session_id,
         ).run()
     finally:
+        if ticker is not None:
+            ticker.stop()
         close_store(store)
