@@ -398,6 +398,10 @@ def run_serve(config: ServeConfig) -> None:
         resolve_shown=build_shown_resolver(
             store, scope, config.repo / ".thalamus" / "logs" / "retrieval.jsonl"
         ),
+        # HTTP serves many clients from one process: key each recall by its MCP connection
+        # session so concurrent agents don't collapse into the single process session. stdio
+        # (one client) keeps the process session, which the out-of-band Tier-2 join relies on.
+        per_connection_sessions=(config.transport == "http"),
     )
     try:
         session_note = (

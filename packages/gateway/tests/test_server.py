@@ -98,6 +98,28 @@ async def test_caller_session_id_overrides_server_default() -> None:
     assert sink.events[-1].session_id == SessionId("caller-99")
 
 
+async def test_per_connection_sessions_key_by_connection_not_process_default() -> None:
+    from fastmcp import Client
+
+    gateway, sink = _logging_gateway()
+    # HTTP-style: many clients, one process. The recall must be keyed by the caller's MCP
+    # connection session, NOT the single process default (which would collapse all clients).
+    server = build_server(
+        gateway, SCOPE, default_session_id=SessionId("proc-default"), per_connection_sessions=True
+    )
+    async with Client(server) as client:
+        await client.call_tool("recall", {"prompt": "why did we move to sqlite"})
+    keyed = sink.events[-1].session_id
+    assert keyed is not None
+    assert keyed != SessionId("proc-default")  # used the per-connection id, not the process one
+    # an explicit caller id still wins even under per-connection keying
+    async with Client(server) as client:
+        await client.call_tool(
+            "recall", {"prompt": "why did we move to sqlite", "session_id": "caller-7"}
+        )
+    assert sink.events[-1].session_id == SessionId("caller-7")
+
+
 async def test_recall_tool_lists_in_server() -> None:
     from fastmcp import Client
 

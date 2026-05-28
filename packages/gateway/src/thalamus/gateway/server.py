@@ -30,6 +30,32 @@ type RememberWriter = Callable[
 type ShownResolver = Callable[[EventId], Sequence[tuple[MemoryId, str]] | None]
 
 
+def resolve_session_id(
+    explicit: str | None, connection_session: str | None, default: SessionId | None
+) -> SessionId | None:
+    """Pick the session id a recall is keyed by: an explicit caller id wins; else the
+    per-connection MCP session (HTTP, many clients); else the process default (stdio, one client).
+    Pure, so the precedence is unit-testable away from the transport."""
+    if explicit is not None:
+        return SessionId(explicit)
+    if connection_session is not None:
+        return SessionId(connection_session)
+    return default
+
+
+def _connection_session_id(ctx: object) -> str | None:
+    """The MCP per-connection session id, or None if unavailable.
+
+    ``ctx.session_id`` is the real Streamable-HTTP ``Mcp-Session-Id`` over HTTP but a *generated*
+    id over stdio (and may raise), so callers read it only when per-connection keying is enabled
+    (HTTP) — keying stdio by it would break the single-process out-of-band Tier-2 join."""
+    try:
+        sid = ctx.session_id  # type: ignore[attr-defined]
+    except (RuntimeError, AttributeError):
+        return None
+    return str(sid) if sid else None
+
+
 def build_server(
     gateway: Gateway,
     scope: Scope,
@@ -38,6 +64,7 @@ def build_server(
     remember_writer: RememberWriter | None = None,
     default_session_id: SessionId | None = None,
     resolve_shown: ShownResolver | None = None,
+    per_connection_sessions: bool = False,
 ) -> FastMCP:
     """Build a FastMCP server exposing the gateway's ``recall`` tool.
 
@@ -45,7 +72,10 @@ def build_server(
     serve process can key its session without any actuator cooperation; an explicit
     caller-supplied ``session_id`` still wins (finer-grained sessions). ``resolve_shown``
     (when provided) lets ``record_usage`` survive a missing in-memory payload by rebuilding
-    the shown memories from durable state — the long-running-serve durability fix."""
+    the shown memories from durable state — the long-running-serve durability fix.
+    ``per_connection_sessions`` (HTTP, many clients) keys each recall by the caller's MCP
+    connection session instead of the single process id, so concurrent agents don't collapse
+    into one session; leave off for stdio (one client = the process session)."""
     try:
         from fastmcp import FastMCP
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
@@ -64,11 +94,19 @@ def build_server(
         session_id: str | None = None,
     ) -> str:
         """Recall relevant memory for a prompt; returns an assembled context block."""
+        connection_session: str | None = None
+        if per_connection_sessions:
+            from fastmcp.server.dependencies import get_context  # active per-request context
+
+            try:
+                connection_session = _connection_session_id(get_context())
+            except RuntimeError:  # no active context (shouldn't happen inside a tool call)
+                connection_session = None
         payload = gateway.recall(
             prompt=prompt,
             scope=scope,
             focus=focus,
-            session_id=SessionId(session_id) if session_id is not None else default_session_id,
+            session_id=resolve_session_id(session_id, connection_session, default_session_id),
         )
         if payload.event_id is not None:
             pending[payload.event_id] = payload
