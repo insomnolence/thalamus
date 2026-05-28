@@ -23,6 +23,7 @@ from thalamus.core.types import (
     Supersession,
 )
 from thalamus.gateway.payload import CallRelation, ContextPayload, MemoryItem, StructuralItem
+from thalamus.gateway.views import DerivedViews, DerivedViewsRef
 from thalamus.instrumentation import UsageSignal, UsageSink, attribute_overlap
 from thalamus.structural import (
     CrossLinkIndex,
@@ -107,16 +108,28 @@ class SupersededDemotingRetriever:
     decorator so the retrieval-event log records the demoted (true) shown order.
     """
 
-    def __init__(self, inner: Retriever, superseded: Mapping[MemoryRef, Supersession]) -> None:
+    def __init__(
+        self,
+        inner: Retriever,
+        superseded: Mapping[MemoryRef, Supersession] | None = None,
+        *,
+        views: DerivedViewsRef | None = None,
+    ) -> None:
         self._inner = inner
-        self._superseded = superseded
+        # Share the gateway's DerivedViews holder when given (so one refresh reaches both the
+        # demotion here and the annotation in the Gateway); otherwise hold a private snapshot
+        # built from the legacy ``superseded`` map (back-compat for callers that never refresh).
+        self._views = views if views is not None else DerivedViewsRef(
+            DerivedViews(superseded=dict(superseded) if superseded else {})
+        )
 
     def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
         base = self._inner.retrieve(cue, k)
-        if not self._superseded:
+        superseded = self._views.views.superseded  # snapshot once: consistent across this call
+        if not superseded:
             return base
-        current = [c for c in base.candidates if c.record.ref not in self._superseded]
-        replaced = [c for c in base.candidates if c.record.ref in self._superseded]
+        current = [c for c in base.candidates if c.record.ref not in superseded]
+        replaced = [c for c in base.candidates if c.record.ref in superseded]
         if not replaced:
             return base
         candidates = [*current, *replaced]
@@ -143,6 +156,7 @@ class Gateway:
         structural_min_relevance: float = 0.0,
         stale_references: Mapping[MemoryRef, Sequence[str]] | None = None,
         superseded: Mapping[MemoryRef, Supersession] | None = None,
+        views: DerivedViewsRef | None = None,
         max_structural_items: int = 12,
         max_memory_chars: int = 1000,
         usage_sink: UsageSink | None = None,
@@ -157,13 +171,17 @@ class Gateway:
         # hits are ranked across corpora by relevance but grouped into per-corpus payload sections.
         self._structural_retrievers = tuple(structural_retrievers) if structural_retrievers else ()
         self._structural_k_hop = structural_k_hop
-        # memory_ref -> its footprint files that are gone from disk (§13.18-D2). Precomputed at
-        # composition (where the repo root is known) so the gateway stays filesystem-free.
-        self._stale_references = dict(stale_references) if stale_references else {}
-        # memory_ref -> the belief that replaced it (§13.18 R1). Surfaced with its reason on
-        # any superseded memory that still reaches the payload; the un-superseded frontier is
-        # promoted by the SupersededDemotingRetriever upstream. Computed at composition.
-        self._superseded = dict(superseded) if superseded else {}
+        # Refreshable derived views — the ``superseded`` (§13.18 R1) and ``stale_references``
+        # (§13.18-D2) maps, bundled behind one holder so a dreaming refresh swaps them atomically
+        # (see views.py). Share the caller's holder when given (so the upstream demoting retriever
+        # sees the same swap); otherwise build a private snapshot from the legacy kwargs, which is
+        # the back-compat path for callers that compose these once and never refresh.
+        self._views = views if views is not None else DerivedViewsRef(
+            DerivedViews(
+                superseded=dict(superseded) if superseded else {},
+                stale_references=dict(stale_references) if stale_references else {},
+            )
+        )
         # Floor for direct structural hits: don't append weakly-related code to every recall
         # (the bounded/selective constraint). Default is an encoder-agnostic noise floor
         # (strictly positive); a meaningful BGE threshold is deferred to real-usage tuning.
@@ -181,13 +199,16 @@ class Gateway:
         session_id: SessionId | None = None,
     ) -> ContextPayload:
         cue = Cue(text=prompt, scope=scope, focus=focus, session_id=session_id)
+        # Snapshot the derived views once for the whole call — a concurrent refresh swaps the
+        # bundle atomically, so this recall sees a single consistent (old or new) snapshot.
+        views = self._views.views
         result = self._retriever.retrieve(cue, self._k)
         memories = [
             MemoryItem.from_scored(
                 scored,
                 max_content_chars=self._max_memory_chars,
-                stale_references=self._stale_references.get(scored.record.ref, ()),
-                superseded=self._superseded.get(scored.record.ref),
+                stale_references=views.stale_references.get(scored.record.ref, ()),
+                superseded=views.superseded.get(scored.record.ref),
             )
             for scored in result.shown
         ]
@@ -208,6 +229,16 @@ class Gateway:
             calls=self._call_relations([scored for _, scored in direct]),
             event_id=result.event_id,
         )
+
+    def refresh(self, views: DerivedViews) -> None:
+        """Swap in freshly-recomputed derived views (the dreaming refresh seam).
+
+        Atomic and lock-free: a single attribute assignment in the shared holder. Reaches both
+        this gateway's annotation and the upstream demoting retriever's promotion when they share
+        the holder (the composition root wires that). In-flight recalls keep their snapshot;
+        subsequent recalls see the new views.
+        """
+        self._views.refresh(views)
 
     def _direct_hits(self, cue: Cue) -> list[tuple[str, ScoredNode]]:
         """Direct structural hits above the relevance floor, as ``(corpus, hit)`` ranked across

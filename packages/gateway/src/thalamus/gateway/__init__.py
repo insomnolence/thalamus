@@ -12,9 +12,12 @@ from thalamus.gateway.gateway import (
 )
 from thalamus.gateway.payload import ContextPayload, MemoryItem, StructuralItem, SupersededNote
 from thalamus.gateway.server import build_server
+from thalamus.gateway.views import DerivedViews, DerivedViewsRef
 
 __all__ = [
     "ContextPayload",
+    "DerivedViews",
+    "DerivedViewsRef",
     "Gateway",
     "MemoryItem",
     "StructuralItem",

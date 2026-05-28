@@ -25,7 +25,13 @@ from pathlib import Path
 from thalamus.core.protocols import Encoder, Retriever, Store, SupersessionIndex
 from thalamus.core.types import Hemisphere, MemoryRecord, Scope
 from thalamus.experiential import InMemorySupersessionIndex
-from thalamus.gateway import Gateway, StructuralLinkedRetriever, SupersededDemotingRetriever
+from thalamus.gateway import (
+    DerivedViews,
+    DerivedViewsRef,
+    Gateway,
+    StructuralLinkedRetriever,
+    SupersededDemotingRetriever,
+)
 from thalamus.instrumentation import EventSink, LoggingRetriever, UsageSink
 from thalamus.retrieval import L0Retriever
 from thalamus.store import InMemoryStore, Neo4jStore, connect
@@ -161,9 +167,17 @@ def build_two_hemisphere_gateway(
     supersession = supersession if supersession is not None else InMemorySupersessionIndex()
     superseded = supersession.superseded(scope)
 
+    # One shared, swappable snapshot of the refreshable derived views (superseded frontier +
+    # footprint staleness). Both the demoting retriever (promotion) and the Gateway (annotation)
+    # read it, so a single dreaming ``gateway.refresh(...)`` reaches both — the long-running-serve
+    # refresh seam that replaces the PoC's accidental refresh-on-/mcp-reconnect.
+    views_ref = DerivedViewsRef(
+        DerivedViews(superseded=superseded, stale_references=stale_references)
+    )
+
     base = L0Retriever(encoder, store)
     retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)
-    retriever = SupersededDemotingRetriever(retriever, superseded)
+    retriever = SupersededDemotingRetriever(retriever, views=views_ref)
     if event_sink is not None:
         retriever = LoggingRetriever(
             retriever, event_sink, policy_id="L0+structural+supersession"
@@ -176,8 +190,7 @@ def build_two_hemisphere_gateway(
         structural_retrievers=structural_retrievers,
         structural_k_hop=k_hop,
         structural_min_relevance=structural_min_relevance,
-        stale_references=stale_references,
-        superseded=superseded,
+        views=views_ref,
         max_structural_items=max_structural_items,
         max_memory_chars=max_memory_chars,
         usage_sink=usage_sink,
