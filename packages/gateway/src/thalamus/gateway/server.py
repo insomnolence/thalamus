@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
 type RememberWriter = Callable[
-    [str, str, str | None, Sequence[str], float, str | None],
+    [str, str, str | None, Sequence[str], float, str | None, str | None],
     MemoryRecord,
 ]
 
@@ -89,14 +89,22 @@ def build_server(
             files: list[str] | None = None,
             importance: float = 1.0,
             memory_id: str | None = None,
+            supersedes: str | None = None,
         ) -> str:
-            """Retain a durable repo decision, constraint, gotcha, investigation, or preference."""
-            record = remember_writer(kind, text, why, files or (), importance, memory_id)
-            suffix = (
+            """Retain a durable repo decision, constraint, gotcha, investigation, or preference.
+
+            Pass ``supersedes`` with a prior memory's id to mark it replaced (§13.18): the old
+            belief is demoted below current truth at recall but kept, surfaced with this fact's
+            why/text as the supersession reason. Never deletes the old memory."""
+            record = remember_writer(
+                kind, text, why, files or (), importance, memory_id, supersedes
+            )
+            links_note = (
                 " Related-file structural links are applied after the MCP server restarts."
                 if files
                 else ""
             )
-            return f"remembered {record.memory_id} ({record.kind}).{suffix}"
+            supersedes_note = f" Supersedes {supersedes}." if supersedes else ""
+            return f"remembered {record.memory_id} ({record.kind}).{supersedes_note}{links_note}"
 
     return server

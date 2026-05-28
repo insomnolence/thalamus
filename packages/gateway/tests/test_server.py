@@ -110,7 +110,7 @@ async def test_recall_tool_lists_in_server() -> None:
 async def test_remember_tool_is_exposed_only_with_writer_and_calls_it() -> None:
     from fastmcp import Client
 
-    calls: list[tuple[str, str, str | None, Sequence[str], float, str | None]] = []
+    calls: list[tuple[str, str, str | None, Sequence[str], float, str | None, str | None]] = []
 
     def write(
         kind: str,
@@ -119,8 +119,9 @@ async def test_remember_tool_is_exposed_only_with_writer_and_calls_it() -> None:
         files: Sequence[str],
         importance: float,
         memory_id: str | None,
+        supersedes: str | None,
     ) -> MemoryRecord:
-        calls.append((kind, text, why, files, importance, memory_id))
+        calls.append((kind, text, why, files, importance, memory_id, supersedes))
         return MemoryRecord(
             MemoryId("retained:scope"),
             Hemisphere.EXPERIENTIAL,
@@ -144,8 +145,15 @@ async def test_remember_tool_is_exposed_only_with_writer_and_calls_it() -> None:
                 "files": ["pkg/store.py"],
                 "importance": 1.0,
                 "memory_id": "scope",
+                "supersedes": "retained:old",
             },
         )
-    assert calls == [("constraint", "ids stay scoped", "isolation", ["pkg/store.py"], 1.0, "scope")]
+    assert calls == [
+        (
+            "constraint", "ids stay scoped", "isolation", ["pkg/store.py"],
+            1.0, "scope", "retained:old",
+        )
+    ]
     assert "remembered retained:scope" in str(result.data)
+    assert "Supersedes retained:old" in str(result.data)
     assert "after the MCP server restarts" in str(result.data)

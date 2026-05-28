@@ -8,6 +8,7 @@ from thalamus.cli import build_two_hemisphere_gateway
 from thalamus.cli.remember import RememberConfig, build_retained_record, run_remember
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.types import MemoryId, RepoId, Scope, TenantId
+from thalamus.experiential import InMemorySupersessionIndex
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
 
@@ -27,6 +28,7 @@ def _config(repo: Path, **changes: object) -> RememberConfig:
         "files": (Path("pkg/store.py"),),
         "importance": 1.0,
         "memory_id": None,
+        "supersedes": None,
         "neo4j_uri": None,
         "neo4j_user": "neo4j",
         "neo4j_password": None,
@@ -95,3 +97,51 @@ def test_remember_rejects_invalid_mcp_inputs(tmp_path: Path) -> None:
         build_retained_record(_config(tmp_path, kind="conversation"), now=lambda: NOW)
     with pytest.raises(ThalamusError, match="must not be empty"):
         build_retained_record(_config(tmp_path, text="   "), now=lambda: NOW)
+
+
+def test_remember_records_supersession_edge(tmp_path: Path) -> None:
+    encoder = DeterministicEncoder(dim=64)
+    store = InMemoryStore(dim=64)
+    index = InMemorySupersessionIndex()
+    scope = Scope(TenantId("local"), RepoId("repo"))
+
+    old = run_remember(
+        _config(tmp_path, text="we use the lexical usage signal", files=()),
+        store=store, encoder=encoder,
+    )
+    new = run_remember(
+        _config(
+            tmp_path,
+            text="we use the footprint usage signal",
+            why="lexical under-counted real usage",
+            files=(),
+            supersedes=str(old.memory_id),
+        ),
+        store=store, encoder=encoder, supersession=index,
+    )
+
+    superseded = index.superseded(scope)
+    assert set(superseded) == {old.ref}
+    assert superseded[old.ref].superseded_by == new.memory_id
+    assert superseded[old.ref].reason == "lexical under-counted real usage"
+    # The old belief is kept, not deleted.
+    assert store.get(old.ref) is not None
+
+
+def test_supersede_unknown_memory_is_rejected(tmp_path: Path) -> None:
+    store = InMemoryStore(dim=64)
+    with pytest.raises(ThalamusError, match="cannot supersede unknown memory"):
+        run_remember(
+            _config(tmp_path, files=(), supersedes="retained:does-not-exist"),
+            store=store, encoder=DeterministicEncoder(dim=64),
+            supersession=InMemorySupersessionIndex(),
+        )
+
+
+def test_supersede_without_an_index_is_rejected(tmp_path: Path) -> None:
+    store = InMemoryStore(dim=64)
+    with pytest.raises(ThalamusError, match="supersedes requires durable"):
+        run_remember(
+            _config(tmp_path, files=(), supersedes="retained:whatever"),
+            store=store, encoder=DeterministicEncoder(dim=64),
+        )

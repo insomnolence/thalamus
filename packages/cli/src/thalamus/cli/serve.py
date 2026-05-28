@@ -23,7 +23,7 @@ from pathlib import Path
 
 from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_store
 from thalamus.cli.remember import RememberConfig, run_remember
-from thalamus.core.protocols import Encoder, Store
+from thalamus.core.protocols import Encoder, Store, SupersessionIndex
 from thalamus.core.types import Hemisphere, MemoryRecord, RepoId, Scope, SessionId, TenantId
 from thalamus.gateway import Gateway
 from thalamus.gateway.server import RememberWriter
@@ -218,9 +218,17 @@ def build_serve_gateway(
 
 
 def build_remember_writer(
-    config: ServeConfig, *, store: Store, encoder: Encoder
+    config: ServeConfig,
+    *,
+    store: Store,
+    encoder: Encoder,
+    supersession: SupersessionIndex | None = None,
 ) -> RememberWriter:
-    """Return the live MCP writer for explicit durable retained memories."""
+    """Return the live MCP writer for explicit durable retained memories.
+
+    ``supersession`` (when provided) lets a ``remember`` call mark a prior belief replaced
+    (§13.18 D1) — the edge is persisted so the next serve demotes the old belief below
+    current truth."""
     def write(
         kind: str,
         text: str,
@@ -228,6 +236,7 @@ def build_remember_writer(
         files: Sequence[str],
         importance: float,
         memory_id: str | None,
+        supersedes: str | None,
     ) -> MemoryRecord:
         request = RememberConfig(
             repo=config.repo,
@@ -241,11 +250,14 @@ def build_remember_writer(
             files=tuple(Path(item) for item in files),
             importance=importance,
             memory_id=memory_id,
+            supersedes=supersedes,
             neo4j_uri=config.neo4j_uri,
             neo4j_user=config.neo4j_user,
             neo4j_password=config.neo4j_password,
         )
-        return run_remember(request, store=store, encoder=encoder, announce=False)
+        return run_remember(
+            request, store=store, encoder=encoder, supersession=supersession, announce=False
+        )
 
     return write
 

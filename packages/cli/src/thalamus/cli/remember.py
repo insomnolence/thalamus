@@ -20,8 +20,16 @@ from pathlib import Path
 
 from thalamus.cli.brain import build_store, close_store
 from thalamus.core.exceptions import ThalamusError
-from thalamus.core.protocols import Encoder, Store
-from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
+from thalamus.core.protocols import Encoder, Store, SupersessionIndex
+from thalamus.core.types import (
+    Hemisphere,
+    MemoryId,
+    MemoryRecord,
+    MemoryRef,
+    RepoId,
+    Scope,
+    TenantId,
+)
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 
 _DEFAULT_DIM = 128
@@ -42,6 +50,7 @@ class RememberConfig:
     files: tuple[Path, ...]
     importance: float
     memory_id: str | None
+    supersedes: str | None
     neo4j_uri: str | None
     neo4j_user: str
     neo4j_password: str | None
@@ -75,6 +84,12 @@ def add_remember_arguments(parser: argparse.ArgumentParser) -> None:
         "--id", dest="memory_id", default=None,
         help="stable id for intentionally updating a fact (default: derived from kind/text)",
     )
+    parser.add_argument(
+        "--supersedes", default=None,
+        help="memory id this fact replaces (§13.18 D1): records a supersession edge so the "
+        "old belief is demoted below current truth but kept, surfaced with this fact's why/text "
+        "as the reason. Never deletes the old memory.",
+    )
 
 
 def remember_config(args: argparse.Namespace) -> RememberConfig:
@@ -91,6 +106,7 @@ def remember_config(args: argparse.Namespace) -> RememberConfig:
         files=tuple(Path(item) for item in args.files),
         importance=float(args.importance),
         memory_id=str(args.memory_id) if args.memory_id is not None else None,
+        supersedes=str(args.supersedes) if args.supersedes is not None else None,
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
         neo4j_user=os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
@@ -147,14 +163,45 @@ def build_retained_record(
     )
 
 
+def _record_supersession(
+    config: RememberConfig,
+    record: MemoryRecord,
+    store: Store,
+    supersession: SupersessionIndex | None,
+) -> MemoryRef:
+    """Record the D1 supersession edge for a freshly-written belief; return the superseded ref.
+
+    Conservative (§14.4): refuses to create a dangling edge — the superseded memory must
+    already exist — and never touches the old record. The edge's reason is this belief's
+    ``why`` (else its text): the §13.17 "switched to Y because Z" narrative."""
+    if supersession is None:
+        raise ThalamusError(
+            "supersedes requires durable supersession storage; "
+            "set THALAMUS_NEO4J_URI so the edge can be persisted"
+        )
+    old_ref = MemoryRef(record.scope, MemoryId(config.supersedes or ""))
+    if old_ref == record.ref:
+        raise ThalamusError("a memory cannot supersede itself")
+    if store.get(old_ref) is None:
+        raise ThalamusError(f"cannot supersede unknown memory: {config.supersedes}")
+    supersession.supersede(
+        old=old_ref, new=record.ref, reason=config.why or config.text, at=record.created_at
+    )
+    return old_ref
+
+
 def run_remember(
     config: RememberConfig,
     *,
     store: Store | None = None,
     encoder: Encoder | None = None,
+    supersession: SupersessionIndex | None = None,
     announce: bool = True,
 ) -> MemoryRecord:
-    """Persist one explicit retained memory, returning the record written."""
+    """Persist one explicit retained memory, returning the record written.
+
+    When ``config.supersedes`` is set, also records a §13.18 D1 supersession edge into
+    ``supersession`` (the old belief is kept, demoted below current truth at recall)."""
     if store is None and config.neo4j_uri is None:
         raise ThalamusError(
             "remember requires durable Brain 1 storage; "
@@ -182,11 +229,15 @@ def run_remember(
         for value in (config.kind, config.text, config.why, " ".join(footprint))
         if value
     )
+    superseded: MemoryRef | None = None
     try:
         store.add(record, encoder.encode([embedding_text])[0])
+        if config.supersedes is not None:
+            superseded = _record_supersession(config, record, store, supersession)
     finally:
         if owned_store:
             close_store(store)
     if announce:
-        print(f"remembered {record.memory_id} ({record.kind}) in Brain 1 [{config.repo_id}]")
+        note = f" (supersedes {superseded.memory_id})" if superseded is not None else ""
+        print(f"remembered {record.memory_id} ({record.kind}) in Brain 1 [{config.repo_id}]{note}")
     return record
