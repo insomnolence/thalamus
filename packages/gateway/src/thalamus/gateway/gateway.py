@@ -232,6 +232,20 @@ class Gateway:
             event_id=result.event_id,
         )
 
+    @property
+    def graph(self) -> StructuralGraph | None:
+        """The structural graph this gateway queries (Brain 2), or None if experiential-only.
+
+        Exposed so a dreaming structural-refresh pass can update the *same* handle the gateway
+        reads — for a Neo4j-backed graph any client sees the write; for in-memory it must be the
+        same instance, which this guarantees."""
+        return self._graph
+
+    @property
+    def links(self) -> CrossLinkIndex | None:
+        """The cross-hemisphere link index this gateway queries, or None if unused."""
+        return self._links
+
     def refresh(self, views: DerivedViews) -> None:
         """Swap in freshly-recomputed derived views (the dreaming refresh seam).
 

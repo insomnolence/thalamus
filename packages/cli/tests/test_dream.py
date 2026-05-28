@@ -15,6 +15,7 @@ from thalamus.gateway import DerivedViewsRef, Gateway, SupersededDemotingRetriev
 from thalamus.retrieval import L0Retriever
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
+from thalamus.structural import InMemoryCrossLinkIndex, InMemoryStructuralGraph
 
 SCOPE = Scope(TenantId("t"), RepoId("r"))
 NOW = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
@@ -66,8 +67,35 @@ def test_one_cycle_refreshes_views_and_records_a_proposal(tmp_path: Path) -> Non
     proposals = audit.report.details["proposals"]
     assert [p["memory_id"] for p in proposals] == ["gone"]
 
-    # Both passes are logged, in order, with their firewall kind.
+    # Both passes are logged, in order, with their firewall kind. No structural-refresh here:
+    # this gateway has no Brain 2 (graph/links), so the pass is conditionally absent.
     assert [(r.report.name, r.report.kind.value) for r in log.records] == [
         ("link-resolution", "actor"),
         ("belief-audit", "proposer"),
+    ]
+
+
+def test_scheduler_includes_structural_refresh_when_brain2_present(tmp_path: Path) -> None:
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    views = DerivedViewsRef()
+    retriever = SupersededDemotingRetriever(
+        L0Retriever(encoder, store, now=lambda: NOW), views=views
+    )
+    # A gateway WITH a structural graph + link index -> structural-refresh is wired in, first.
+    gateway = Gateway(
+        retriever, k=5, views=views,
+        graph=InMemoryStructuralGraph(SCOPE), links=InMemoryCrossLinkIndex(),
+    )
+    log = InMemoryDreamLog()
+    scheduler = build_dream_scheduler(gateway, dream_log=log)
+    context = make_dream_context_factory(
+        store=store, supersession=InMemorySupersessionIndex(), scope=SCOPE, repo=tmp_path
+    )
+    scheduler.run(context())
+
+    assert [r.report.name for r in log.records] == [
+        "structural-refresh",
+        "link-resolution",
+        "belief-audit",
     ]

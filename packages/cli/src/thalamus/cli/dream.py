@@ -25,26 +25,31 @@ from thalamus.core.types import RepoId, Scope, TenantId
 from thalamus.dreaming import (
     BeliefAuditPass,
     CycleReport,
+    DreamingPass,
     DreamLog,
     JsonlDreamLog,
     LinkResolutionPass,
     PassContext,
     PassStatus,
     Scheduler,
+    StructuralRefreshPass,
 )
 from thalamus.gateway import Gateway
 
 
 def build_dream_scheduler(gateway: Gateway, *, dream_log: DreamLog | None = None) -> Scheduler:
-    """The v0 pass set: the actor (view refresh) then the proposer (belief audit).
+    """The v0 pass set, in dreaming.md DAG order.
 
-    Order follows the dreaming.md DAG flattened: link-resolution/staleness is an
-    actor that refreshes what recall serves; the belief audit is a downstream
-    proposer that only records suggestions."""
-    return Scheduler(
-        [LinkResolutionPass(gateway.refresh), BeliefAuditPass()],
-        log=dream_log,
-    )
+    ``structural-refresh`` (actor) re-links episodes to current code modules — included only when
+    the gateway exposes a structural graph + link index (Brain 2 present). ``link-resolution``
+    (actor) refreshes the gateway's derived views (superseded frontier + staleness).
+    ``belief-audit`` (proposer) records propose-only supersession suggestions."""
+    passes: list[DreamingPass] = []
+    if gateway.graph is not None and gateway.links is not None:
+        passes.append(StructuralRefreshPass(gateway.graph, gateway.links))
+    passes.append(LinkResolutionPass(gateway.refresh))
+    passes.append(BeliefAuditPass())
+    return Scheduler(passes, log=dream_log)
 
 
 def make_dream_context_factory(
