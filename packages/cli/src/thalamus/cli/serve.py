@@ -25,11 +25,21 @@ from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_
 from thalamus.cli.dream import build_dream_scheduler, dream_log_path, make_dream_context_factory
 from thalamus.cli.remember import RememberConfig, run_remember
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
-from thalamus.core.types import Hemisphere, MemoryRecord, RepoId, Scope, SessionId, TenantId
+from thalamus.core.types import (
+    EventId,
+    Hemisphere,
+    MemoryId,
+    MemoryRecord,
+    MemoryRef,
+    RepoId,
+    Scope,
+    SessionId,
+    TenantId,
+)
 from thalamus.dreaming import DreamTicker, JsonlDreamLog
 from thalamus.experiential import Neo4jSupersessionIndex
 from thalamus.gateway import Gateway
-from thalamus.gateway.server import RememberWriter
+from thalamus.gateway.server import RememberWriter, ShownResolver
 from thalamus.instrumentation import (
     FileSessionContextStore,
     JsonlEventSink,
@@ -37,6 +47,7 @@ from thalamus.instrumentation import (
     SessionContext,
     default_session_path,
     mint_session_id,
+    read_event_log,
 )
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
@@ -290,6 +301,32 @@ def build_remember_writer(
     return write
 
 
+def build_shown_resolver(store: Store, scope: Scope, retrieval_log: Path) -> ShownResolver:
+    """Reconstruct a recall's shown ``(memory_id, content)`` pairs from the durable log + store.
+
+    The durable fallback for ``record_usage`` when the in-memory payload is gone (serve restart,
+    or another worker served the recall): stream the retrieval-event log for the matching event,
+    then fetch each shown memory's *current* content from the store. A memory deleted since the
+    recall is skipped (attribute over the surviving shown subset). Returns ``None`` when the event
+    isn't in the log at all (a genuinely unknown event id).
+
+    NB: a log miss is the exception (the in-memory cache covers same-process recalls), so the
+    linear streaming scan is acceptable; an indexed lookup can replace it behind this same seam."""
+
+    def resolve(event_id: EventId) -> list[tuple[MemoryId, str]] | None:
+        event = next((e for e in read_event_log(retrieval_log) if e.event_id == event_id), None)
+        if event is None:
+            return None
+        pairs: list[tuple[MemoryId, str]] = []
+        for item in event.shown:
+            record = store.get(MemoryRef(scope=scope, memory_id=item.memory_id))
+            if record is not None:
+                pairs.append((item.memory_id, record.content))
+        return pairs
+
+    return resolve
+
+
 def run_serve(config: ServeConfig) -> None:
     """Build the brain from durable state and serve ``recall`` over MCP (blocking)."""
     from thalamus.gateway import build_server  # lazy: the 'mcp' extra
@@ -353,6 +390,9 @@ def run_serve(config: ServeConfig) -> None:
                 on_write=ticker.trigger if ticker is not None else None,
             ),
             default_session_id=default_session_id,
+            resolve_shown=build_shown_resolver(
+                store, scope, config.repo / ".thalamus" / "logs" / "retrieval.jsonl"
+            ),
         ).run()
     finally:
         if ticker is not None:

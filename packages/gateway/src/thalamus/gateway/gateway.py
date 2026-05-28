@@ -14,6 +14,8 @@ from collections.abc import Mapping, Sequence
 from thalamus.core.protocols import Retriever, Store
 from thalamus.core.types import (
     Cue,
+    EventId,
+    MemoryId,
     MemoryRef,
     RetrievalResult,
     Scope,
@@ -307,11 +309,24 @@ class Gateway:
         Stateless — pass back the payload from :meth:`recall`. Signals are logged to the
         usage sink keyed by the payload's ``event_id`` (the loop close: surfaced → used).
         """
-        sink = self._usage_sink
-        if sink is None or payload.event_id is None:
+        if payload.event_id is None:
             return []
         shown = [(item.memory_id, item.content) for item in payload.memories]
-        signals = attribute_overlap(payload.event_id, shown, output)
+        return self.record_outcome_for(payload.event_id, shown, output)
+
+    def record_outcome_for(
+        self, event_id: EventId, shown: Sequence[tuple[MemoryId, str]], output: str
+    ) -> list[UsageSignal]:
+        """Record Tier-1 usage from an ``event_id`` + the shown ``(memory_id, content)`` pairs.
+
+        The reconstruction-friendly form of :meth:`record_outcome`: a caller that no longer holds
+        the live payload (a ``record_usage`` arriving after a serve restart, or in another worker
+        of the long-running server) rebuilds ``shown`` from the durable retrieval-event log + store
+        and calls this — so the citation signal survives instead of being silently dropped."""
+        sink = self._usage_sink
+        if sink is None:
+            return []
+        signals = attribute_overlap(event_id, shown, output)
         for signal in signals:
             sink.emit(signal)
         return signals

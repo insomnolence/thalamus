@@ -11,11 +11,26 @@ from thalamus.cli.serve import (
     add_serve_arguments,
     build_remember_writer,
     build_serve_gateway,
+    build_shown_resolver,
     serve_config,
 )
-from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
+from thalamus.core.types import (
+    EventId,
+    Hemisphere,
+    MemoryId,
+    MemoryRecord,
+    RepoId,
+    Scope,
+    TenantId,
+)
 from thalamus.gateway import build_server
-from thalamus.instrumentation import read_event_log, read_usage_log
+from thalamus.instrumentation import (
+    JsonlEventSink,
+    RetrievalEvent,
+    ShownItem,
+    read_event_log,
+    read_usage_log,
+)
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
 
@@ -47,6 +62,44 @@ def test_serve_config_session_flags(tmp_path: Path) -> None:
     explicit = serve_config(parser.parse_args(["--repo", str(tmp_path), "--session-id", "abc123"]))
     assert explicit.session is True
     assert explicit.session_id == "abc123"
+
+
+def test_build_shown_resolver_reconstructs_from_log_and_store(tmp_path: Path) -> None:
+    # The record_usage durability fallback: rebuild a recall's shown (memory_id, content) pairs
+    # from the durable retrieval-event log + store, with no live in-memory payload.
+    scope = Scope(tenant_id=TenantId("local"), repo_id=RepoId("repo"))
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    for mid, content in (("m1", "alpha content"), ("m2", "beta content")):
+        store.add(
+            MemoryRecord(MemoryId(mid), Hemisphere.EXPERIENTIAL, "decision", content, scope, NOW),
+            encoder.encode([content])[0],
+        )
+
+    log = tmp_path / "retrieval.jsonl"
+    sink = JsonlEventSink(log)
+    sink.emit(RetrievalEvent(
+        event_id=EventId("evt-1"), timestamp=NOW, scope=scope, policy_id="L0",
+        cue_text="q", k_requested=2, candidates=[],
+        shown=[ShownItem(MemoryId("m1"), 0, 1.0), ShownItem(MemoryId("m2"), 1, 1.0)],
+    ))
+    # an event whose second shown memory was deleted since the recall
+    sink.emit(RetrievalEvent(
+        event_id=EventId("evt-2"), timestamp=NOW, scope=scope, policy_id="L0",
+        cue_text="q2", k_requested=2, candidates=[],
+        shown=[ShownItem(MemoryId("m1"), 0, 1.0), ShownItem(MemoryId("ghost"), 1, 1.0)],
+    ))
+
+    resolve = build_shown_resolver(store, scope, log)
+
+    assert resolve(EventId("evt-1")) == [
+        (MemoryId("m1"), "alpha content"),
+        (MemoryId("m2"), "beta content"),
+    ]
+    # a memory gone from the store is skipped; the survivor still resolves
+    assert resolve(EventId("evt-2")) == [(MemoryId("m1"), "alpha content")]
+    # a genuinely unknown event id -> None (record_usage then raises, as before)
+    assert resolve(EventId("missing")) is None
 
 
 def test_build_serve_gateway_scans_brain1_and_relinks(tmp_path: Path) -> None:

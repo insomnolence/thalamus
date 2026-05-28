@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
+from thalamus.core.types import (
+    EventId,
+    Hemisphere,
+    MemoryId,
+    MemoryRecord,
+    RepoId,
+    Scope,
+    TenantId,
+)
 from thalamus.gateway import Gateway
 from thalamus.instrumentation import InMemoryEventSink, InMemoryUsageSink, LoggingRetriever
 from thalamus.retrieval import L0Retriever
@@ -48,6 +56,28 @@ def test_recall_then_record_outcome_closes_the_loop() -> None:
     # logged to the usage sink, all keyed by the same retrieval event id
     assert len(usage_sink.signals) == 2
     assert all(s.event_id == payload.event_id for s in usage_sink.signals)
+
+
+def test_record_outcome_for_records_from_reconstructed_shown() -> None:
+    # The durable-fallback path: no live payload, just an event_id + (memory_id, content) pairs
+    # rebuilt from the log + store. Proves the citation signal survives a missing payload.
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    usage_sink = InMemoryUsageSink()
+    gateway = Gateway(L0Retriever(encoder, store, now=lambda: NOW), usage_sink=usage_sink)
+
+    event_id = EventId("evt-123")
+    shown = [
+        (MemoryId("m_sqlite"), "use aiosqlite for the async store"),
+        (MemoryId("m_style"), "prefer terse commit messages"),
+    ]
+    signals = gateway.record_outcome_for(event_id, shown, "import aiosqlite for the async store")
+
+    by_id = {s.memory_id: s for s in signals}
+    assert by_id[MemoryId("m_sqlite")].used is True
+    assert by_id[MemoryId("m_style")].used is False
+    assert len(usage_sink.signals) == 2
+    assert all(s.event_id == event_id for s in usage_sink.signals)
 
 
 def test_record_outcome_noop_without_sink() -> None:
