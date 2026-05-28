@@ -22,9 +22,10 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from thalamus.core.protocols import Encoder, Retriever, Store
+from thalamus.core.protocols import Encoder, Retriever, Store, SupersessionIndex
 from thalamus.core.types import Hemisphere, MemoryRecord, Scope
-from thalamus.gateway import Gateway, StructuralLinkedRetriever
+from thalamus.experiential import InMemorySupersessionIndex
+from thalamus.gateway import Gateway, StructuralLinkedRetriever, SupersededDemotingRetriever
 from thalamus.instrumentation import EventSink, LoggingRetriever, UsageSink
 from thalamus.retrieval import L0Retriever
 from thalamus.store import InMemoryStore, Neo4jStore, connect
@@ -83,6 +84,7 @@ def build_two_hemisphere_gateway(
     code_index: StructuralIndex | None = None,
     doc_index: StructuralIndex | None = None,
     manifest: FileManifest | None = None,
+    supersession: SupersessionIndex | None = None,
     rebuild: bool = False,
     k: int = 5,
     k_hop: int = 1,
@@ -153,10 +155,19 @@ def build_two_hemisphere_gateway(
         StructuralRetriever(encoder, spec.index, corpus=spec.corpus) for spec in corpora
     ]
 
+    # §13.18 R1: the un-superseded frontier is a view over the durable SUPERSEDES edges.
+    # Read it once at composition; the demoting retriever promotes current truth into the
+    # shown slots and the gateway annotates any surfaced superseded belief with its reason.
+    supersession = supersession if supersession is not None else InMemorySupersessionIndex()
+    superseded = supersession.superseded(scope)
+
     base = L0Retriever(encoder, store)
     retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)
+    retriever = SupersededDemotingRetriever(retriever, superseded)
     if event_sink is not None:
-        retriever = LoggingRetriever(retriever, event_sink, policy_id="L0+structural")
+        retriever = LoggingRetriever(
+            retriever, event_sink, policy_id="L0+structural+supersession"
+        )
     return Gateway(
         retriever,
         k=k,
@@ -166,6 +177,7 @@ def build_two_hemisphere_gateway(
         structural_k_hop=k_hop,
         structural_min_relevance=structural_min_relevance,
         stale_references=stale_references,
+        superseded=superseded,
         max_structural_items=max_structural_items,
         max_memory_chars=max_memory_chars,
         usage_sink=usage_sink,

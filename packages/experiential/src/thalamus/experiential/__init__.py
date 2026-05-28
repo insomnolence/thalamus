@@ -8,6 +8,7 @@ materializes them as Brain-1 records — the unfinished half of §10 step 1
 
 from thalamus.experiential.episode import EpisodeBuilder, WhyComponent, WhyProvenance
 from thalamus.experiential.ingest import ingest_episodes
+from thalamus.experiential.neo4j_supersession import Neo4jSupersessionIndex
 from thalamus.experiential.outcome import EpisodeOutcome, classify_outcome, is_success
 from thalamus.experiential.segmentation import (
     CommitBoundedSegmenter,
@@ -37,6 +38,7 @@ __all__ = [
     "GitEpisodeIngestor",
     "InMemoryCheckpoint",
     "InMemorySupersessionIndex",
+    "Neo4jSupersessionIndex",
     "SessionBoundedSegmenter",
     "SessionStampingSource",
     "WhyComponent",

@@ -72,7 +72,7 @@ def test_build_serve_gateway_scans_brain1_and_relinks(tmp_path: Path) -> None:
         max_structural_items=12, max_memory_chars=1000,
         neo4j_uri=None, neo4j_user="neo4j", neo4j_password=None,
     )
-    gateway, returned, episodes = build_serve_gateway(config, store=store, encoder=encoder)
+    gateway, returned, episodes, _ = build_serve_gateway(config, store=store, encoder=encoder)
 
     assert returned is store
     assert [e.memory_id for e in episodes] == [MemoryId("ep1")]  # scanned from Brain 1
@@ -102,7 +102,7 @@ async def test_served_mcp_path_persists_recall_and_usage_logs(tmp_path: Path) ->
         max_structural_items=12, max_memory_chars=1000,
         neo4j_uri=None, neo4j_user="neo4j", neo4j_password=None,
     )
-    gateway, _, _ = build_serve_gateway(config, store=store, encoder=encoder)
+    gateway, _, _, _ = build_serve_gateway(config, store=store, encoder=encoder)
     async with Client(build_server(gateway, scope)) as client:
         await client.call_tool("recall", {"prompt": "async store", "session_id": "session"})
         (event,) = list(read_event_log(repo / ".thalamus" / "logs" / "retrieval.jsonl"))
@@ -128,7 +128,7 @@ async def test_served_mcp_remember_is_immediately_recallable(tmp_path: Path) -> 
         max_structural_items=12, max_memory_chars=1000,
         neo4j_uri=None, neo4j_user="neo4j", neo4j_password=None,
     )
-    gateway, _, _ = build_serve_gateway(config, store=store, encoder=encoder)
+    gateway, _, _, _ = build_serve_gateway(config, store=store, encoder=encoder)
     server = build_server(
         gateway,
         scope,

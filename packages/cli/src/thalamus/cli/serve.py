@@ -25,6 +25,7 @@ from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_
 from thalamus.cli.remember import RememberConfig, run_remember
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
 from thalamus.core.types import Hemisphere, MemoryRecord, RepoId, Scope, SessionId, TenantId
+from thalamus.experiential import Neo4jSupersessionIndex
 from thalamus.gateway import Gateway
 from thalamus.gateway.server import RememberWriter
 from thalamus.instrumentation import (
@@ -152,11 +153,13 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
 
 def build_serve_gateway(
     config: ServeConfig, *, store: Store | None = None, encoder: Encoder | None = None
-) -> tuple[Gateway, Store, list[MemoryRecord]]:
+) -> tuple[Gateway, Store, list[MemoryRecord], SupersessionIndex | None]:
     """Assemble the two-hemisphere gateway from durable Brain 1 + the current repo.
 
-    Returns the gateway, the (open) store, and the episodes scanned for re-linking.
-    ``store`` may be injected (tests); otherwise it is built from the Neo4j config."""
+    Returns the gateway, the (open) store, the episodes scanned for re-linking, and the
+    durable supersession index (when Neo4j-backed; ``None`` for an injected/in-memory store
+    — the gateway then uses its own ephemeral index). ``store`` may be injected (tests);
+    otherwise it is built from the Neo4j config."""
     encoder = encoder or (
         BgeEncoder("BAAI/bge-small-en-v1.5")
         if config.encoder == "bge-small"
@@ -171,6 +174,7 @@ def build_serve_gateway(
     code_index: StructuralIndex | None = None
     doc_index: StructuralIndex | None = None
     manifest: FileManifest | None = None
+    supersession: SupersessionIndex | None = None
     if store is None and config.neo4j_uri is not None:
         driver = connect(config.neo4j_uri, config.neo4j_user, config.neo4j_password or "")
         store = Neo4jStore(
@@ -186,6 +190,7 @@ def build_serve_gateway(
             driver, scope, dim=encoder.dim, corpus="docs", encoder_id=config.encoder
         )
         manifest = Neo4jFileManifest(driver, scope)
+        supersession = Neo4jSupersessionIndex(driver, scope)
     elif store is None:
         store = build_store(
             dim=encoder.dim, neo4j_uri=None, neo4j_user=config.neo4j_user,
@@ -204,6 +209,7 @@ def build_serve_gateway(
         code_index=code_index,
         doc_index=doc_index,
         manifest=manifest,
+        supersession=supersession,
         rebuild=config.rebuild,
         k=config.k,
         k_hop=config.k_hop,
@@ -214,7 +220,7 @@ def build_serve_gateway(
         event_sink=JsonlEventSink(logs / "retrieval.jsonl"),
         usage_sink=JsonlUsageSink(logs / "usage.jsonl"),
     )
-    return gateway, store, episodes
+    return gateway, store, episodes, supersession
 
 
 def build_remember_writer(
@@ -271,7 +277,7 @@ def run_serve(config: ServeConfig) -> None:
         if config.encoder == "bge-small"
         else DeterministicEncoder(dim=config.dim)
     )
-    gateway, store, episodes = build_serve_gateway(config, encoder=encoder)
+    gateway, store, episodes, supersession = build_serve_gateway(config, encoder=encoder)
 
     # Mint + publish a session id so recalls are keyed and out-of-band capture
     # (pytest plugin / git sync) can join to the same session — the measurement loop.
@@ -298,7 +304,9 @@ def run_serve(config: ServeConfig) -> None:
             gateway,
             scope,
             name=f"thalamus:{config.repo_id}",
-            remember_writer=build_remember_writer(config, store=store, encoder=encoder),
+            remember_writer=build_remember_writer(
+                config, store=store, encoder=encoder, supersession=supersession
+            ),
             default_session_id=default_session_id,
         ).run()
     finally:
