@@ -15,6 +15,8 @@ from thalamus.dreaming.base import (
     PassReport,
     PassStatus,
 )
+from thalamus.dreaming.belief_audit import BeliefAuditPass, SupersessionProposal
+from thalamus.dreaming.link_resolution import LinkResolutionPass
 from thalamus.dreaming.log import (
     DreamLog,
     DreamRecord,
@@ -27,18 +29,21 @@ from thalamus.dreaming.log import (
 from thalamus.dreaming.scheduler import Scheduler
 
 __all__ = [
+    "BeliefAuditPass",
     "CycleReport",
     "DreamLog",
     "DreamRecord",
     "DreamingPass",
     "InMemoryDreamLog",
     "JsonlDreamLog",
+    "LinkResolutionPass",
     "PassContext",
     "PassKind",
     "PassOutcome",
     "PassReport",
     "PassStatus",
     "Scheduler",
+    "SupersessionProposal",
     "deserialize_dream_record",
     "read_dream_log",
     "serialize_dream_record",

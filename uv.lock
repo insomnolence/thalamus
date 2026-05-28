@@ -2184,10 +2184,16 @@ version = "0.1.0"
 source = { editable = "packages/dreaming" }
 dependencies = [
     { name = "thalamus-core" },
+    { name = "thalamus-gateway" },
+    { name = "thalamus-structural" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "thalamus-core", editable = "packages/core" }]
+requires-dist = [
+    { name = "thalamus-core", editable = "packages/core" },
+    { name = "thalamus-gateway", editable = "packages/gateway" },
+    { name = "thalamus-structural", editable = "packages/structural" },
+]
 
 [[package]]
 name = "thalamus-eval"
