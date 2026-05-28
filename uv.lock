@@ -11,6 +11,7 @@ members = [
     "thalamus",
     "thalamus-cli",
     "thalamus-core",
+    "thalamus-dreaming",
     "thalamus-eval",
     "thalamus-experiential",
     "thalamus-gateway",
@@ -2097,6 +2098,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "thalamus-cli" },
     { name = "thalamus-core" },
+    { name = "thalamus-dreaming" },
     { name = "thalamus-eval" },
     { name = "thalamus-experiential" },
     { name = "thalamus-gateway" },
@@ -2122,6 +2124,7 @@ dev = [
 requires-dist = [
     { name = "thalamus-cli", editable = "packages/cli" },
     { name = "thalamus-core", editable = "packages/core" },
+    { name = "thalamus-dreaming", editable = "packages/dreaming" },
     { name = "thalamus-eval", editable = "packages/eval" },
     { name = "thalamus-experiential", editable = "packages/experiential" },
     { name = "thalamus-gateway", editable = "packages/gateway" },
@@ -2174,6 +2177,17 @@ requires-dist = [
 name = "thalamus-core"
 version = "0.1.0"
 source = { editable = "packages/core" }
+
+[[package]]
+name = "thalamus-dreaming"
+version = "0.1.0"
+source = { editable = "packages/dreaming" }
+dependencies = [
+    { name = "thalamus-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "thalamus-core", editable = "packages/core" }]
 
 [[package]]
 name = "thalamus-eval"

@@ -13,6 +13,7 @@ dependencies = [
     "thalamus-instrumentation",
     "thalamus-gateway",
     "thalamus-eval",
+    "thalamus-dreaming",
     "thalamus-cli",
 ]
 
@@ -44,6 +45,7 @@ thalamus-retrieval = { workspace = true }
 thalamus-instrumentation = { workspace = true }
 thalamus-gateway = { workspace = true }
 thalamus-eval = { workspace = true }
+thalamus-dreaming = { workspace = true }
 thalamus-cli = { workspace = true }
 
 [tool.pytest.ini_options]
@@ -60,6 +62,7 @@ pythonpath = [
     "packages/instrumentation/src",
     "packages/gateway/src",
     "packages/eval/src",
+    "packages/dreaming/src",
     "packages/cli/src",
 ]
 
@@ -86,6 +89,7 @@ mypy_path = [
     "packages/instrumentation/src",
     "packages/gateway/src",
     "packages/eval/src",
+    "packages/dreaming/src",
     "packages/cli/src",
 ]
 
