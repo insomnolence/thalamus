@@ -87,6 +87,9 @@ class ServeConfig:
     rebuild: bool = False
     dream_tick: bool = True
     dream_tick_minutes: float = 30.0
+    transport: str = "stdio"
+    host: str = "127.0.0.1"
+    port: int = 8000
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -151,6 +154,19 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         help="periodic dream-cycle interval in minutes (a remember/supersede also triggers one "
         "immediately); default 30",
     )
+    parser.add_argument(
+        "--transport", choices=("stdio", "http"), default="stdio",
+        help="MCP transport: stdio (default, one client, used by Claude Code) or http "
+        "(Streamable HTTP, many concurrent clients over the network)",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="bind address for --transport http (default 127.0.0.1; set a LAN address to expose "
+        "the brain to other machines — see --transport http security)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8000, help="bind port for --transport http (default 8000)"
+    )
 
 
 def serve_config(args: argparse.Namespace) -> ServeConfig:
@@ -175,6 +191,9 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         rebuild=bool(args.rebuild),
         dream_tick=bool(args.dream_tick),
         dream_tick_minutes=float(args.dream_tick_minutes),
+        transport=str(args.transport),
+        host=str(args.host),
+        port=int(args.port),
     )
 
 
@@ -364,6 +383,22 @@ def run_serve(config: ServeConfig) -> None:
             interval_seconds=max(config.dream_tick_minutes, 0.0) * 60.0,
         )
 
+    server = build_server(
+        gateway,
+        scope,
+        name=f"thalamus:{config.repo_id}",
+        remember_writer=build_remember_writer(
+            config,
+            store=store,
+            encoder=encoder,
+            supersession=supersession,
+            on_write=ticker.trigger if ticker is not None else None,
+        ),
+        default_session_id=default_session_id,
+        resolve_shown=build_shown_resolver(
+            store, scope, config.repo / ".thalamus" / "logs" / "retrieval.jsonl"
+        ),
+    )
     try:
         session_note = (
             f"session {default_session_id}" if default_session_id else "session tagging off"
@@ -371,29 +406,22 @@ def run_serve(config: ServeConfig) -> None:
         dream_note = (
             f"dream-tick every {config.dream_tick_minutes:g}m" if ticker else "dream-tick off"
         )
+        where = (
+            f"HTTP http://{config.host}:{config.port}/mcp"
+            if config.transport == "http"
+            else "MCP (stdio)"
+        )
         print(
-            f"thalamus: serving [{config.repo_id}] over MCP (stdio) — {len(episodes)} episodes, "
+            f"thalamus: serving [{config.repo_id}] over {where} — {len(episodes)} episodes, "
             f"Brain 2 re-derived from {config.repo}, {session_note}, {dream_note}. Ctrl-C to stop.",
             file=sys.stderr,
         )
         if ticker is not None:
             ticker.start()
-        build_server(
-            gateway,
-            scope,
-            name=f"thalamus:{config.repo_id}",
-            remember_writer=build_remember_writer(
-                config,
-                store=store,
-                encoder=encoder,
-                supersession=supersession,
-                on_write=ticker.trigger if ticker is not None else None,
-            ),
-            default_session_id=default_session_id,
-            resolve_shown=build_shown_resolver(
-                store, scope, config.repo / ".thalamus" / "logs" / "retrieval.jsonl"
-            ),
-        ).run()
+        if config.transport == "http":
+            server.run(transport="http", host=config.host, port=config.port)
+        else:
+            server.run()
     finally:
         if ticker is not None:
             ticker.stop()

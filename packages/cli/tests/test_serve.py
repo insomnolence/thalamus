@@ -54,6 +54,23 @@ def test_serve_config_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert config.session_id is None  # minted per process unless overridden
 
 
+def test_serve_config_transport_flags(tmp_path: Path) -> None:
+    parser = argparse.ArgumentParser()
+    add_serve_arguments(parser)
+    default = serve_config(parser.parse_args(["--repo", str(tmp_path)]))
+    assert default.transport == "stdio"  # stdio default keeps Claude Code / .mcp.json unaffected
+    assert default.host == "127.0.0.1"
+    assert default.port == 8000
+    http = serve_config(
+        parser.parse_args(
+            ["--repo", str(tmp_path), "--transport", "http", "--host", "0.0.0.0", "--port", "8765"]
+        )
+    )
+    assert http.transport == "http"
+    assert http.host == "0.0.0.0"
+    assert http.port == 8765
+
+
 def test_serve_config_session_flags(tmp_path: Path) -> None:
     parser = argparse.ArgumentParser()
     add_serve_arguments(parser)
