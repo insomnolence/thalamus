@@ -11,9 +11,20 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from thalamus.core.types import EventId, MemoryId, ScoredMemory
+from thalamus.core.types import EventId, MemoryId, ScoredMemory, Supersession
 from thalamus.structural.index import ScoredNode
 from thalamus.structural.schema import StructuralNode
+
+
+@dataclass(frozen=True, slots=True)
+class SupersededNote:
+    """Marks a surfaced memory as superseded (§13.18): current truth ranks above it, but
+    it is still shown *with its supersession reason* — the "used X until May, switched to Y
+    because Z" view, never silently dropped (§14.4 conservative-against-silent-poisons)."""
+
+    superseded_by: MemoryId
+    reason: str
+    at: str  # ISO-8601 timestamp of the supersession
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +38,7 @@ class MemoryItem:
     why: str | None = None
     source: str | None = None
     stale_references: tuple[str, ...] = ()  # footprint files no longer on disk (§13.18-D2)
+    superseded: SupersededNote | None = None  # set iff a newer belief replaced this (§13.18 R1)
 
     @classmethod
     def from_scored(
@@ -35,10 +47,21 @@ class MemoryItem:
         *,
         max_content_chars: int | None = None,
         stale_references: Sequence[str] = (),
+        superseded: Supersession | None = None,
     ) -> MemoryItem:
         why = scored.record.metadata.get("why")
         content = scored.record.content
         rationale = str(why) if why is not None else None
+        note: SupersededNote | None = None
+        if superseded is not None:
+            reason = superseded.reason
+            if max_content_chars is not None:
+                reason = _truncate(reason, max_content_chars)
+            note = SupersededNote(
+                superseded_by=superseded.superseded_by,
+                reason=reason,
+                at=superseded.at.isoformat(),
+            )
         if max_content_chars is not None:
             content = _truncate(content, max_content_chars)
             if rationale is not None:
@@ -51,6 +74,7 @@ class MemoryItem:
             why=rationale,
             source=str(scored.record.metadata.get("source", "")) or None,
             stale_references=tuple(stale_references),
+            superseded=note,
         )
 
     @property
@@ -144,9 +168,17 @@ class ContextPayload:
                 continue
             lines += ["", f"## {heading}"]
             for item in items:
-                lines.append(f"- ({item.kind}, relevance {item.score:.2f}) {item.content}")
+                superseded = " [superseded]" if item.superseded else ""
+                lines.append(
+                    f"- ({item.kind}, relevance {item.score:.2f}){superseded} {item.content}"
+                )
                 if item.why:
                     lines.append(f"  why: {item.why}")
+                if item.superseded is not None:
+                    note = item.superseded
+                    lines.append(
+                        f"  ⊘ superseded by {note.superseded_by} on {note.at}: {note.reason}"
+                    )
                 if item.stale_references:
                     gone = ", ".join(item.stale_references)
                     lines.append(f"  ⚠ may be stale — references no longer in the codebase: {gone}")

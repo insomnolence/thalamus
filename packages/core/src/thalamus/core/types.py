@@ -94,6 +94,23 @@ class MemoryRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class Supersession:
+    """A belief's supersession record: it was replaced, by what, when, and why (§13.18 R1).
+
+    The belief layer never rewrites history — a superseded belief's record is kept
+    immutable; this is the *edge* that marks it replaced. ``current truth = the
+    un-superseded frontier`` is a derived view (§14.1): a memory is current iff no
+    :class:`Supersession` points at it. The ``reason`` preserves the §13.17
+    "used X until May, switched to Y because Z" narrative — the crown-jewel that a
+    flat delete would destroy.
+    """
+
+    superseded_by: MemoryId  # the memory that replaced this one
+    reason: str
+    at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class Cue:
     """A retrieval request: the prompt + current focus the gateway routes."""
 

@@ -15,6 +15,7 @@ from thalamus.experiential.segmentation import (
     EpisodeSpan,
     SessionBoundedSegmenter,
 )
+from thalamus.experiential.supersession import InMemorySupersessionIndex
 from thalamus.experiential.sync import (
     Checkpoint,
     CommitSource,
@@ -35,6 +36,7 @@ __all__ = [
     "FileCheckpoint",
     "GitEpisodeIngestor",
     "InMemoryCheckpoint",
+    "InMemorySupersessionIndex",
     "SessionBoundedSegmenter",
     "SessionStampingSource",
     "WhyComponent",

@@ -5,8 +5,12 @@ enriched with Brain 2 structural context via cross-hemisphere links (§13.19). T
 MCP transport (``build_server``) is a thin optional adapter requiring the ``mcp`` extra.
 """
 
-from thalamus.gateway.gateway import Gateway, StructuralLinkedRetriever
-from thalamus.gateway.payload import ContextPayload, MemoryItem, StructuralItem
+from thalamus.gateway.gateway import (
+    Gateway,
+    StructuralLinkedRetriever,
+    SupersededDemotingRetriever,
+)
+from thalamus.gateway.payload import ContextPayload, MemoryItem, StructuralItem, SupersededNote
 from thalamus.gateway.server import build_server
 
 __all__ = [
@@ -15,5 +19,7 @@ __all__ = [
     "MemoryItem",
     "StructuralItem",
     "StructuralLinkedRetriever",
+    "SupersededDemotingRetriever",
+    "SupersededNote",
     "build_server",
 ]

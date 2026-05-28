@@ -12,7 +12,14 @@ from thalamus.core.exceptions import (
     StoreError,
     ThalamusError,
 )
-from thalamus.core.protocols import EmbeddingStore, Encoder, Retriever, Router, Store
+from thalamus.core.protocols import (
+    EmbeddingStore,
+    Encoder,
+    Retriever,
+    Router,
+    Store,
+    SupersessionIndex,
+)
 from thalamus.core.serde import deserialize_memory_record, serialize_memory_record
 from thalamus.core.types import (
     Cue,
@@ -28,6 +35,7 @@ from thalamus.core.types import (
     ScoredMemory,
     SessionId,
     StructuralRef,
+    Supersession,
     TenantId,
     Vector,
 )
@@ -55,6 +63,8 @@ __all__ = [
     "StructuralRef",
     "Store",
     "StoreError",
+    "Supersession",
+    "SupersessionIndex",
     "TenantId",
     "ThalamusError",
     "Vector",

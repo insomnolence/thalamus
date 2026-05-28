@@ -20,6 +20,7 @@ from thalamus.core.types import (
     ScoredMemory,
     SessionId,
     StructuralRef,
+    Supersession,
 )
 from thalamus.gateway.payload import CallRelation, ContextPayload, MemoryItem, StructuralItem
 from thalamus.instrumentation import UsageSignal, UsageSink, attribute_overlap
@@ -96,6 +97,37 @@ class StructuralLinkedRetriever:
         return RetrievalResult(cue=cue, candidates=candidates, shown=candidates[: max(k, 0)])
 
 
+class SupersededDemotingRetriever:
+    """Demote superseded beliefs below all current ones before the top-k cut (§13.18 R1).
+
+    Realizes "current truth = the un-superseded frontier" as a *view*: a superseded belief
+    still exists and can still surface (its history stays recallable), but it never out-ranks
+    a current belief for a shown slot. Stable within each partition (preserves the inner
+    retriever's relevance order). A no-op when nothing is superseded. Sits below the logging
+    decorator so the retrieval-event log records the demoted (true) shown order.
+    """
+
+    def __init__(self, inner: Retriever, superseded: Mapping[MemoryRef, Supersession]) -> None:
+        self._inner = inner
+        self._superseded = superseded
+
+    def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
+        base = self._inner.retrieve(cue, k)
+        if not self._superseded:
+            return base
+        current = [c for c in base.candidates if c.record.ref not in self._superseded]
+        replaced = [c for c in base.candidates if c.record.ref in self._superseded]
+        if not replaced:
+            return base
+        candidates = [*current, *replaced]
+        return RetrievalResult(
+            cue=cue,
+            candidates=candidates,
+            shown=candidates[: max(k, 0)],
+            event_id=base.event_id,
+        )
+
+
 class Gateway:
     """Assembles context for a cue by querying the brain through a retriever."""
 
@@ -110,6 +142,7 @@ class Gateway:
         structural_k_hop: int = 0,
         structural_min_relevance: float = 0.0,
         stale_references: Mapping[MemoryRef, Sequence[str]] | None = None,
+        superseded: Mapping[MemoryRef, Supersession] | None = None,
         max_structural_items: int = 12,
         max_memory_chars: int = 1000,
         usage_sink: UsageSink | None = None,
@@ -127,6 +160,10 @@ class Gateway:
         # memory_ref -> its footprint files that are gone from disk (§13.18-D2). Precomputed at
         # composition (where the repo root is known) so the gateway stays filesystem-free.
         self._stale_references = dict(stale_references) if stale_references else {}
+        # memory_ref -> the belief that replaced it (§13.18 R1). Surfaced with its reason on
+        # any superseded memory that still reaches the payload; the un-superseded frontier is
+        # promoted by the SupersededDemotingRetriever upstream. Computed at composition.
+        self._superseded = dict(superseded) if superseded else {}
         # Floor for direct structural hits: don't append weakly-related code to every recall
         # (the bounded/selective constraint). Default is an encoder-agnostic noise floor
         # (strictly positive); a meaningful BGE threshold is deferred to real-usage tuning.
@@ -150,6 +187,7 @@ class Gateway:
                 scored,
                 max_content_chars=self._max_memory_chars,
                 stale_references=self._stale_references.get(scored.record.ref, ()),
+                superseded=self._superseded.get(scored.record.ref),
             )
             for scored in result.shown
         ]

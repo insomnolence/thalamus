@@ -14,7 +14,8 @@ to evolve. (Protocol/structural-subtyping pattern referenced from Polynoica's
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from thalamus.core.types import (
@@ -24,6 +25,7 @@ from thalamus.core.types import (
     RetrievalResult,
     Scope,
     ScoredMemory,
+    Supersession,
     Vector,
 )
 
@@ -86,6 +88,26 @@ class EmbeddingStore(Protocol):
 
     def scan_with_embeddings(self, scope: Scope) -> list[tuple[MemoryRecord, Vector]]:
         """Return all ``(record, embedding)`` pairs within ``scope`` (unordered)."""
+        ...
+
+
+@runtime_checkable
+class SupersessionIndex(Protocol):
+    """Records and reports belief-supersession edges (§13.18 R1).
+
+    A directed memory↔memory edge — ``new`` supersedes ``old`` — carrying the reason
+    and timestamp. The "current truth" the gateway surfaces is the *complement*: a
+    memory is current iff :meth:`superseded` returns no entry for it (a derived view,
+    §14.1). Mirrors the structural ``CrossLinkIndex`` (memory↔node) one hemisphere over;
+    the in-memory and Neo4j implementations live in the ``experiential`` package.
+    """
+
+    def supersede(self, *, old: MemoryRef, new: MemoryRef, reason: str, at: datetime) -> None:
+        """Mark ``old`` superseded by ``new`` with a reason. Never deletes ``old``."""
+        ...
+
+    def superseded(self, scope: Scope) -> Mapping[MemoryRef, Supersession]:
+        """Map each superseded memory within ``scope`` to its supersession record."""
         ...
 
 
