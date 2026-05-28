@@ -39,6 +39,7 @@ from thalamus.core.types import (
 from thalamus.dreaming import DreamTicker, JsonlDreamLog
 from thalamus.experiential import Neo4jSupersessionIndex
 from thalamus.gateway import Gateway
+from thalamus.gateway.http_security import build_security_middleware
 from thalamus.gateway.server import RememberWriter, ShownResolver
 from thalamus.instrumentation import (
     FileSessionContextStore,
@@ -90,6 +91,8 @@ class ServeConfig:
     transport: str = "stdio"
     host: str = "127.0.0.1"
     port: int = 8000
+    http_token: str | None = None
+    allowed_origins: tuple[str, ...] = ()
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -194,6 +197,14 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         transport=str(args.transport),
         host=str(args.host),
         port=int(args.port),
+        # Cert-free HTTP security (env, not flags — secrets don't belong in argv/process lists):
+        # optional bearer token + extra allow-listed Origins (localhost is always allowed).
+        http_token=os.environ.get("THALAMUS_HTTP_TOKEN") or None,
+        allowed_origins=tuple(
+            o.strip()
+            for o in os.environ.get("THALAMUS_HTTP_ALLOWED_ORIGINS", "").split(",")
+            if o.strip()
+        ),
     )
 
 
@@ -423,7 +434,22 @@ def run_serve(config: ServeConfig) -> None:
         if ticker is not None:
             ticker.start()
         if config.transport == "http":
-            server.run(transport="http", host=config.host, port=config.port)
+            host_is_local = config.host in ("127.0.0.1", "localhost", "::1")
+            if not host_is_local and config.http_token is None:
+                print(
+                    f"thalamus: WARNING — bound to {config.host} (off-localhost) with no "
+                    "THALAMUS_HTTP_TOKEN: anyone on the network can read/write this brain. "
+                    "Set THALAMUS_HTTP_TOKEN, or front it with a VPN (e.g. Tailscale).",
+                    file=sys.stderr,
+                )
+            middleware = [
+                build_security_middleware(
+                    allowed_origins=frozenset(config.allowed_origins), token=config.http_token
+                )
+            ]
+            server.run(
+                transport="http", host=config.host, port=config.port, middleware=middleware
+            )
         else:
             server.run()
     finally:

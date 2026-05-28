@@ -71,6 +71,24 @@ def test_serve_config_transport_flags(tmp_path: Path) -> None:
     assert http.port == 8765
 
 
+def test_serve_config_http_security_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parser = argparse.ArgumentParser()
+    add_serve_arguments(parser)
+    monkeypatch.delenv("THALAMUS_HTTP_TOKEN", raising=False)
+    monkeypatch.delenv("THALAMUS_HTTP_ALLOWED_ORIGINS", raising=False)
+    bare = serve_config(parser.parse_args(["--repo", str(tmp_path)]))
+    assert bare.http_token is None
+    assert bare.allowed_origins == ()
+
+    monkeypatch.setenv("THALAMUS_HTTP_TOKEN", "s3cret")
+    monkeypatch.setenv("THALAMUS_HTTP_ALLOWED_ORIGINS", "https://a.example, https://b.example")
+    cfg = serve_config(parser.parse_args(["--repo", str(tmp_path)]))
+    assert cfg.http_token == "s3cret"
+    assert cfg.allowed_origins == ("https://a.example", "https://b.example")
+
+
 def test_serve_config_session_flags(tmp_path: Path) -> None:
     parser = argparse.ArgumentParser()
     add_serve_arguments(parser)
