@@ -58,14 +58,14 @@ def test_evaluate_probes_summarises_surface_quality() -> None:
     assert report.n_probes == 3
     # surface_rate counts probes whose top-1 cleared the threshold (a, b) over n (3)
     assert report.surface_rate == 2 / 3
-    # mean_top_score over (0.9, 0.55, 0.0)
-    assert abs(report.mean_top_score - (0.9 + 0.55 + 0.0) / 3) < 1e-9
-    assert report.median_top_score == 0.55
+    # mean_top_relevance over (0.9, 0.55, 0.0)
+    assert abs(report.mean_top_relevance - (0.9 + 0.55 + 0.0) / 3) < 1e-9
+    assert report.median_top_relevance == 0.55
     # Per-probe outcomes carry the surfaced ids + top score
     assert [o.shown for o in outcomes] == [
         (MemoryId("m1"), MemoryId("m2")), (MemoryId("m3"),), (),
     ]
-    assert outcomes[2].top_score == 0.0
+    assert outcomes[2].top_relevance == 0.0
 
 
 def test_brain_off_floor_is_zero_surface_rate() -> None:
@@ -74,8 +74,8 @@ def test_brain_off_floor_is_zero_surface_rate() -> None:
         NullRetriever(), probes, scope=SCOPE, k=5, threshold=0.0, label="brain-off"
     )
     assert report.surface_rate == 0.0
-    assert report.mean_top_score == 0.0
-    assert report.median_top_score == 0.0
+    assert report.mean_top_relevance == 0.0
+    assert report.median_top_relevance == 0.0
 
 
 def test_compare_probes_runs_the_ablation_switch() -> None:
@@ -88,7 +88,7 @@ def test_compare_probes_runs_the_ablation_switch() -> None:
     assert set(reports) == {"brain-off", "L0"}
     assert reports["brain-off"].surface_rate == 0.0
     assert reports["L0"].surface_rate == 1.0
-    assert reports["L0"].mean_top_score > reports["brain-off"].mean_top_score
+    assert reports["L0"].mean_top_relevance > reports["brain-off"].mean_top_relevance
 
 
 def test_empty_corpus_returns_zeroed_report() -> None:

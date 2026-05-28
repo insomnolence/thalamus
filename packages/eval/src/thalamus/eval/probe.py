@@ -24,18 +24,26 @@ from dataclasses import dataclass
 from statistics import fmean, median
 
 from thalamus.core.protocols import Retriever
-from thalamus.core.types import Cue, MemoryId, Scope
+from thalamus.core.types import Cue, MemoryId, Scope, ScoredMemory
 from thalamus.eval.transcripts import TranscriptProbe
 
 
 @dataclass(frozen=True, slots=True)
 class ProbeOutcome:
-    """One probe's result on one retriever."""
+    """One probe's result on one retriever.
+
+    ``top_relevance`` is the **cosine semantic similarity** (or other ``relevance``
+    feature) of the top hit — *not* the retriever's combined ranking score. The score
+    is the retriever's ranking *policy* (e.g. L0 mixes relevance with recency and
+    importance); the relevance is the underlying semantic *signal* — which is what an
+    L1 probe corpus actually measures. Falls back to ``.score`` when a retriever
+    doesn't surface a ``features["relevance"]``.
+    """
 
     probe: TranscriptProbe
     shown: tuple[MemoryId, ...]
-    top_score: float  # 0.0 when nothing surfaced
-    n_above_threshold: int  # how many of `shown` scored ≥ threshold
+    top_relevance: float  # 0.0 when nothing surfaced
+    n_above_threshold: int  # how many of `shown` had relevance ≥ threshold
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,10 +54,10 @@ class ProbeReport:
     n_probes: int
     k: int
     threshold: float
-    surface_rate: float  # fraction with ≥ 1 result at or above ``threshold``
-    mean_top_score: float
-    median_top_score: float
-    p90_top_score: float
+    surface_rate: float  # fraction with ≥ 1 result at relevance ≥ ``threshold``
+    mean_top_relevance: float
+    median_top_relevance: float
+    p90_top_relevance: float
 
 
 def evaluate_probes(
@@ -72,14 +80,23 @@ def evaluate_probes(
         cue = Cue(text=probe.prompt, scope=scope)
         result = retriever.retrieve(cue, k)
         shown = tuple(item.record.memory_id for item in result.shown)
-        top_score = result.shown[0].score if result.shown else 0.0
-        n_above = sum(1 for item in result.shown if item.score >= threshold)
+        relevances = [_relevance(item) for item in result.shown]
+        top = relevances[0] if relevances else 0.0
+        n_above = sum(1 for r in relevances if r >= threshold)
         outcomes.append(
             ProbeOutcome(
-                probe=probe, shown=shown, top_score=top_score, n_above_threshold=n_above
+                probe=probe, shown=shown, top_relevance=top, n_above_threshold=n_above
             )
         )
     return _aggregate(label, outcomes, k=k, threshold=threshold), outcomes
+
+
+def _relevance(item: ScoredMemory) -> float:
+    """Prefer the cosine ``relevance`` feature; fall back to the ranking score."""
+    rel = item.features.get("relevance")
+    if rel is not None:
+        return float(rel)
+    return item.score
 
 
 def compare_probes(
@@ -108,19 +125,20 @@ def _aggregate(
     if not outcomes:
         return ProbeReport(
             label=label, n_probes=0, k=k, threshold=threshold,
-            surface_rate=0.0, mean_top_score=0.0, median_top_score=0.0, p90_top_score=0.0,
+            surface_rate=0.0,
+            mean_top_relevance=0.0, median_top_relevance=0.0, p90_top_relevance=0.0,
         )
-    top_scores = [o.top_score for o in outcomes]
-    surfaced = sum(1 for o in outcomes if o.top_score >= threshold and o.shown)
+    relevances = [o.top_relevance for o in outcomes]
+    surfaced = sum(1 for o in outcomes if o.top_relevance >= threshold and o.shown)
     return ProbeReport(
         label=label,
         n_probes=len(outcomes),
         k=k,
         threshold=threshold,
         surface_rate=surfaced / len(outcomes),
-        mean_top_score=fmean(top_scores),
-        median_top_score=median(top_scores),
-        p90_top_score=_percentile(top_scores, 0.90),
+        mean_top_relevance=fmean(relevances),
+        median_top_relevance=median(relevances),
+        p90_top_relevance=_percentile(relevances, 0.90),
     )
 
 
