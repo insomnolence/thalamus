@@ -34,12 +34,17 @@ from thalamus.structural.schema import IngestResult, StructuralEdge, StructuralN
 class CorpusSpec:
     """One Brain-2 corpus: its ingestor, the (separate, no-pollution) index it embeds into,
     and a ``files`` enumerator (e.g. ``python_files``) used to detect changes *without* parsing —
-    so a no-change rebuild never runs the ingestor (and its ~9s jedi pass)."""
+    so a no-change rebuild never runs the ingestor (and its ~9s jedi pass).
+
+    ``root`` overrides the build's repo root for this corpus — so docs can be ingested from a
+    directory outside the code root (e.g. a sibling ``docs/`` next to the code package). When
+    ``None`` the corpus uses the ``repo`` passed to :func:`incremental_ingest`."""
 
     ingestor: Ingestor
     index: StructuralIndex
     files: Callable[[Path], list[Path]]
     corpus: str = "code"
+    root: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,9 +90,10 @@ def incremental_ingest(
     returns early without parsing — O(hash files), independent of repo size; with fresh ones it
     is a full build (the re-derive oracle)."""
     # 1. Cheap: enumerate + hash corpus files (NO parse, NO jedi) and diff against the last build.
+    #    Each corpus may target its own root (``spec.root``), e.g. docs outside the code root.
     current_sha: dict[str, str] = {}
     for spec in corpora:
-        for path in spec.files(repo):
+        for path in spec.files(spec.root or repo):
             current_sha[str(path)] = _sha256(path)
     previous = manifest.load(scope)
     changed = {
@@ -109,7 +115,7 @@ def incremental_ingest(
     path_node_ids: dict[str, list[str]] = {}
     results: dict[str, IngestResult] = {}
     for spec in corpora:
-        result = spec.ingestor.ingest_path(repo, scope)
+        result = spec.ingestor.ingest_path(spec.root or repo, scope)
         results[spec.corpus] = result
         all_edges.extend(result.edges)
         for node in result.nodes:

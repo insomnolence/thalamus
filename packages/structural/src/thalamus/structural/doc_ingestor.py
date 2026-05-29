@@ -35,9 +35,13 @@ class DocIngestor:
         *,
         ignore_dirs: frozenset[str] = IGNORE_DIRS,
         max_section_chars: int = _DEFAULT_MAX_SECTION_CHARS,
+        id_namespace: str | None = None,
     ) -> None:
         self._ignore_dirs = ignore_dirs
         self._max_section_chars = max_section_chars
+        # Prefixes node ids when set, so multiple doc roots (e.g. design docs + project docs)
+        # can't collide on a shared relative path (both having a ``README.md``) in the one graph.
+        self._id_prefix = f"{id_namespace}:" if id_namespace else ""
 
     def ingest_path(self, root: Path, scope: Scope) -> IngestResult:
         nodes: list[StructuralNode] = []
@@ -70,7 +74,7 @@ class DocIngestor:
             return
 
         rel = self._rel(path, root)
-        doc_id = f"document:{rel}"
+        doc_id = f"document:{self._id_prefix}{rel}"
         intro = "\n".join(lines).strip()[: self._max_section_chars]
         nodes.append(
             StructuralNode(
@@ -92,7 +96,7 @@ class DocIngestor:
         for index, (lineno, level, text) in enumerate(headings):
             end = headings[index + 1][0] - 1 if index + 1 < len(headings) else len(lines)
             body = "\n".join(lines[lineno - 1 : end]).strip()
-            section_id = f"section:{rel}:{lineno}"
+            section_id = f"section:{self._id_prefix}{rel}:{lineno}"
             nodes.append(
                 StructuralNode(
                     node_id=section_id,

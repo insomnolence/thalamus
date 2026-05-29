@@ -32,6 +32,15 @@ def test_section_embeds_its_content(tmp_path: Path) -> None:
     assert "durable memory" in section.metadata["text"]
 
 
+def test_id_namespace_prefixes_node_ids(tmp_path: Path) -> None:
+    # Multiple doc roots sharing a relative path (e.g. two README.md) must not collide in the
+    # shared graph — a namespace prefixes the document/section ids.
+    (tmp_path / "design.md").write_text("# Title\n\nIntro.\n\n## Goals\n\nx\n", encoding="utf-8")
+    ids = {n.node_id for n in DocIngestor(id_namespace="design").ingest_path(tmp_path, SCOPE).nodes}
+    assert "document:design:design.md" in ids
+    assert "section:design:design.md:5" in ids
+
+
 def test_heading_hierarchy_is_contains_edges(tmp_path: Path) -> None:
     (tmp_path / "d.md").write_text("# A\n\n## B\n\n### C\n\n## D\n", encoding="utf-8")
     edges = {(e.source_id, e.target_id) for e in _ingest(tmp_path).edges if e.type == "contains"}

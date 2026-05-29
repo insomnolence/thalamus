@@ -108,6 +108,13 @@ def _code_files_for(code_language: str) -> Callable[[Path], list[Path]]:
     return typescript_files if code_language == "typescript" else code_files
 
 
+def _doc_corpus_label(root: Path) -> str:
+    """A short, stable label for a doc root — its dir name, or the parent's when the dir is
+    a generic ``docs``/``doc`` (so a sibling ``mcp-server/docs`` and ``dollhouse/docs`` differ)."""
+    generic = {"docs", "doc", "documentation"}
+    return root.parent.name if root.name.lower() in generic else root.name
+
+
 def build_two_hemisphere_gateway(
     repo: Path,
     *,
@@ -120,6 +127,8 @@ def build_two_hemisphere_gateway(
     links: CrossLinkIndex | None = None,
     code_index: StructuralIndex | None = None,
     doc_index: StructuralIndex | None = None,
+    doc_roots: Sequence[Path] | None = None,
+    doc_index_factory: Callable[[str], StructuralIndex] | None = None,
     manifest: FileManifest | None = None,
     supersession: SupersessionIndex | None = None,
     rebuild: bool = False,
@@ -156,7 +165,23 @@ def build_two_hemisphere_gateway(
     manifest = manifest if manifest is not None else InMemoryFileManifest()
     code_index = code_index if code_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
     corpora = [CorpusSpec(code_ingestor, code_index, _code_files_for(code_language), "code")]
-    if resolve_docs:
+    if doc_roots:
+        # Each doc root is its own labeled corpus (own index + namespaced node ids → no
+        # cross-root collision), surfaced as a "Related docs (<label>)" payload section.
+        for root in doc_roots:
+            label = _doc_corpus_label(root)
+            corpus = f"docs ({label})"
+            index = (
+                doc_index_factory(corpus)
+                if doc_index_factory is not None
+                else InMemoryStructuralIndex(dim=encoder.dim)
+            )
+            corpora.append(
+                CorpusSpec(
+                    DocIngestor(id_namespace=label), index, markdown_files, corpus, root=root
+                )
+            )
+    elif resolve_docs:
         doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
         corpora.append(CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs"))
 

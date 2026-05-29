@@ -12,15 +12,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from thalamus.core.types import RepoId, Scope, TenantId, Vector
+from thalamus.core.types import RepoId, Scope, StructuralRef, TenantId, Vector
 from thalamus.routing import DeterministicEncoder
 from thalamus.structural import (
     CorpusSpec,
+    DocIngestor,
     InMemoryFileManifest,
     InMemoryStructuralGraph,
     InMemoryStructuralIndex,
     PythonAstIngestor,
     incremental_ingest,
+    markdown_files,
     python_files,
 )
 
@@ -160,3 +162,35 @@ def test_only_changed_files_are_re_embedded(tmp_path: Path) -> None:
     _build(repo, g, i, m, enc)
     # only a.py's node(s) re-embedded, not b.py's — far fewer than a full re-embed
     assert 0 < enc.encoded - baseline < baseline
+
+
+def test_corpus_root_override_ingests_from_outside_the_repo(tmp_path: Path) -> None:
+    # A docs corpus can target its own root (outside the code repo) and is change-detected there.
+    repo = tmp_path / "repo"
+    _write(repo, "a.py", "def a():\n    return 1\n")
+    docs = tmp_path / "elsewhere" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "guide.md").write_text("# Guide\n\nhello\n", encoding="utf-8")
+
+    graph, index, manifest = _fresh()
+    doc_index = InMemoryStructuralIndex(dim=32)
+    enc = _CountingEncoder()
+    corpora = [
+        CorpusSpec(PythonAstIngestor(), index, python_files, "code"),
+        CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs", root=docs),
+    ]
+
+    def build() -> object:
+        return incremental_ingest(
+            repo, SCOPE, corpora=corpora, graph=graph, manifest=manifest, encoder=enc
+        )
+
+    first = build()
+    assert first.rebuilt is True
+    # the doc from the override root was ingested into the shared graph
+    assert graph.get(StructuralRef(SCOPE, "document:guide.md")) is not None
+
+    assert build().rebuilt is False  # no change anywhere -> skip
+
+    (docs / "guide.md").write_text("# Guide\n\nhello there\n", encoding="utf-8")  # edit the doc
+    assert build().rebuilt is True  # change in the override root is detected

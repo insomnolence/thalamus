@@ -99,6 +99,9 @@ class ServeConfig:
     # "typescript") consuming a prebuilt --scip-index. Defaulted so existing callers are unaffected.
     code_language: str = "python"
     scip_index: Path | None = None
+    # Extra doc roots ingested as their own labeled corpora (e.g. a design-docs dir outside the
+    # code root). Empty = the single default docs corpus over --repo.
+    doc_roots: tuple[Path, ...] = ()
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -126,6 +129,12 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         help="path to a prebuilt .scip index (required for --code-language other than python). "
         "Build it out-of-band, e.g. scripts/scip-index-typescript.sh. NB: the index is the "
         "structure source-of-truth — regenerate it when the code changes.",
+    )
+    parser.add_argument(
+        "--doc-root", type=Path, action="append", default=None, dest="doc_roots", metavar="DIR",
+        help="ingest Markdown from this directory as its own 'Related docs (<dir>)' corpus; "
+        "repeatable. Use for doc dirs OUTSIDE the code root (e.g. a sibling design-docs dir). "
+        "When omitted, docs are taken from --repo as a single 'docs' corpus.",
     )
     parser.add_argument(
         "--resolve-calls", action=argparse.BooleanOptionalAction, default=True,
@@ -206,6 +215,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         k_hop=int(args.k_hop),
         code_language=code_language,
         scip_index=scip_index,
+        doc_roots=tuple(Path(d).resolve() for d in (args.doc_roots or ())),
         resolve_calls=bool(args.resolve_calls),
         structural_min_relevance=float(args.structural_min_relevance),
         max_structural_items=int(args.max_structural_items),
@@ -254,6 +264,7 @@ def build_serve_gateway(
     links: CrossLinkIndex | None = None
     code_index: StructuralIndex | None = None
     doc_index: StructuralIndex | None = None
+    doc_index_factory: Callable[[str], StructuralIndex] | None = None
     manifest: FileManifest | None = None
     supersession: SupersessionIndex | None = None
     if store is None and config.neo4j_uri is not None:
@@ -270,6 +281,12 @@ def build_serve_gateway(
         doc_index = Neo4jStructuralIndex(
             driver, scope, dim=encoder.dim, corpus="docs", encoder_id=config.encoder
         )
+        # Per-corpus Neo4j index for each extra --doc-root (each its own corpus tag/vector space).
+        def doc_index_factory(corpus: str) -> StructuralIndex:
+            return Neo4jStructuralIndex(
+                driver, scope, dim=encoder.dim, corpus=corpus, encoder_id=config.encoder
+            )
+
         manifest = Neo4jFileManifest(driver, scope)
         supersession = Neo4jSupersessionIndex(driver, scope)
     elif store is None:
@@ -289,6 +306,8 @@ def build_serve_gateway(
         links=links,
         code_index=code_index,
         doc_index=doc_index,
+        doc_roots=config.doc_roots or None,
+        doc_index_factory=doc_index_factory,
         manifest=manifest,
         supersession=supersession,
         rebuild=config.rebuild,
