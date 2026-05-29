@@ -18,6 +18,7 @@ class TestCaptureConfig:
     repo_id: str
     session_id: str
     terminal: bool
+    aggregate: bool
 
 
 def add_test_arguments(parser: argparse.ArgumentParser) -> None:
@@ -33,6 +34,12 @@ def add_test_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="mark this run as terminal Tier-2 validation for the session",
     )
+    parser.add_argument(
+        "--aggregate",
+        action="store_true",
+        help="collapse all suites into one TEST_RUN (use for runners like jest that emit one "
+        "suite per file, so any red suite makes the whole terminal validation FAILED)",
+    )
 
 
 def test_config(args: argparse.Namespace) -> TestCaptureConfig:
@@ -44,13 +51,17 @@ def test_config(args: argparse.Namespace) -> TestCaptureConfig:
         repo_id=str(args.repo_id) if args.repo_id else repo.name,
         session_id=str(args.session_id),
         terminal=bool(args.terminal),
+        aggregate=bool(args.aggregate),
     )
 
 
 def run_test_capture(config: TestCaptureConfig) -> int:
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     events = JUnitObserver(scope).ingest(
-        config.junit, session_id=SessionId(config.session_id), terminal=config.terminal
+        config.junit,
+        session_id=SessionId(config.session_id),
+        terminal=config.terminal,
+        aggregate=config.aggregate,
     )
     sink = JsonlTrajectorySink(config.repo / ".thalamus" / "logs" / "trajectory.jsonl")
     for event in events:

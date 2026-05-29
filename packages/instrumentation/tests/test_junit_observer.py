@@ -59,3 +59,39 @@ def test_terminal_result_carries_session_for_tier2_join(tmp_path: Path) -> None:
     )
     assert event.session_id == SessionId("s1")
     assert event.payload["terminal"] is True
+
+
+# jest-junit emits a <testsuites> root with one <testsuite> per test FILE — here the second
+# file has a failing test. Without aggregation the classifier would only see the last suite.
+JEST_MULTISUITE_ONE_FAIL = """<?xml version="1.0"?>
+<testsuites name="jest tests" tests="3" failures="1" errors="0" time="1.2">
+  <testsuite name="src/a.test.ts" tests="2" failures="0" errors="0" skipped="0" time="0.5">
+    <testcase classname="a" name="adds" time="0.1"/>
+    <testcase classname="a" name="subtracts" time="0.1"/>
+  </testsuite>
+  <testsuite name="src/b.test.ts" tests="1" failures="1" errors="0" skipped="0" time="0.7">
+    <testcase classname="b" name="divides">
+      <failure message="Expected 2 but received 3">at Object.&lt;anonymous&gt;</failure>
+    </testcase>
+  </testsuite>
+</testsuites>
+"""
+
+
+def test_jest_multisuite_per_suite_is_one_event_each(tmp_path: Path) -> None:
+    path = tmp_path / "junit.xml"
+    path.write_text(JEST_MULTISUITE_ONE_FAIL, encoding="utf-8")
+    events = JUnitObserver(SCOPE, event_id_factory=_ids).ingest(path)
+    assert len(events) == 2  # one TEST_RUN per jest file-suite
+    assert {e.payload["suite"] for e in events} == {"src/a.test.ts", "src/b.test.ts"}
+
+
+def test_jest_aggregate_collapses_to_one_failing_run(tmp_path: Path) -> None:
+    # The terminal-validation shape: one TEST_RUN summing all files; any red file -> failures>0.
+    path = tmp_path / "junit.xml"
+    path.write_text(JEST_MULTISUITE_ONE_FAIL, encoding="utf-8")
+    (event,) = JUnitObserver(SCOPE, event_id_factory=_ids).ingest(path, aggregate=True)
+    assert event.payload["tests"] == 3
+    assert event.payload["failures"] == 1
+    assert event.payload["suite"] == "aggregate"
+    assert event.payload["failed"][0]["id"] == "b::divides"

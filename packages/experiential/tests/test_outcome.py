@@ -89,3 +89,51 @@ def test_episode_records_its_outcome() -> None:
     record = EpisodeBuilder().build(EpisodeSpan(events=(_commit(10),), closed=True))
     assert record is not None
     assert record.metadata["outcome"] == EpisodeOutcome.COMMITTED
+
+
+# End-to-end: a jest run (captured as a terminal aggregate JUnit report) produces a real
+# Tier-2 *negative* label — the costly-to-fake outcome signal, not just green passes.
+_JEST_RED = """<?xml version="1.0"?>
+<testsuites name="jest tests" tests="2" failures="1" errors="0">
+  <testsuite name="src/a.test.ts" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="a" name="ok"/>
+  </testsuite>
+  <testsuite name="src/b.test.ts" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="b" name="bad"><failure message="boom">trace</failure></testcase>
+  </testsuite>
+</testsuites>
+"""
+
+_JEST_GREEN = """<?xml version="1.0"?>
+<testsuites name="jest tests" tests="2" failures="0" errors="0">
+  <testsuite name="src/a.test.ts" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="a" name="ok"/>
+  </testsuite>
+  <testsuite name="src/b.test.ts" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="b" name="also-ok"/>
+  </testsuite>
+</testsuites>
+"""
+
+
+def _jest_outcome(tmp_path, xml: str) -> EpisodeOutcome:  # noqa: ANN001 - test helper
+    from pathlib import Path
+
+    from thalamus.instrumentation import JUnitObserver
+
+    report = Path(tmp_path) / "junit.xml"
+    report.write_text(xml, encoding="utf-8")
+    events = JUnitObserver(S).ingest(report, terminal=True, aggregate=True)
+    return classify_outcome(events)
+
+
+def test_failing_jest_run_is_a_failed_tier2_label(tmp_path) -> None:  # noqa: ANN001
+    outcome = _jest_outcome(tmp_path, _JEST_RED)
+    assert outcome is EpisodeOutcome.FAILED
+    assert is_success(outcome) is False  # a real negative outcome — the discriminating signal
+
+
+def test_green_jest_run_is_a_passed_tier2_label(tmp_path) -> None:  # noqa: ANN001
+    outcome = _jest_outcome(tmp_path, _JEST_GREEN)
+    assert outcome is EpisodeOutcome.PASSED
+    assert is_success(outcome) is True
