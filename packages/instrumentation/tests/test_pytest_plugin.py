@@ -17,6 +17,7 @@ from thalamus.instrumentation import (
     default_session_path,
 )
 from thalamus.instrumentation.pytest_plugin import (
+    _full_suite_run,
     _resolve_session_id,
     _ThalamusPytestCapture,
     _truthy,
@@ -88,6 +89,20 @@ def test_capture_failure_never_breaks_the_run() -> None:
 def test_truthy() -> None:
     assert all(_truthy(v) for v in ("1", "true", "YES", "on", " On "))
     assert not any(_truthy(v) for v in (None, "", "0", "no", "off"))
+
+
+def _config(file_or_dir=None, keyword="", markexpr=""):
+    option = types.SimpleNamespace(
+        file_or_dir=file_or_dir or [], keyword=keyword, markexpr=markexpr
+    )
+    return types.SimpleNamespace(option=option)
+
+
+def test_full_suite_run_detection() -> None:
+    assert _full_suite_run(_config()) is True  # bare `pytest` -> validates everything -> terminal
+    assert _full_suite_run(_config(file_or_dir=["tests/test_x.py"])) is False  # targeted subset
+    assert _full_suite_run(_config(keyword="foo")) is False  # -k narrows -> not a full validation
+    assert _full_suite_run(_config(markexpr="slow")) is False  # -m narrows
 
 
 def test_resolve_session_id_prefers_explicit_env(

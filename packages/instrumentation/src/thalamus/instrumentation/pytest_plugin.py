@@ -22,7 +22,8 @@ Configuration via environment (mirrors the CLI conventions in ``thalamus.cli``):
 ``THALAMUS_REPO_ID``        scope repo id (default: repo dir name)
 ``THALAMUS_SESSION_ID``     correlate the run with a gateway recall session (optional;
                             falls back to the serve-published session context file)
-``THALAMUS_PYTEST_TERMINAL`` mark the run terminal Tier-2 validation (optional)
+``THALAMUS_PYTEST_TERMINAL`` force-mark the run a terminal Tier-2 validation (optional;
+                            a full-suite run is auto-marked terminal regardless)
 ==========================  ===========================================================
 """
 
@@ -60,6 +61,20 @@ def _resolve_session_id(repo: Path) -> SessionId | None:
         return SessionId(env)
     ctx = FileSessionContextStore(default_session_path(repo)).read()
     return ctx.session_id if ctx is not None else None
+
+
+def _full_suite_run(config: pytest.Config) -> bool:
+    """True if this is a full-suite run — the dev's *terminal validation* (vs a mid-dev subset).
+
+    A full run = no positional path args and no ``-k``/``-m`` narrowing (pytest collected the
+    configured ``testpaths``). Such a run validates everything, so it earns the terminal Tier-2
+    label: green → PASSED, red → FAILED. A targeted subset run is not a validation (terminal=False).
+    """
+    option = config.option
+    paths = getattr(option, "file_or_dir", None) or []
+    keyword = getattr(option, "keyword", "") or ""
+    markexpr = getattr(option, "markexpr", "") or ""
+    return not paths and not keyword and not markexpr
 
 
 def _failure_message(report: pytest.TestReport) -> str:
@@ -141,10 +156,13 @@ def pytest_configure(config: pytest.Config) -> None:
         tenant_id=TenantId(os.environ.get("THALAMUS_TENANT", "local")),
         repo_id=RepoId(os.environ.get("THALAMUS_REPO_ID", repo.name)),
     )
+    # A full-suite run is the terminal Tier-2 validation; the explicit env can still force it
+    # (e.g. a JUnit/CI capture). A targeted subset run stays non-terminal (mid-dev, not a verdict).
+    terminal = _truthy(os.environ.get("THALAMUS_PYTEST_TERMINAL")) or _full_suite_run(config)
     plugin = _ThalamusPytestCapture(
         sink=JsonlTrajectorySink(log_path),
         scope=scope,
         session_id=_resolve_session_id(repo),
-        terminal=_truthy(os.environ.get("THALAMUS_PYTEST_TERMINAL")),
+        terminal=terminal,
     )
     config.pluginmanager.register(plugin, "thalamus-pytest-capture")
