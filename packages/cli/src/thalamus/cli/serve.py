@@ -106,6 +106,10 @@ class ServeConfig:
     # retrieval/usage logging, no dreaming. For inspecting a brain (e.g. a second process on the
     # same Neo4j) without writing to it OR contaminating its measurement with the inspection.
     investigate: bool = False
+    # Where the brain's .thalamus data (logs, session, checkpoints) lives. Defaults to --repo;
+    # set it to keep brain data OUT of the code root — e.g. serve a TS project at --repo
+    # <mcp-server> but write the brain's data under an outer dir, leaving the code repo pristine.
+    data_dir: Path | None = None
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -189,6 +193,12 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "immediately); default 30",
     )
     parser.add_argument(
+        "--data-dir", type=Path, default=None,
+        help="directory under which the brain's .thalamus data (logs/session/checkpoints) lives "
+        "(default: --repo). Set it to keep brain data out of the code root — e.g. serve "
+        "--repo <code> but write data under an outer project dir.",
+    )
+    parser.add_argument(
         "--investigate", action="store_true",
         help="read-only investigation serve: expose recall (+ recent) only — no remember / "
         "record_usage, no retrieval/usage logging, no dreaming. For inspecting a brain live "
@@ -227,6 +237,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         scip_index=scip_index,
         doc_roots=tuple(Path(d).resolve() for d in (args.doc_roots or ())),
         investigate=bool(args.investigate),
+        data_dir=Path(args.data_dir).resolve() if args.data_dir else None,
         resolve_calls=bool(args.resolve_calls),
         structural_min_relevance=float(args.structural_min_relevance),
         max_structural_items=int(args.max_structural_items),
@@ -306,7 +317,7 @@ def build_serve_gateway(
             neo4j_password=config.neo4j_password, encoder_id=config.encoder,
         )
     episodes = store.scan(scope)  # cold-load Brain 1 to re-resolve cross-hemisphere links
-    logs = config.repo / ".thalamus" / "logs"
+    logs = (config.data_dir or config.repo) / ".thalamus" / "logs"
     gateway = build_two_hemisphere_gateway(
         config.repo,
         store=store,
@@ -440,6 +451,8 @@ def run_serve(config: ServeConfig) -> None:
     )
     gateway, store, episodes, supersession = build_serve_gateway(config, encoder=encoder)
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
+    # Brain data home (logs/session/dream) — may differ from the code root (--repo).
+    data_dir = config.data_dir or config.repo
 
     # Mint + publish a session id so recalls are keyed and out-of-band capture
     # (pytest plugin / git sync) can join to the same session — the measurement loop.
@@ -448,7 +461,7 @@ def run_serve(config: ServeConfig) -> None:
         default_session_id = (
             SessionId(config.session_id) if config.session_id else mint_session_id()
         )
-        FileSessionContextStore(default_session_path(config.repo)).publish(
+        FileSessionContextStore(default_session_path(data_dir)).publish(
             SessionContext(session_id=default_session_id, started_at=datetime.now(UTC))
         )
 
@@ -459,7 +472,7 @@ def run_serve(config: ServeConfig) -> None:
     ticker: DreamTicker | None = None
     if config.dream_tick and supersession is not None and not config.investigate:
         ticker = DreamTicker(
-            build_dream_scheduler(gateway, dream_log=JsonlDreamLog(dream_log_path(config.repo))),
+            build_dream_scheduler(gateway, dream_log=JsonlDreamLog(dream_log_path(data_dir))),
             make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo
             ),
@@ -482,7 +495,7 @@ def run_serve(config: ServeConfig) -> None:
         read_only=config.investigate,
         default_session_id=default_session_id,
         resolve_shown=build_shown_resolver(
-            store, scope, config.repo / ".thalamus" / "logs" / "retrieval.jsonl"
+            store, scope, data_dir / ".thalamus" / "logs" / "retrieval.jsonl"
         ),
         # HTTP serves many clients from one process: key each recall by its MCP connection
         # session so concurrent agents don't collapse into the single process session. stdio
