@@ -38,25 +38,47 @@ def is_success(outcome: EpisodeOutcome) -> bool | None:
     return None  # COMMITTED/OPEN — weak or absent signal; exclude from truth metrics
 
 
+def _failures(event: TrajectoryEvent) -> int:
+    """Failing + erroring tests in a TEST_RUN payload (0 = green)."""
+    return int(event.payload.get("failures", 0)) + int(event.payload.get("errors", 0))
+
+
 def classify_outcome(events: Sequence[TrajectoryEvent]) -> EpisodeOutcome:
     """Classify a trajectory span's Tier-2 outcome, deterministically.
 
-    Precedence: a revert after the last commit dominates; else a test explicitly
-    marked as terminal validation; else a bare commit; else nothing observed."""
+    Precedence:
+    1. A revert after the last commit dominates → REVERTED.
+    2. A test explicitly marked ``terminal`` (e.g. a post-commit validation) → its colour
+       (PASSED/FAILED) — the strongest declared signal.
+    3. Otherwise, if the span committed, the commit *blesses* the last test run up to that
+       commit as its validation: a **green** last run → PASSED (the green-tests-then-commit
+       flow the live capture actually produces). A non-terminal *failing* last run is NOT
+       trusted as FAILED — it may have been fixed before the commit — so it stays COMMITTED;
+       only an explicit terminal run (case 2) yields FAILED, keeping false-negatives out.
+    4. A bare commit with no validating run → COMMITTED; nothing observed → OPEN.
+    """
     ordered = sorted(events, key=lambda event: event.timestamp)
     commit_times = [e.timestamp for e in ordered if e.kind is TrajectoryEventKind.COMMIT]
     revert_times = [e.timestamp for e in ordered if e.kind is TrajectoryEventKind.REVERT]
     if revert_times and (not commit_times or max(revert_times) > max(commit_times)):
         return EpisodeOutcome.REVERTED
 
-    test_runs = [
+    terminal = [
         e
         for e in ordered
         if e.kind is TrajectoryEventKind.TEST_RUN and bool(e.payload.get("terminal", False))
     ]
-    if test_runs:
-        last = test_runs[-1]
-        failed = int(last.payload.get("failures", 0)) + int(last.payload.get("errors", 0))
-        return EpisodeOutcome.FAILED if failed > 0 else EpisodeOutcome.PASSED
+    if terminal:
+        return EpisodeOutcome.FAILED if _failures(terminal[-1]) > 0 else EpisodeOutcome.PASSED
 
-    return EpisodeOutcome.COMMITTED if commit_times else EpisodeOutcome.OPEN
+    if commit_times:
+        last_commit = max(commit_times)
+        pre_commit = [
+            e
+            for e in ordered
+            if e.kind is TrajectoryEventKind.TEST_RUN and e.timestamp <= last_commit
+        ]
+        if pre_commit and _failures(pre_commit[-1]) == 0:
+            return EpisodeOutcome.PASSED  # committed on green tests — a validated success
+        return EpisodeOutcome.COMMITTED
+    return EpisodeOutcome.OPEN
