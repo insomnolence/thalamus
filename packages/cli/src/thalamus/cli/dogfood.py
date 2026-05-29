@@ -47,6 +47,10 @@ class SyncConfig:
     neo4j_uri: str | None
     neo4j_user: str
     neo4j_password: str | None
+    # Where the brain's .thalamus data (checkpoint, trajectory log, session) lives. Defaults to
+    # --repo; set it so syncing a code repo's commits doesn't write .thalamus into that repo
+    # (and so it shares the SAME data dir as the matching `serve --data-dir`).
+    data_dir: Path | None = None
 
 
 def add_sync_arguments(parser: argparse.ArgumentParser) -> None:
@@ -55,7 +59,13 @@ def add_sync_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--checkpoint", type=Path, default=None,
-        help="checkpoint file (default: <repo>/.thalamus/checkpoints/git.cursor)",
+        help="checkpoint file (default: <data-dir>/.thalamus/checkpoints/git.cursor)",
+    )
+    parser.add_argument(
+        "--data-dir", type=Path, default=None,
+        help="directory under which the brain's .thalamus data (checkpoint/trajectory/session) "
+        "lives (default: --repo). Set it to keep .thalamus out of the code repo and to share the "
+        "same data dir as `serve --data-dir`.",
     )
     parser.add_argument("--tenant", default="local", help="tenant id for scoping")
     parser.add_argument(
@@ -70,10 +80,11 @@ def add_sync_arguments(parser: argparse.ArgumentParser) -> None:
 
 def sync_config(args: argparse.Namespace) -> SyncConfig:
     repo = Path(args.repo).resolve()
+    data_dir = Path(args.data_dir).resolve() if args.data_dir else repo
     checkpoint = (
         Path(args.checkpoint)
         if args.checkpoint is not None
-        else repo / ".thalamus" / "checkpoints" / "git.cursor"
+        else data_dir / ".thalamus" / "checkpoints" / "git.cursor"
     )
     return SyncConfig(
         repo=repo,
@@ -85,6 +96,7 @@ def sync_config(args: argparse.Namespace) -> SyncConfig:
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
         neo4j_user=os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
+        data_dir=data_dir,
     )
 
 
@@ -113,13 +125,15 @@ def build_ingestor(config: SyncConfig) -> tuple[GitEpisodeIngestor, Store]:
         encoder_id=config.encoder,
     )
     scope = Scope(tenant_id=TenantId(config.tenant), repo_id=RepoId(config.repo_id))
+    data_dir = config.data_dir or config.repo  # brain data home — may differ from the code repo
     # Stamp commits with the active serve session so they join that session's recalls
-    # (the cue↔outcome join); GitObserver itself stays session-agnostic.
+    # (the cue↔outcome join); GitObserver itself stays session-agnostic. The session file is
+    # under the brain's data dir (shared with `serve --data-dir`), not the code repo.
     source = SessionStampingSource(
         GitObserver(config.repo, scope),
-        FileSessionContextStore(default_session_path(config.repo)),
+        FileSessionContextStore(default_session_path(data_dir)),
     )
-    trajectory_path = config.repo / ".thalamus" / "logs" / "trajectory.jsonl"
+    trajectory_path = data_dir / ".thalamus" / "logs" / "trajectory.jsonl"
     ingestor = GitEpisodeIngestor(
         source,
         encoder=encoder,
