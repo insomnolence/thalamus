@@ -99,7 +99,11 @@ def build_server(
         focus: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Recall relevant memory for a prompt; returns an assembled context block."""
+        """Search project memory BEFORE substantive work (decisions, architecture questions,
+        starting a task, reorienting); returns prior decisions + why + related code/docs.
+        Recall even when unsure — finding nothing still tells you there's a gap. The result ends
+        with a `# retrieval_event_id:` line; pass it to record_usage if the context shaped your
+        work. `focus` optionally narrows to a file/subsystem."""
         connection_session: str | None = None
         if per_connection_sessions:
             from fastmcp.server.dependencies import get_context  # active per-request context
@@ -127,7 +131,9 @@ def build_server(
 
         @server.tool
         async def record_usage(event_id: str, output_text: str) -> str:
-            """Record deterministic Tier-1 usage for a prior recall."""
+            """Report that a recall shaped your output — how the brain learns which memories
+            help. Call after using recalled context. `event_id`: from the recall's
+            `# retrieval_event_id:` line. `output_text`: what you produced (a summary is fine)."""
             key = EventId(event_id)
             payload = pending.pop(key, None)
             if payload is not None:  # fast path: the live payload is still cached
@@ -165,11 +171,12 @@ def build_server(
             memory_id: str | None = None,
             supersedes: str | None = None,
         ) -> str:
-            """Retain a durable repo decision, constraint, gotcha, investigation, or preference.
-
-            Pass ``supersedes`` with a prior memory's id to mark it replaced (§13.18): the old
-            belief is demoted below current truth at recall but kept, surfaced with this fact's
-            why/text as the supersession reason. Never deletes the old memory."""
+            """Save a durable fact so future sessions don't rediscover it: after a decision,
+            gotcha, correction, or finished chunk of work. `kind`:
+            decision|constraint|gotcha|investigation|preference. `why`: the reasoning (makes it
+            useful later). `files`: paths it's about. `importance`: 1 normal, 2 load-bearing,
+            3 project-defining. `supersedes`: id of a memory this replaces (kept but demoted,
+            never dropped)."""
             record = remember_writer(
                 kind, text, why, files or (), importance, memory_id, supersedes
             )
