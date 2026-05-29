@@ -19,9 +19,10 @@ from __future__ import annotations
 import importlib.util
 import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Retriever, Store, SupersessionIndex
 from thalamus.core.types import Hemisphere, MemoryRecord, Scope
 from thalamus.experiential import InMemorySupersessionIndex
@@ -49,6 +50,7 @@ from thalamus.structural import (
     InMemoryStructuralIndex,
     JediCallIngestor,
     PythonAstIngestor,
+    ScipIngestor,
     StructuralGraph,
     StructuralIndex,
     StructuralNode,
@@ -58,6 +60,7 @@ from thalamus.structural import (
     incremental_ingest,
     link_by_footprint,
     markdown_files,
+    typescript_files,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +80,34 @@ def _default_ingestor(resolve_calls: bool) -> Ingestor:
     return CompositeIngestor([ast_pass, JediCallIngestor()])
 
 
+def _scip_ingestor(scip_index: Path) -> Ingestor:
+    """The language-agnostic SCIP ingestor (structure + precise calls in one pass).
+
+    ``scip_index`` is a `.scip` artifact built out-of-band (e.g. ``scip-typescript``;
+    see ``scripts/scip-index-typescript.sh``)."""
+    if importlib.util.find_spec("google.protobuf") is None:
+        raise ThalamusError(
+            "SCIP ingestion needs the 'scip' extra: install thalamus-structural[scip]"
+        )
+    return ScipIngestor(scip_index)
+
+
+def _code_ingestor(code_language: str, scip_index: Path | None, resolve_calls: bool) -> Ingestor:
+    """Pick the code-corpus ingestor for the language (SCIP for non-Python)."""
+    if code_language == "python":
+        return _default_ingestor(resolve_calls)
+    if code_language == "typescript":
+        if scip_index is None:
+            raise ThalamusError("code_language='typescript' requires a scip_index path")
+        return _scip_ingestor(scip_index)
+    raise ThalamusError(f"unknown code_language: {code_language!r} (python|typescript)")
+
+
+def _code_files_for(code_language: str) -> Callable[[Path], list[Path]]:
+    """The change-detection file enumerator for the code corpus' language."""
+    return typescript_files if code_language == "typescript" else code_files
+
+
 def build_two_hemisphere_gateway(
     repo: Path,
     *,
@@ -94,6 +125,8 @@ def build_two_hemisphere_gateway(
     rebuild: bool = False,
     k: int = 5,
     k_hop: int = 1,
+    code_language: str = "python",
+    scip_index: Path | None = None,
     resolve_calls: bool = True,
     resolve_docs: bool = True,
     structural_min_relevance: float = 0.0,
@@ -111,13 +144,18 @@ def build_two_hemisphere_gateway(
     ``rebuild=True`` forces the full re-derive oracle (drop the persisted graph + manifest).
     Returns a :class:`Gateway` whose recall fuses experiential memories with the structural
     nodes they touched (plus their ``k_hop`` neighbours)."""
-    # Two re-derivable Brain-2 corpora: code (AST + jedi calls) and docs (Markdown). They share
-    # the one graph substrate (typed nodes) but get SEPARATE vector indexes (no-pollution).
-    code_ingestor = ingestor if ingestor is not None else _default_ingestor(resolve_calls)
+    # Two re-derivable Brain-2 corpora: code (Python AST + jedi, or SCIP for TS/others) and
+    # docs (Markdown). They share the one graph substrate (typed nodes) but get SEPARATE vector
+    # indexes (no-pollution). The code language selects both the ingestor and the change-detection
+    # file enumerator; an explicitly injected ``ingestor`` overrides the language default.
+    code_ingestor = (
+        ingestor if ingestor is not None
+        else _code_ingestor(code_language, scip_index, resolve_calls)
+    )
     graph = graph if graph is not None else InMemoryStructuralGraph(scope)
     manifest = manifest if manifest is not None else InMemoryFileManifest()
     code_index = code_index if code_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
-    corpora = [CorpusSpec(code_ingestor, code_index, code_files, "code")]
+    corpora = [CorpusSpec(code_ingestor, code_index, _code_files_for(code_language), "code")]
     if resolve_docs:
         doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
         corpora.append(CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs"))
@@ -198,14 +236,19 @@ def build_two_hemisphere_gateway(
 
 
 def build_code_graph(
-    repo: Path, scope: Scope, *, resolve_calls: bool = True
+    repo: Path,
+    scope: Scope,
+    *,
+    resolve_calls: bool = True,
+    code_language: str = "python",
+    scip_index: Path | None = None,
 ) -> tuple[StructuralGraph, list[StructuralNode]]:
-    """Re-derive just the code structural graph (AST + jedi calls; no docs, no vector index).
+    """Re-derive just the code structural graph (Python AST + jedi, or SCIP; no docs/index).
 
     The substrate footprint operations need — memory footprints and work footprints both link
     to code module nodes, and k-hop spreads over the code edges. Shared by serve's full
     two-hemisphere build (conceptually) and the footprint usage-attribution pass."""
-    result = _default_ingestor(resolve_calls).ingest_path(repo, scope)
+    result = _code_ingestor(code_language, scip_index, resolve_calls).ingest_path(repo, scope)
     graph: StructuralGraph = InMemoryStructuralGraph(scope)
     graph.add(result)
     return graph, list(result.nodes)

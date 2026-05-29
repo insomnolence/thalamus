@@ -47,7 +47,13 @@ from thalamus.structural.schema import (
     StructuralEdge,
     StructuralNode,
 )
-from thalamus.structural.sources import code_files, markdown_files, python_files
+from thalamus.structural.scip_ingestor import ScipIngestor
+from thalamus.structural.sources import (
+    code_files,
+    markdown_files,
+    python_files,
+    typescript_files,
+)
 
 __all__ = [
     "AttributedUse",
@@ -73,6 +79,7 @@ __all__ = [
     "Neo4jStructuralGraph",
     "Neo4jStructuralIndex",
     "PythonAstIngestor",
+    "ScipIngestor",
     "ScoredNode",
     "ShownMemory",
     "SourceAnchor",
@@ -90,4 +97,5 @@ __all__ = [
     "module_index",
     "node_text",
     "python_files",
+    "typescript_files",
 ]

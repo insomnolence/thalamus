@@ -66,3 +66,26 @@ def markdown_files(root: Path, ignore_dirs: Iterable[str] = IGNORE_DIRS) -> list
     if root.is_file():
         return [root] if root.suffix.lower() in suffixes else []
     return _walk(root, lambda name: name.lower().endswith(suffixes), ignore_dirs)
+
+
+def _is_typescript_source(name: str) -> bool:
+    """A ``.ts``/``.tsx`` source file — excluding declaration files and tests."""
+    if not name.endswith((".ts", ".tsx")):
+        return False
+    if name.endswith(".d.ts"):  # ambient type declarations — not project structure
+        return False
+    return not name.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"))
+
+
+def typescript_files(root: Path, ignore_dirs: Iterable[str] = IGNORE_DIRS) -> list[Path]:
+    """TypeScript source for the structural **code corpus** — project ``.ts``/``.tsx``
+    minus declaration files (``.d.ts``) and tests.
+
+    The SCIP code corpus counterpart of :func:`code_files`: it drives change detection
+    for ``incremental_ingest`` (the ingestor reads the prebuilt index, but the enumerator
+    hashes the source on disk), so the paths it yields must match the ingestor's
+    ``anchor.path`` (``root / relative_path``). Tests/declarations are excluded for the
+    same reason as Python: they are semantic noise for structural retrieval."""
+    if root.is_file():
+        return [root] if _is_typescript_source(root.name) else []
+    return _walk(root, _is_typescript_source, frozenset(ignore_dirs) | _TEST_DIRS)

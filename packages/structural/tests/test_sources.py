@@ -41,3 +41,37 @@ def test_code_files_single_file(tmp_path: Path) -> None:
     test.write_text("x = 1\n", encoding="utf-8")
     assert code_files(impl) == [impl]
     assert code_files(test) == []  # a single test file is excluded too
+
+
+def _touch(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("export const x = 1;\n", encoding="utf-8")
+
+
+def test_typescript_files_selects_ts_tsx_excludes_decls_and_tests(tmp_path: Path) -> None:
+    from thalamus.structural.sources import typescript_files
+
+    for rel in (
+        "src/a.ts",
+        "src/b.tsx",
+        "src/types.d.ts",  # declaration file
+        "src/a.test.ts",  # test
+        "src/a.spec.tsx",  # spec
+        "tests/c.ts",  # under tests/
+        "node_modules/dep/d.ts",  # dependency
+    ):
+        _touch(tmp_path / rel)
+
+    found = {p.relative_to(tmp_path).as_posix() for p in typescript_files(tmp_path)}
+    assert found == {"src/a.ts", "src/b.tsx"}
+
+
+def test_typescript_files_single_file(tmp_path: Path) -> None:
+    from thalamus.structural.sources import typescript_files
+
+    src = tmp_path / "x.ts"
+    _touch(src)
+    assert typescript_files(src) == [src]
+    decl = tmp_path / "x.d.ts"
+    _touch(decl)
+    assert typescript_files(decl) == []

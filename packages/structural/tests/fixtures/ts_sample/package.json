@@ -1,0 +1,6 @@
+{
+  "name": "ts-sample",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Tiny fixture project for the Thalamus SCIP ingestor tests."
+}

@@ -24,6 +24,7 @@ from pathlib import Path
 from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_store
 from thalamus.cli.dream import build_dream_scheduler, dream_log_path, make_dream_context_factory
 from thalamus.cli.remember import RememberConfig, run_remember
+from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
 from thalamus.core.types import (
     EventId,
@@ -94,6 +95,10 @@ class ServeConfig:
     port: int = 8000
     http_token: str | None = None
     allowed_origins: tuple[str, ...] = ()
+    # Brain-2 code corpus language: "python" (AST + jedi) or a SCIP language (e.g.
+    # "typescript") consuming a prebuilt --scip-index. Defaulted so existing callers are unaffected.
+    code_language: str = "python"
+    scip_index: Path | None = None
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -112,8 +117,20 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--k", type=int, default=5, help="memories per recall")
     parser.add_argument("--k-hop", type=int, default=1, help="structural hops to expand")
     parser.add_argument(
+        "--code-language", choices=("python", "typescript"), default="python",
+        help="Brain-2 code corpus language. 'python' uses the AST + jedi ingestors; "
+        "'typescript' (and other SCIP languages) consumes a prebuilt --scip-index.",
+    )
+    parser.add_argument(
+        "--scip-index", type=Path, default=None,
+        help="path to a prebuilt .scip index (required for --code-language other than python). "
+        "Build it out-of-band, e.g. scripts/scip-index-typescript.sh. NB: the index is the "
+        "structure source-of-truth — regenerate it when the code changes.",
+    )
+    parser.add_argument(
         "--resolve-calls", action=argparse.BooleanOptionalAction, default=True,
-        help="resolve Brain-2 call edges with jedi at startup (--no-resolve-calls skips the cost)",
+        help="resolve Brain-2 call edges with jedi at startup (--no-resolve-calls skips the cost; "
+        "a no-op for SCIP languages, which already carry precise calls)",
     )
     parser.add_argument(
         "--structural-min-relevance", type=float, default=0.6,
@@ -175,6 +192,10 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
 
 def serve_config(args: argparse.Namespace) -> ServeConfig:
     repo = Path(args.repo).resolve()
+    code_language = str(args.code_language)
+    scip_index = Path(args.scip_index).resolve() if args.scip_index else None
+    if code_language != "python" and scip_index is None:
+        raise ThalamusError(f"--code-language {code_language} requires --scip-index <path>")
     return ServeConfig(
         repo=repo,
         tenant=str(args.tenant),
@@ -183,6 +204,8 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         encoder=str(args.encoder),
         k=int(args.k),
         k_hop=int(args.k_hop),
+        code_language=code_language,
+        scip_index=scip_index,
         resolve_calls=bool(args.resolve_calls),
         structural_min_relevance=float(args.structural_min_relevance),
         max_structural_items=int(args.max_structural_items),
@@ -271,6 +294,8 @@ def build_serve_gateway(
         rebuild=config.rebuild,
         k=config.k,
         k_hop=config.k_hop,
+        code_language=config.code_language,
+        scip_index=config.scip_index,
         resolve_calls=config.resolve_calls,
         structural_min_relevance=config.structural_min_relevance,
         max_structural_items=config.max_structural_items,

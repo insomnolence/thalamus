@@ -8,8 +8,14 @@ dependencies = ["thalamus-core"]
 # jedi powers resolved call/reference edges (JediCallIngestor). Optional: the
 # zero-dep AST ingestor works without it; the calls layer degrades gracefully when
 # jedi is absent. (Interim Python resolver; SCIP is the precise/multi-language path.)
+#
+# scip powers the language-agnostic ScipIngestor: it consumes a pre-built `.scip`
+# index (produced out-of-band by a per-language indexer, e.g. scip-typescript) via
+# the vendored protobuf bindings in ``_scip/``. Optional: only needed to ingest a
+# SCIP corpus (TypeScript, etc.); the Python AST path needs neither.
 [project.optional-dependencies]
 jedi = ["jedi>=0.19"]
+scip = ["protobuf>=4.21"]
 
 [build-system]
 requires = ["hatchling"]
