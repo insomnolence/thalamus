@@ -21,6 +21,7 @@ from thalamus.cli.backup import (
 )
 from thalamus.cli.dogfood import add_sync_arguments, run_sync, sync_config
 from thalamus.cli.dream import add_dream_arguments, dream_config, run_dream
+from thalamus.cli.health import add_health_arguments, health_config, run_health
 from thalamus.cli.probe_eval import add_probe_eval_arguments, probe_eval_config, run_probe_eval
 from thalamus.cli.remember import add_remember_arguments, remember_config, run_remember
 from thalamus.cli.serve import add_serve_arguments, run_serve, serve_config
@@ -41,6 +42,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     add_test_arguments(sub.add_parser("capture-tests", help="append JUnit evidence to the raw log"))
     add_verdict_arguments(
         sub.add_parser("verdict", help="report the 'does the brain help?' verdict on the real logs")
+    )
+    add_health_arguments(
+        sub.add_parser("health", help="one-screen health view of a brain (verdict + activity)")
     )
     add_attribute_arguments(
         sub.add_parser("attribute", help="compute the deterministic footprint usage signal")
@@ -65,6 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_test_capture(test_config(args))
     elif args.command == "verdict":
         run_verdict(verdict_config(args))
+    elif args.command == "health":
+        run_health(health_config(args))
     elif args.command == "attribute":
         run_attribute(attribute_config(args))
     elif args.command == "backup":
