@@ -64,6 +64,18 @@ class Neo4jFileManifest:
         self._driver = driver
         self._scope = scope
         self._database = database
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        # Back the per-file MERGE in save() with an index — without it each of a large repo's
+        # thousands of FileManifest MERGEs is a full label scan (quadratic, same failure mode as
+        # the SNode key).
+        _run(
+            self._driver,
+            self._database,
+            f"CREATE CONSTRAINT manifest_scope IF NOT EXISTS "
+            f"FOR (m:{_MANIFEST}) REQUIRE (m.tenant_id, m.repo_id, m.path) IS UNIQUE",
+        )
 
     def load(self, scope: Scope) -> dict[str, ManifestEntry]:
         if scope != self._scope:

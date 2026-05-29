@@ -34,6 +34,7 @@ _KEY_TO_DEST: dict[str, str] = {
     "language": "code_language",
     "scip_index": "scip_index",
     "doc_roots": "doc_roots",
+    "transport": "transport",
     "http_port": "port",
     "http_host": "host",
     "encoder": "encoder",

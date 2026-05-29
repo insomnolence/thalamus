@@ -97,6 +97,19 @@ class Neo4jStructuralGraph:
         self._driver = driver
         self._scope = scope
         self._database = database
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        # A uniqueness constraint on the node key backs every MERGE-by-key (add/edges/remove)
+        # with an index. WITHOUT it each MERGE is a full SNode label scan — O(nodes) per merge,
+        # i.e. quadratic over a build's edges (it wedged a real 16k-node / 21k-edge ingest for
+        # minutes). Mirrors the experiential store's memory_scope constraint.
+        _run(
+            self._driver,
+            self._database,
+            f"CREATE CONSTRAINT snode_scope IF NOT EXISTS "
+            f"FOR (m:{_NODE}) REQUIRE (m.tenant_id, m.repo_id, m.node_id) IS UNIQUE",
+        )
 
     def add(self, result: IngestResult) -> None:
         nodes = [_node_props(node) for node in result.nodes]
