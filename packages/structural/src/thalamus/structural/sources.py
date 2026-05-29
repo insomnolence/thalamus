@@ -15,6 +15,16 @@ from pathlib import Path
 # only needs the non-hidden noise.
 IGNORE_DIRS = frozenset({"venv", "__pycache__", "build", "dist", "node_modules", "site-packages"})
 
+# Test directories + filename patterns. Tests are part of the project on disk, but they are
+# semantic noise for "how does X work" structural retrieval (they embed near the terms of the
+# code they exercise) and would crowd the gateway's structural slots — so the CODE corpus
+# (``code_files``) excludes them. The general ``python_files`` walker still returns everything.
+_TEST_DIRS = frozenset({"tests", "test"})
+
+
+def _is_test_filename(name: str) -> bool:
+    return name == "conftest.py" or name.startswith("test_") or name.endswith("_test.py")
+
 
 def _walk(root: Path, accept: Callable[[str], bool], ignore_dirs: Iterable[str]) -> list[Path]:
     ignore = frozenset(ignore_dirs)
@@ -30,6 +40,24 @@ def python_files(root: Path, ignore_dirs: Iterable[str] = IGNORE_DIRS) -> list[P
     if root.is_file():
         return [root]
     return _walk(root, lambda name: name.endswith(".py"), ignore_dirs)
+
+
+def code_files(root: Path, ignore_dirs: Iterable[str] = IGNORE_DIRS) -> list[Path]:
+    """Python files for the structural **code corpus** — project source *minus tests*.
+
+    Excludes ``tests``/``test`` directories and ``test_*.py`` / ``*_test.py`` / ``conftest.py``
+    so test functions stop surfacing as "Related code" noise on conceptual queries. Tests stay
+    on disk and findable; this only governs what Brain 2 indexes. (Trade-off: Brain 2 loses
+    test nodes, so the call graph no longer shows "called by test_…"; a separate ``tests`` corpus
+    is the future refinement if that coverage signal is wanted.)"""
+    if root.is_file():
+        keep = root.name.endswith(".py") and not _is_test_filename(root.name)
+        return [root] if keep else []
+    return _walk(
+        root,
+        lambda name: name.endswith(".py") and not _is_test_filename(name),
+        frozenset(ignore_dirs) | _TEST_DIRS,
+    )
 
 
 def markdown_files(root: Path, ignore_dirs: Iterable[str] = IGNORE_DIRS) -> list[Path]:

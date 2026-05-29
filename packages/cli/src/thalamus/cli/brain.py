@@ -53,11 +53,11 @@ from thalamus.structural import (
     StructuralIndex,
     StructuralNode,
     StructuralRetriever,
+    code_files,
     footprint_staleness,
     incremental_ingest,
     link_by_footprint,
     markdown_files,
-    python_files,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,7 +117,7 @@ def build_two_hemisphere_gateway(
     graph = graph if graph is not None else InMemoryStructuralGraph(scope)
     manifest = manifest if manifest is not None else InMemoryFileManifest()
     code_index = code_index if code_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
-    corpora = [CorpusSpec(code_ingestor, code_index, python_files, "code")]
+    corpora = [CorpusSpec(code_ingestor, code_index, code_files, "code")]
     if resolve_docs:
         doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
         corpora.append(CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs"))

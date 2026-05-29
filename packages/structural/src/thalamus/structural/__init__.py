@@ -47,7 +47,7 @@ from thalamus.structural.schema import (
     StructuralEdge,
     StructuralNode,
 )
-from thalamus.structural.sources import markdown_files, python_files
+from thalamus.structural.sources import code_files, markdown_files, python_files
 
 __all__ = [
     "AttributedUse",
@@ -82,6 +82,7 @@ __all__ = [
     "StructuralNode",
     "StructuralRetriever",
     "UsageAttributor",
+    "code_files",
     "footprint_staleness",
     "incremental_ingest",
     "link_by_footprint",
