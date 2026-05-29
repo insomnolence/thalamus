@@ -40,7 +40,7 @@ from thalamus.dreaming import DreamTicker, JsonlDreamLog
 from thalamus.experiential import Neo4jSupersessionIndex
 from thalamus.gateway import Gateway
 from thalamus.gateway.http_security import build_security_middleware
-from thalamus.gateway.server import RememberWriter, ShownResolver
+from thalamus.gateway.server import RecentReader, RememberWriter, ShownResolver
 from thalamus.instrumentation import (
     FileSessionContextStore,
     JsonlEventSink,
@@ -50,6 +50,7 @@ from thalamus.instrumentation import (
     mint_session_id,
     read_event_log,
 )
+from thalamus.retrieval import render_recent, select_recent
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import (
@@ -357,6 +358,20 @@ def build_shown_resolver(store: Store, scope: Scope, retrieval_log: Path) -> Sho
     return resolve
 
 
+def build_recent_reader(store: Store, scope: Scope) -> RecentReader:
+    """The temporal-query backend for the ``recent`` tool: scan durable memory, return the
+    newest first. A backend ``ORDER BY created_at DESC LIMIT`` can replace the scan+sort here
+    at scale, behind this same seam."""
+
+    def read(limit: int, kind: str | None) -> str:
+        records = select_recent(
+            store.scan(scope), limit=limit, kinds=(kind,) if kind else None
+        )
+        return render_recent(records)
+
+    return read
+
+
 def run_serve(config: ServeConfig) -> None:
     """Build the brain from durable state and serve ``recall`` over MCP (blocking)."""
     from thalamus.gateway import build_server  # lazy: the 'mcp' extra
@@ -413,6 +428,7 @@ def run_serve(config: ServeConfig) -> None:
         # session so concurrent agents don't collapse into the single process session. stdio
         # (one client) keeps the process session, which the out-of-band Tier-2 join relies on.
         per_connection_sessions=(config.transport == "http"),
+        recent_reader=build_recent_reader(store, scope),
     )
     try:
         session_note = (

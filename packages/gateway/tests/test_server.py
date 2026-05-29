@@ -129,6 +129,27 @@ async def test_recall_tool_lists_in_server() -> None:
         assert "recall" in {tool.name for tool in tools}
 
 
+async def test_recent_tool_lists_newest_first() -> None:
+    from fastmcp import Client
+    from thalamus.retrieval import render_recent, select_recent
+
+    older = MemoryRecord(MemoryId("old"), Hemisphere.EXPERIENTIAL, "decision", "older note",
+                         SCOPE, datetime(2026, 5, 1, tzinfo=UTC))
+    newer = MemoryRecord(MemoryId("new"), Hemisphere.EXPERIENTIAL, "decision", "newer note",
+                         SCOPE, datetime(2026, 5, 28, tzinfo=UTC))
+    records = [older, newer]
+
+    def reader(limit: int, kind: str | None) -> str:
+        return render_recent(select_recent(records, limit=limit, kinds=(kind,) if kind else None))
+
+    server = build_server(_gateway(), SCOPE, recent_reader=reader)
+    async with Client(server) as client:
+        assert "recent" in {t.name for t in await client.list_tools()}
+        result = await client.call_tool("recent", {"limit": 5})
+        text = result.data if isinstance(result.data, str) else result.content[0].text
+        assert text.index("new") < text.index("old")  # newest first
+
+
 async def test_remember_tool_is_exposed_only_with_writer_and_calls_it() -> None:
     from fastmcp import Client
 

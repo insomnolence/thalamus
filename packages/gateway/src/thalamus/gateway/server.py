@@ -29,6 +29,10 @@ type RememberWriter = Callable[
 # fallback when the in-memory payload cache misses (serve restart / another worker).
 type ShownResolver = Callable[[EventId], Sequence[tuple[MemoryId, str]] | None]
 
+# Render the most recent memories (newest first), optionally filtered by kind — the temporal
+# query behind the ``recent`` tool, distinct from relevance-ranked ``recall``.
+type RecentReader = Callable[[int, str | None], str]
+
 
 def resolve_session_id(
     explicit: str | None, connection_session: str | None, default: SessionId | None
@@ -65,6 +69,7 @@ def build_server(
     default_session_id: SessionId | None = None,
     resolve_shown: ShownResolver | None = None,
     per_connection_sessions: bool = False,
+    recent_reader: RecentReader | None = None,
 ) -> FastMCP:
     """Build a FastMCP server exposing the gateway's ``recall`` tool.
 
@@ -131,6 +136,17 @@ def build_server(
                 signals = gateway.record_outcome_for(key, shown, output_text)
                 return f"recorded {len(signals)} usage signal(s)"
         raise ValueError(f"unknown or already-recorded retrieval event: {event_id}")
+
+    if recent_reader is not None:
+
+        @server.tool
+        async def recent(limit: int = 10, kind: str | None = None) -> str:
+            """List the most recently recorded memories, newest first (optionally one ``kind``).
+
+            Answers "what's the latest / what did we just do" — a time-ordered view, distinct
+            from the relevance-ranked ``recall`` (use ``recall`` to find what's *relevant* to a
+            topic; use this to see what's *recent*)."""
+            return recent_reader(limit, kind)
 
     if remember_writer is not None:
 
