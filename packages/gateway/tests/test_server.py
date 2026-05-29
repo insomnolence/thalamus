@@ -129,6 +129,20 @@ async def test_recall_tool_lists_in_server() -> None:
         assert "recall" in {tool.name for tool in tools}
 
 
+async def test_read_only_server_exposes_recall_but_not_writes() -> None:
+    from fastmcp import Client
+
+    def write(*args: object) -> MemoryRecord:  # a writer that must never be exposed read-only
+        raise AssertionError("read-only server must not register a write tool")
+
+    server = build_server(_gateway(), SCOPE, remember_writer=write, read_only=True)
+    async with Client(server) as client:
+        tools = {tool.name for tool in await client.list_tools()}
+    assert "recall" in tools  # reads stay
+    assert "record_usage" not in tools  # the Tier-1 write is suppressed
+    assert "remember" not in tools  # no writer is wired in read-only
+
+
 async def test_recent_tool_lists_newest_first() -> None:
     from fastmcp import Client
     from thalamus.retrieval import render_recent, select_recent

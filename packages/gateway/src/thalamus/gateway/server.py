@@ -70,6 +70,7 @@ def build_server(
     resolve_shown: ShownResolver | None = None,
     per_connection_sessions: bool = False,
     recent_reader: RecentReader | None = None,
+    read_only: bool = False,
 ) -> FastMCP:
     """Build a FastMCP server exposing the gateway's ``recall`` tool.
 
@@ -120,22 +121,26 @@ def build_server(
         suffix = "" if payload.event_id is None else f"\n# retrieval_event_id: {payload.event_id}\n"
         return payload.render() + suffix
 
-    @server.tool
-    async def record_usage(event_id: str, output_text: str) -> str:
-        """Record deterministic Tier-1 usage for a prior recall."""
-        key = EventId(event_id)
-        payload = pending.pop(key, None)
-        if payload is not None:  # fast path: the live payload is still cached
-            signals = gateway.record_outcome(payload, output_text)
-            return f"recorded {len(signals)} usage signal(s)"
-        # Fallback: the cached payload is gone (serve restarted, or another worker served the
-        # recall). Rebuild the shown memories from durable state so the signal isn't lost.
-        if resolve_shown is not None:
-            shown = resolve_shown(key)
-            if shown is not None:
-                signals = gateway.record_outcome_for(key, shown, output_text)
+    # ``record_usage`` writes a Tier-1 signal, so it is suppressed in a read-only/investigate
+    # serve — a connection used only to inspect a brain must not contaminate its measurement.
+    if not read_only:
+
+        @server.tool
+        async def record_usage(event_id: str, output_text: str) -> str:
+            """Record deterministic Tier-1 usage for a prior recall."""
+            key = EventId(event_id)
+            payload = pending.pop(key, None)
+            if payload is not None:  # fast path: the live payload is still cached
+                signals = gateway.record_outcome(payload, output_text)
                 return f"recorded {len(signals)} usage signal(s)"
-        raise ValueError(f"unknown or already-recorded retrieval event: {event_id}")
+            # Fallback: the cached payload is gone (serve restarted, or another worker served the
+            # recall). Rebuild the shown memories from durable state so the signal isn't lost.
+            if resolve_shown is not None:
+                shown = resolve_shown(key)
+                if shown is not None:
+                    signals = gateway.record_outcome_for(key, shown, output_text)
+                    return f"recorded {len(signals)} usage signal(s)"
+            raise ValueError(f"unknown or already-recorded retrieval event: {event_id}")
 
     if recent_reader is not None:
 
@@ -148,7 +153,7 @@ def build_server(
             topic; use this to see what's *recent*)."""
             return recent_reader(limit, kind)
 
-    if remember_writer is not None:
+    if remember_writer is not None and not read_only:
 
         @server.tool
         async def remember(

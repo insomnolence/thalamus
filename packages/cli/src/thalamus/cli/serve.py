@@ -102,6 +102,10 @@ class ServeConfig:
     # Extra doc roots ingested as their own labeled corpora (e.g. a design-docs dir outside the
     # code root). Empty = the single default docs corpus over --repo.
     doc_roots: tuple[Path, ...] = ()
+    # Read-only investigation serve: recall (+ recent) only — no remember/record_usage, no
+    # retrieval/usage logging, no dreaming. For inspecting a brain (e.g. a second process on the
+    # same Neo4j) without writing to it OR contaminating its measurement with the inspection.
+    investigate: bool = False
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -185,6 +189,12 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "immediately); default 30",
     )
     parser.add_argument(
+        "--investigate", action="store_true",
+        help="read-only investigation serve: expose recall (+ recent) only — no remember / "
+        "record_usage, no retrieval/usage logging, no dreaming. For inspecting a brain live "
+        "without writing to it or polluting its verdict with the inspection itself.",
+    )
+    parser.add_argument(
         "--transport", choices=("stdio", "http"), default="stdio",
         help="MCP transport: stdio (default, one client, used by Claude Code) or http "
         "(Streamable HTTP, many concurrent clients over the network)",
@@ -216,6 +226,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         code_language=code_language,
         scip_index=scip_index,
         doc_roots=tuple(Path(d).resolve() for d in (args.doc_roots or ())),
+        investigate=bool(args.investigate),
         resolve_calls=bool(args.resolve_calls),
         structural_min_relevance=float(args.structural_min_relevance),
         max_structural_items=int(args.max_structural_items),
@@ -319,8 +330,10 @@ def build_serve_gateway(
         structural_min_relevance=config.structural_min_relevance,
         max_structural_items=config.max_structural_items,
         max_memory_chars=config.max_memory_chars,
-        event_sink=JsonlEventSink(logs / "retrieval.jsonl"),
-        usage_sink=JsonlUsageSink(logs / "usage.jsonl"),
+        # Investigate mode logs nothing — inspecting a brain must not write retrieval/usage events
+        # into its own logs (that would contaminate the verdict it is being used to check).
+        event_sink=None if config.investigate else JsonlEventSink(logs / "retrieval.jsonl"),
+        usage_sink=None if config.investigate else JsonlUsageSink(logs / "usage.jsonl"),
     )
     return gateway, store, episodes, supersession
 
@@ -444,7 +457,7 @@ def run_serve(config: ServeConfig) -> None:
     # composition-time dicts otherwise never get. Off the FastMCP event loop by construction.
     # Only meaningful with a durable supersession index (in-memory shell has nothing to refresh).
     ticker: DreamTicker | None = None
-    if config.dream_tick and supersession is not None:
+    if config.dream_tick and supersession is not None and not config.investigate:
         ticker = DreamTicker(
             build_dream_scheduler(gateway, dream_log=JsonlDreamLog(dream_log_path(config.repo))),
             make_dream_context_factory(
@@ -457,13 +470,16 @@ def run_serve(config: ServeConfig) -> None:
         gateway,
         scope,
         name=f"thalamus:{config.repo_id}",
-        remember_writer=build_remember_writer(
+        # Investigate mode is read-only: no remember writer (and build_server suppresses
+        # record_usage), so the inspection connection cannot mutate or measure the brain.
+        remember_writer=None if config.investigate else build_remember_writer(
             config,
             store=store,
             encoder=encoder,
             supersession=supersession,
             on_write=ticker.trigger if ticker is not None else None,
         ),
+        read_only=config.investigate,
         default_session_id=default_session_id,
         resolve_shown=build_shown_resolver(
             store, scope, config.repo / ".thalamus" / "logs" / "retrieval.jsonl"
