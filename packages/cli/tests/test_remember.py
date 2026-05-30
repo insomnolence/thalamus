@@ -128,20 +128,38 @@ def test_remember_records_supersession_edge(tmp_path: Path) -> None:
     assert store.get(old.ref) is not None
 
 
-def test_supersede_unknown_memory_is_rejected(tmp_path: Path) -> None:
+def test_supersede_unknown_memory_is_skipped_not_fatal(tmp_path: Path) -> None:
+    # A dangling supersedes must NOT lose the new memory or raise — raising-after-save is what
+    # made agents see an error and retry, creating duplicates. The memory is kept; edge skipped.
     store = InMemoryStore(dim=64)
-    with pytest.raises(ThalamusError, match="cannot supersede unknown memory"):
-        run_remember(
-            _config(tmp_path, files=(), supersedes="retained:does-not-exist"),
-            store=store, encoder=DeterministicEncoder(dim=64),
-            supersession=InMemorySupersessionIndex(),
-        )
+    index = InMemorySupersessionIndex()
+    record = run_remember(
+        _config(tmp_path, files=(), supersedes="retained:does-not-exist"),
+        store=store, encoder=DeterministicEncoder(dim=64), supersession=index,
+    )
+    assert store.get(record.ref) is not None  # memory kept
+    assert index.superseded(record.scope) == {}  # no dangling edge forged
 
 
-def test_supersede_without_an_index_is_rejected(tmp_path: Path) -> None:
+def test_supersede_without_an_index_is_skipped_not_fatal(tmp_path: Path) -> None:
     store = InMemoryStore(dim=64)
-    with pytest.raises(ThalamusError, match="supersedes requires durable"):
-        run_remember(
-            _config(tmp_path, files=(), supersedes="retained:whatever"),
-            store=store, encoder=DeterministicEncoder(dim=64),
-        )
+    record = run_remember(  # no supersession index -> can't record the edge, but must still save
+        _config(tmp_path, files=(), supersedes="retained:whatever"),
+        store=store, encoder=DeterministicEncoder(dim=64),
+    )
+    assert store.get(record.ref) is not None
+
+
+def test_supersede_accepts_bare_hash_without_the_retained_prefix(tmp_path: Path) -> None:
+    # Agents often pass the bare hash from a recall instead of the full retained:<hash> id;
+    # the supersede target must still resolve.
+    store = InMemoryStore(dim=64)
+    index = InMemorySupersessionIndex()
+    enc = DeterministicEncoder(dim=64)
+    old = run_remember(_config(tmp_path, files=()), store=store, encoder=enc, supersession=index)
+    bare = old.memory_id.removeprefix("retained:")  # what an agent might pass
+    run_remember(
+        _config(tmp_path, files=(), supersedes=bare, text="a newer, replacing belief"),
+        store=store, encoder=enc, supersession=index,
+    )
+    assert old.ref in index.superseded(old.scope)  # resolved despite the missing prefix

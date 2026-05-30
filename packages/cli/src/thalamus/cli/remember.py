@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 import math
 import os
 from collections.abc import Callable
@@ -31,6 +32,8 @@ from thalamus.core.types import (
     TenantId,
 )
 from thalamus.routing import BgeEncoder, DeterministicEncoder
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_DIM = 128
 _DEFAULT_ENCODER = "bge-small"
@@ -163,27 +166,45 @@ def build_retained_record(
     )
 
 
+def _resolve_supersedes(scope: Scope, raw: str, store: Store) -> MemoryRef | None:
+    """An existing memory matching ``raw``, tolerant of a missing ``retained:`` prefix.
+
+    Agents routinely pass the bare hash from a recall instead of the full ``retained:<hash>``
+    id; try the prefixed form too so a correct-but-prefixless reference still resolves."""
+    if not raw:
+        return None
+    candidates = [raw] if raw.startswith("retained:") else [f"retained:{raw}", raw]
+    for candidate in candidates:
+        ref = MemoryRef(scope, MemoryId(candidate))
+        if store.get(ref) is not None:
+            return ref
+    return None
+
+
 def _record_supersession(
     config: RememberConfig,
     record: MemoryRecord,
     store: Store,
     supersession: SupersessionIndex | None,
-) -> MemoryRef:
-    """Record the D1 supersession edge for a freshly-written belief; return the superseded ref.
+) -> MemoryRef | None:
+    """**Best-effort** D1 supersession edge for a freshly-written belief; returns the superseded
+    ref, or ``None`` when the edge can't be recorded (logged + skipped).
 
-    Conservative (§14.4): refuses to create a dangling edge — the superseded memory must
-    already exist — and never touches the old record. The edge's reason is this belief's
-    ``why`` (else its text): the §13.17 "switched to Y because Z" narrative."""
+    The new memory is ALWAYS kept — a bad ``supersedes`` (no storage / unknown target / self)
+    never raises, because run_remember has already saved the record: raising here would surface
+    an error to the caller that *also* persisted the memory, so an agent retries → duplicates.
+    Conservative (§14.4): a dangling edge is skipped, never forged; the old record is untouched."""
+    raw = config.supersedes or ""
     if supersession is None:
-        raise ThalamusError(
-            "supersedes requires durable supersession storage; "
-            "set THALAMUS_NEO4J_URI so the edge can be persisted"
-        )
-    old_ref = MemoryRef(record.scope, MemoryId(config.supersedes or ""))
+        logger.warning("supersedes=%r ignored: no durable supersession storage set", raw)
+        return None
+    old_ref = _resolve_supersedes(record.scope, raw, store)
+    if old_ref is None:
+        logger.warning("supersedes target %r not found — kept the memory, skipped the edge", raw)
+        return None
     if old_ref == record.ref:
-        raise ThalamusError("a memory cannot supersede itself")
-    if store.get(old_ref) is None:
-        raise ThalamusError(f"cannot supersede unknown memory: {config.supersedes}")
+        logger.warning("supersedes=%r is the new memory itself — skipped", raw)
+        return None
     supersession.supersede(
         old=old_ref, new=record.ref, reason=config.why or config.text, at=record.created_at
     )
