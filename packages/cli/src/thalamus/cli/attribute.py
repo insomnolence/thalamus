@@ -63,6 +63,12 @@ class AttributeConfig:
     neo4j_uri: str | None
     neo4j_user: str
     neo4j_password: str | None
+    # Code corpus language for the footprint graph (TS/etc. need a prebuilt --scip-index), and
+    # the data dir whose .thalamus/logs to read — decoupled from --repo (the code root), so a TS
+    # project can be attributed with --repo <mcp-server> but logs read from an outer data dir.
+    code_language: str = "python"
+    scip_index: Path | None = None
+    data_dir: Path | None = None
 
 
 def add_attribute_arguments(parser: argparse.ArgumentParser) -> None:
@@ -83,11 +89,24 @@ def add_attribute_arguments(parser: argparse.ArgumentParser) -> None:
         "--resolve-calls", action=argparse.BooleanOptionalAction, default=True,
         help="resolve jedi call edges for richer k-hop (--no-resolve-calls skips the ~9s cost)",
     )
+    parser.add_argument(
+        "--code-language", choices=("python", "typescript"), default="python",
+        help="code corpus language for the footprint graph (must match the served brain)",
+    )
+    parser.add_argument(
+        "--scip-index", type=Path, default=None,
+        help="prebuilt .scip index (required for --code-language other than python)",
+    )
+    parser.add_argument(
+        "--data-dir", type=Path, default=None,
+        help="directory whose .thalamus/logs to read (default: --repo)",
+    )
 
 
 def attribute_config(args: argparse.Namespace) -> AttributeConfig:
     repo = Path(args.repo).resolve()
-    logs = repo / ".thalamus" / "logs"
+    data_dir = Path(args.data_dir).resolve() if args.data_dir else repo
+    logs = data_dir / ".thalamus" / "logs"
     return AttributeConfig(
         repo=repo,
         tenant=str(args.tenant),
@@ -102,6 +121,9 @@ def attribute_config(args: argparse.Namespace) -> AttributeConfig:
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
         neo4j_user=os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
+        code_language=str(args.code_language),
+        scip_index=Path(args.scip_index).resolve() if args.scip_index else None,
+        data_dir=data_dir,
     )
 
 
@@ -174,7 +196,10 @@ def run_attribute(
             for record in store.scan(scope)
         }
         if graph is None or nodes is None:
-            graph, nodes = build_code_graph(config.repo, scope, resolve_calls=config.resolve_calls)
+            graph, nodes = build_code_graph(
+                config.repo, scope, resolve_calls=config.resolve_calls,
+                code_language=config.code_language, scip_index=config.scip_index,
+            )
         attributor = FootprintAttributor(graph, nodes, repo_root=config.repo, k_hop=config.k_hop)
 
         events = list(read_event_log(config.retrieval_log)) if config.retrieval_log.exists() else []
