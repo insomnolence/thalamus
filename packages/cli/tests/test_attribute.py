@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from thalamus.cli.attribute import AttributeConfig, compute_attribution, run_attribute
@@ -50,31 +50,32 @@ def _graph(repo: Path) -> tuple[InMemoryStructuralGraph, list[StructuralNode]]:
     return graph, nodes
 
 
-def _event(eid: str, session: str, memory: str) -> RetrievalEvent:
+def _event(eid: str, session: str, memory: str, ts: datetime = NOW) -> RetrievalEvent:
     return RetrievalEvent(
-        event_id=EventId(eid), timestamp=NOW, scope=SCOPE, policy_id="L0", cue_text="q",
+        event_id=EventId(eid), timestamp=ts, scope=SCOPE, policy_id="L0", cue_text="q",
         k_requested=1, candidates=[], shown=[ShownItem(MemoryId(memory), rank=0, propensity=1.0)],
         session_id=SessionId(session),
     )
 
 
-def _commit(eid: str, session: str, files: list[str]) -> TrajectoryEvent:
+def _commit(eid: str, session: str, files: list[str], ts: datetime = NOW) -> TrajectoryEvent:
     return TrajectoryEvent(
-        EventId(eid), NOW, SCOPE, TrajectoryEventKind.COMMIT,
+        EventId(eid), ts, SCOPE, TrajectoryEventKind.COMMIT,
         {"sha": eid, "subject": "work", "files": files}, session_id=SessionId(session),
     )
 
 
-def test_compute_attribution_joins_recalls_to_session_work(tmp_path: Path) -> None:
+def test_compute_attribution_joins_recalls_to_committed_work_by_time(tmp_path: Path) -> None:
     graph, nodes = _graph(tmp_path)
     attributor = FootprintAttributor(graph, nodes, repo_root=tmp_path)
     footprints = {MemoryId("m_hit"): ("a.py",), MemoryId("m_miss"): ("c.py",)}
     events = [
-        _event("e1", "s1", "m_hit"),   # s1 committed a.py -> m_hit (footprint a.py) used
+        _event("e1", "s1", "m_hit"),   # recall at NOW; a commit lands in its window -> used
         _event("e2", "s1", "m_miss"),  # m_miss (footprint c.py) not connected -> not used
-        _event("e3", "s2", "m_hit"),   # s2 has recalls but NO commit -> skipped (missing data)
+        # s2 recalls a day before any commit -> its window has no work -> skipped (missing data)
+        _event("e3", "s2", "m_hit", ts=NOW - timedelta(days=1)),
     ]
-    trajectory = [_commit("t1", "s1", ["a.py"])]
+    trajectory = [_commit("t1", "s1", ["a.py"])]  # at NOW, inside s1's window
 
     computed = compute_attribution(events, trajectory, footprints, attributor)
     signals = {(s.event_id, s.memory_id): s for s in computed}
@@ -82,7 +83,19 @@ def test_compute_attribution_joins_recalls_to_session_work(tmp_path: Path) -> No
     assert signals[(EventId("e1"), MemoryId("m_hit"))].used is True
     assert signals[(EventId("e1"), MemoryId("m_hit"))].kind == "footprint"
     assert signals[(EventId("e2"), MemoryId("m_miss"))].used is False
-    assert (EventId("e3"), MemoryId("m_hit")) not in signals  # s2 had no work to attribute against
+    assert (EventId("e3"), MemoryId("m_hit")) not in signals  # no commit in s2's time window
+
+
+def test_compute_attribution_is_session_agnostic_by_time(tmp_path: Path) -> None:
+    # The multi-agent case: a recall keyed to the agent's session joins to a commit stamped with
+    # a DIFFERENT session (the serve's), because attribution joins by time, not session id.
+    graph, nodes = _graph(tmp_path)
+    attributor = FootprintAttributor(graph, nodes, repo_root=tmp_path)
+    footprints = {MemoryId("m_hit"): ("a.py",)}
+    events = [_event("e1", "agent-claude", "m_hit")]
+    trajectory = [_commit("t1", "serve-xyz", ["a.py"])]  # different session, same time
+    computed = compute_attribution(events, trajectory, footprints, attributor)
+    assert any(s.event_id == EventId("e1") and s.used for s in computed)
 
 
 def _config(repo: Path) -> AttributeConfig:

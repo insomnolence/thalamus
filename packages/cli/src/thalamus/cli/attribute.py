@@ -21,6 +21,7 @@ import argparse
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from thalamus.cli.brain import build_code_graph, build_store, close_store
@@ -46,6 +47,9 @@ from thalamus.structural import (
 
 _DEFAULT_DIM = 128
 _DEFAULT_ENCODER = "bge-small"
+# Grace past a recall-session's last recall in which a commit still counts as that session's
+# work — covers "recall, then commit the change a bit later". Tunable via --window-hours.
+_DEFAULT_WINDOW = timedelta(hours=2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +73,7 @@ class AttributeConfig:
     code_language: str = "python"
     scip_index: Path | None = None
     data_dir: Path | None = None
+    window_hours: float = 2.0  # grace past a recall-session for counting a commit as its work
 
 
 def add_attribute_arguments(parser: argparse.ArgumentParser) -> None:
@@ -101,6 +106,11 @@ def add_attribute_arguments(parser: argparse.ArgumentParser) -> None:
         "--data-dir", type=Path, default=None,
         help="directory whose .thalamus/logs to read (default: --repo)",
     )
+    parser.add_argument(
+        "--window-hours", type=float, default=2.0,
+        help="grace (hours) past a recall-session's last recall in which a commit still counts "
+        "as that session's work (the time-join that lets attribution work across agents)",
+    )
 
 
 def attribute_config(args: argparse.Namespace) -> AttributeConfig:
@@ -124,6 +134,7 @@ def attribute_config(args: argparse.Namespace) -> AttributeConfig:
         code_language=str(args.code_language),
         scip_index=Path(args.scip_index).resolve() if args.scip_index else None,
         data_dir=data_dir,
+        window_hours=float(args.window_hours),
     )
 
 
@@ -132,12 +143,21 @@ def compute_attribution(
     trajectory: Iterable[TrajectoryEvent],
     footprints: Mapping[MemoryId, Sequence[str]],
     attributor: UsageAttributor,
+    *,
+    window: timedelta = _DEFAULT_WINDOW,
 ) -> list[UsageSignal]:
-    """Pure: group recalls + committed work by session, attribute each session that has work.
+    """Pure: attribute each recall-session's surfaced memories to the work committed around it.
 
-    A session with recalls but no committed work is skipped — there is nothing to attribute
-    against, so its recalls are *missing data*, not zero-usage (§13.13)."""
+    Recalls are grouped by their (agent) session and that session's recall time-span is tracked.
+    The committed work is then joined by **time**, not by commit session id: a commit within the
+    session's recall window (extended by ``window`` to catch the change a recall informed) counts
+    as that session's work — regardless of which session, if any, the out-of-band commit was
+    stamped with. This is what makes attribution work for a brain shared by multiple agents over
+    HTTP, where recalls carry per-agent session ids but commits are stamped with the serve's
+    session (or none), so an exact-session join finds nothing (§13.13). A recall-session whose
+    window contains no commits is skipped — missing data, not zero usage."""
     recalls: dict[SessionId, list[tuple[EventId, list[ShownMemory]]]] = {}
+    span: dict[SessionId, tuple[datetime, datetime]] = {}
     for event in events:
         if event.session_id is None:
             continue
@@ -146,18 +166,23 @@ def compute_attribution(
             for item in event.shown
         ]
         recalls.setdefault(event.session_id, []).append((event.event_id, shown))
+        lo, hi = span.get(event.session_id, (event.timestamp, event.timestamp))
+        span[event.session_id] = (min(lo, event.timestamp), max(hi, event.timestamp))
 
-    work: dict[SessionId, set[str]] = {}
-    for entry in trajectory:
-        if entry.session_id is None or entry.kind is not TrajectoryEventKind.COMMIT:
-            continue
-        work.setdefault(entry.session_id, set()).update(entry.payload.get("files", []))
+    commits: list[tuple[datetime, list[str]]] = [
+        (entry.timestamp, list(entry.payload.get("files", [])))
+        for entry in trajectory
+        if entry.kind is TrajectoryEventKind.COMMIT
+    ]
 
     signals: list[UsageSignal] = []
     for session_id, session_recalls in recalls.items():
-        session_work = work.get(session_id)
+        lo, hi = span[session_id]
+        session_work = {
+            path for ts, files in commits if lo <= ts <= hi + window for path in files
+        }
         if not session_work:
-            continue  # no committed work to attribute against — skip (missing data)
+            continue  # no commits in the session's window — skip (missing data)
         for use in attributor.attribute(session_recalls, session_work):
             signals.append(
                 UsageSignal(use.event_id, use.memory_id, use.connection, use.value, use.used)
@@ -208,7 +233,10 @@ def run_attribute(
             if config.trajectory_log.exists()
             else []
         )
-        signals = compute_attribution(events, trajectory, footprints, attributor)
+        signals = compute_attribution(
+            events, trajectory, footprints, attributor,
+            window=timedelta(hours=config.window_hours),
+        )
     finally:
         if own_store:
             close_store(store)
