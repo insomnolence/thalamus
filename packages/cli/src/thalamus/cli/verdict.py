@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from thalamus.core.types import SessionId
@@ -32,15 +33,27 @@ from thalamus.eval import (
     session_utility,
     utility_at_k,
 )
-from thalamus.experiential import SessionBoundedSegmenter, classify_outcome, is_success
+from thalamus.experiential import (
+    FateSignals,
+    FateVerdict,
+    SessionBoundedSegmenter,
+    assess_fate,
+    classify_outcome,
+    fate_success,
+    is_success,
+)
 from thalamus.instrumentation import (
     RetrievalEvent,
     TrajectoryEvent,
+    TrajectoryEventKind,
     UsageSignal,
     read_event_log,
     read_trajectory_log,
     read_usage_log,
+    reverted_shas,
 )
+
+_DEFAULT_WINDOW = timedelta(hours=2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +72,10 @@ class VerdictReport:
     utility: UtilityReport  # Tier-1, over all events
     n_tier1_sessions: int  # sessions with a per-session Tier-1 utility
     n_tier2_sessions: int  # sessions with a captured Tier-2 outcome label
-    monitor: ProxyTruthReport  # the joined proxy↔truth verdict
+    monitor: ProxyTruthReport  # the joined proxy↔truth verdict (test-label + session-work fate)
     monitor_coverage: float  # joined sessions / sessions with Tier-1
+    n_reverted_sessions: int  # sessions whose committed work was later reverted (fate negative)
+    monitor_without_fate: ProxyTruthReport  # the same monitor minus the fate layer (with/without)
 
 
 def add_verdict_arguments(parser: argparse.ArgumentParser) -> None:
@@ -112,16 +127,69 @@ def tier2_by_session(trajectory: Iterable[TrajectoryEvent]) -> dict[SessionId, b
     return result
 
 
+def session_fate(
+    events: Iterable[RetrievalEvent],
+    trajectory: Iterable[TrajectoryEvent],
+    reverted: frozenset[str],
+    *,
+    window: timedelta = _DEFAULT_WINDOW,
+    survival_threshold: int = 5,
+) -> dict[SessionId, FateVerdict]:
+    """Per-session fate of the work the session committed (OLR §13.17, the session-work consumer).
+
+    NEGATIVE if any of the session's commits were later reverted — the post-hoc objective negative
+    that ``classify_outcome``'s in-span view misses — POSITIVE if its work survived substantial
+    later activity. Commits are joined to a session by **time** (its recall span + ``window``), the
+    same out-of-band join Tier-1 footprint attribution uses (so it holds for a brain shared by many
+    agents over HTTP). Sessions with no committed work in their window are omitted."""
+    spans: dict[SessionId, tuple[datetime, datetime]] = {}
+    for event in events:
+        if event.session_id is None:
+            continue
+        lo, hi = spans.get(event.session_id, (event.timestamp, event.timestamp))
+        spans[event.session_id] = (min(lo, event.timestamp), max(hi, event.timestamp))
+    commits = [
+        (event.timestamp, str(event.payload.get("sha", "")))
+        for event in trajectory
+        if event.kind is TrajectoryEventKind.COMMIT
+    ]
+    result: dict[SessionId, FateVerdict] = {}
+    for session_id, (lo, hi) in spans.items():
+        cutoff = hi + window
+        own = {sha for timestamp, sha in commits if sha and lo <= timestamp <= cutoff}
+        if not own:
+            continue
+        later = sum(1 for timestamp, _ in commits if timestamp > cutoff)
+        result[session_id] = assess_fate(
+            FateSignals(reverted=bool(own & reverted), survived_activity=later),
+            survival_threshold=survival_threshold,
+        )
+    return result
+
+
 def compute_verdict(
     events: list[RetrievalEvent],
     signals: list[UsageSignal],
     trajectory: list[TrajectoryEvent],
     *,
     k: int,
+    reverted: frozenset[str] = frozenset(),
+    window: timedelta = _DEFAULT_WINDOW,
 ) -> VerdictReport:
-    """The pure verdict computation over already-loaded logs (no I/O — unit-testable)."""
+    """The pure verdict computation over already-loaded logs (no I/O — unit-testable).
+
+    Tier-2 is the test-based ``classify_outcome`` label, **augmented by session-work fate**: a
+    session whose committed work was later reverted is forced negative (the post-hoc signal the
+    in-span classifier misses). Reported with *and* without the fate layer so it stays removable
+    and measurable — the revert override is the costly-to-fake negative; survival positives are
+    not folded into the gate yet (conservative)."""
     tier1 = session_utility(events, signals, k)
-    tier2 = tier2_by_session(trajectory)
+    base_tier2 = tier2_by_session(trajectory)
+    fate = session_fate(events, trajectory, reverted, window=window)
+    reverted_sessions = {
+        session for session, verdict in fate.items() if fate_success(verdict) is False
+    }
+    tier2 = {**base_tier2, **{session: False for session in reverted_sessions}}
     units = join_proxy_truth(tier1, tier2)
     return VerdictReport(
         k=k,
@@ -130,6 +198,8 @@ def compute_verdict(
         n_tier2_sessions=len(tier2),
         monitor=proxy_truth(units),
         monitor_coverage=len(units) / len(tier1) if tier1 else 0.0,
+        n_reverted_sessions=len(reverted_sessions),
+        monitor_without_fate=proxy_truth(join_proxy_truth(tier1, base_tier2)),
     )
 
 
@@ -159,6 +229,11 @@ def _render(report: VerdictReport) -> str:
             f"  alignment:           {m.alignment:+.3f}  (>0: proxy tracks truth)",
             f"  reward-hacking suspected: {m.reward_hacking_suspected}",
         ]
+    lines.append(
+        f"session-work fate: {report.n_reverted_sessions} session(s) with reverted work "
+        f"(alignment without fate {report.monitor_without_fate.alignment:+.3f} "
+        f"→ with fate {m.alignment:+.3f})"
+    )
     return "\n".join(lines)
 
 
@@ -169,6 +244,8 @@ def run_verdict(config: VerdictConfig) -> VerdictReport:
     # derived by `attribute`) and the citation signal (secondary, from record_usage).
     signals = _load(config.usage_log, read_usage_log) + _load(config.attributed_log, read_usage_log)
     trajectory = _load(config.trajectory_log, read_trajectory_log)
-    report = compute_verdict(events, signals, trajectory, k=config.k)
+    report = compute_verdict(
+        events, signals, trajectory, k=config.k, reverted=reverted_shas(config.repo)
+    )
     print(_render(report))
     return report

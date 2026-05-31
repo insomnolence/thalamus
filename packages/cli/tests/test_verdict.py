@@ -17,6 +17,8 @@ from thalamus.instrumentation import (
     JsonlUsageSink,
     RetrievalEvent,
     ShownItem,
+    TrajectoryEvent,
+    TrajectoryEventKind,
     UsageSignal,
     build_test_run_event,
 )
@@ -37,6 +39,35 @@ def _event(eid: str, session: str, shown: list[str]) -> RetrievalEvent:
 
 def _signal(eid: str, mid: str, *, used: bool) -> UsageSignal:
     return UsageSignal(EventId(eid), MemoryId(mid), "overlap", 1.0 if used else 0.0, used)
+
+
+def _commit(eid: str, sha: str) -> TrajectoryEvent:
+    return TrajectoryEvent(
+        event_id=EventId(eid),
+        timestamp=NOW,
+        scope=SCOPE,
+        kind=TrajectoryEventKind.COMMIT,
+        payload={"sha": sha, "files": ["a.py"]},
+    )
+
+
+def test_revert_forces_a_session_negative_that_classify_misses() -> None:
+    # s1 recalls + uses m1 and commits work (no test run → classify leaves it COMMITTED/excluded);
+    # that commit is later reverted → session-work fate forces s1 negative → a proxy<->truth unit
+    # that the in-span classifier alone would never have produced.
+    events = [_event("e1", "s1", ["m1"])]
+    signals = [_signal("e1", "m1", used=True)]
+    trajectory = [_commit("c1", "deadbeef")]
+
+    report = compute_verdict(events, signals, trajectory, k=5, reverted=frozenset({"deadbeef"}))
+    assert report.n_reverted_sessions == 1
+    assert report.monitor.n_units == 1  # the fate negative created a joinable unit
+    assert report.monitor_without_fate.n_units == 0  # classify alone labelled nothing
+
+    # Without a matching revert, the same session yields no Tier-2 label (COMMITTED → excluded).
+    clean = compute_verdict(events, signals, trajectory, k=5, reverted=frozenset())
+    assert clean.n_reverted_sessions == 0
+    assert clean.monitor.n_units == 0
 
 
 def _test_run(eid: str, session: str, *, failures: int) -> object:
