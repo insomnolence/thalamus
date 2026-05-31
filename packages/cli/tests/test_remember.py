@@ -84,12 +84,13 @@ def test_remember_refuses_ephemeral_cli_storage(tmp_path: Path) -> None:
         run_remember(_config(tmp_path))
 
 
-def test_remember_rejects_file_outside_repository(tmp_path: Path) -> None:
-    with pytest.raises(ThalamusError, match="outside the repository"):
-        build_retained_record(
-            _config(tmp_path / "repo", files=(tmp_path / "elsewhere.py",)),
-            now=lambda: NOW,
-        )
+def test_remember_skips_file_outside_repository(tmp_path: Path) -> None:
+    # An out-of-repo file path must NOT lose the memory — it is skipped, not fatal (§14.4).
+    record = build_retained_record(
+        _config(tmp_path / "repo", files=(tmp_path / "elsewhere.py",)),
+        now=lambda: NOW,
+    )
+    assert record.metadata["footprint"] == []  # the out-of-repo file dropped; memory kept
 
 
 def test_remember_rejects_invalid_mcp_inputs(tmp_path: Path) -> None:
