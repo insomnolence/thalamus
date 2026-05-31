@@ -8,11 +8,14 @@ materializes them as Brain-1 records — the unfinished half of §10 step 1
 
 from thalamus.experiential.episode import EpisodeBuilder, WhyComponent, WhyProvenance
 from thalamus.experiential.fate import (
+    FateContext,
     FatePolarity,
     FateSignals,
     FateVerdict,
     OutcomeTier,
     assess_fate,
+    compute_fate,
+    fate_signals_for,
     fate_success,
 )
 from thalamus.experiential.ingest import ingest_episodes
@@ -47,6 +50,7 @@ __all__ = [
     "EpisodeOutcome",
     "EpisodeSegmenter",
     "EpisodeSpan",
+    "FateContext",
     "FatePolarity",
     "FateSignals",
     "FateVerdict",
@@ -64,6 +68,8 @@ __all__ = [
     "WhyProvenance",
     "assess_fate",
     "classify_outcome",
+    "compute_fate",
+    "fate_signals_for",
     "fate_success",
     "ingest_episodes",
     "is_success",

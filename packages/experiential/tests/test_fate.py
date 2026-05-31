@@ -7,11 +7,24 @@ NOT a positive, and the objective/model tier is reported so the verdict can spli
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+from thalamus.core.types import (
+    Hemisphere,
+    MemoryId,
+    MemoryRecord,
+    RepoId,
+    Scope,
+    Supersession,
+    TenantId,
+)
 from thalamus.experiential.fate import (
+    FateContext,
     FatePolarity,
     FateSignals,
     OutcomeTier,
     assess_fate,
+    compute_fate,
     fate_success,
 )
 from thalamus.experiential.recorded_outcome import RecordedEvent
@@ -102,3 +115,64 @@ def test_fate_success_mapping() -> None:
     assert fate_success(assess_fate(FateSignals(reuse_sessions=3))) is True
     assert fate_success(assess_fate(FateSignals(reverted=True))) is False
     assert fate_success(assess_fate(FateSignals())) is None
+
+
+# --- compute_fate: the pure aggregator that assembles signals from pre-loaded fate context ---
+
+_SCOPE = Scope(tenant_id=TenantId("t"), repo_id=RepoId("r"))
+
+
+def _mem(memory_id: str, content: str = "") -> MemoryRecord:
+    return MemoryRecord(
+        memory_id=MemoryId(memory_id),
+        hemisphere=Hemisphere.EXPERIENTIAL,
+        kind="decision",
+        content=content,
+        scope=_SCOPE,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def _superseded(memory_id: str, reason: str) -> dict[MemoryId, Supersession]:
+    record = Supersession(
+        superseded_by=MemoryId("newer"), reason=reason, at=datetime(2026, 1, 2, tzinfo=UTC)
+    )
+    return {MemoryId(memory_id): record}
+
+
+def test_compute_fate_positive_from_reuse() -> None:
+    context = FateContext(superseded={}, reuse_sessions={MemoryId("m1"): 3})
+    verdicts = compute_fate([_mem("m1")], context)
+    assert verdicts[MemoryId("m1")].polarity is FatePolarity.POSITIVE
+
+
+def test_compute_fate_negative_when_a_sha_named_in_text_was_reverted() -> None:
+    context = FateContext(superseded={}, reverted_shas=frozenset({"abc1234"}))
+    verdicts = compute_fate([_mem("m1", "committed as abc1234 then it broke")], context)
+    verdict = verdicts[MemoryId("m1")]
+    assert verdict.polarity is FatePolarity.NEGATIVE  # revert dominates the LANDED text-event
+    assert verdict.tier is OutcomeTier.OBJECTIVE
+
+
+def test_compute_fate_negative_from_reverted_episode_sha() -> None:
+    context = FateContext(superseded={}, reverted_shas=frozenset({"deadbee"}))
+    verdict = compute_fate([_mem("episode:deadbee")], context)[MemoryId("episode:deadbee")]
+    assert verdict.polarity is FatePolarity.NEGATIVE
+
+
+def test_compute_fate_superseded_with_undo_reason_is_model_negative() -> None:
+    context = FateContext(superseded=_superseded("m1", "reverted the approach and redid it"))
+    verdict = compute_fate([_mem("m1")], context)[MemoryId("m1")]
+    assert verdict.polarity is FatePolarity.NEGATIVE
+    assert verdict.tier is OutcomeTier.MODEL_ARBITRATED
+
+
+def test_compute_fate_superseded_neutral_reason_is_excluded() -> None:
+    context = FateContext(superseded=_superseded("m1", "switched to Y; requirements changed"))
+    assert compute_fate([_mem("m1")], context)[MemoryId("m1")].polarity is FatePolarity.UNKNOWN
+
+
+def test_compute_fate_plain_memory_is_unknown() -> None:
+    memory = _mem("m1", "We will derive the profile from the host signal.")
+    verdict = compute_fate([memory], FateContext(superseded={}))[MemoryId("m1")]
+    assert verdict.polarity is FatePolarity.UNKNOWN

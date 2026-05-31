@@ -16,10 +16,12 @@ manufactured positive.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from enum import StrEnum
 
-from thalamus.experiential.recorded_outcome import RecordedEvent
+from thalamus.core.types import MemoryId, MemoryRecord, Supersession
+from thalamus.experiential.recorded_outcome import RecordedEvent, parse_recorded_outcome
 
 # Defaults are conservative starting points; tuned on the settled backlog (dreaming.md open Qs).
 _DEFAULT_SURVIVAL_THRESHOLD = 5  # subsequent commits/events survived without supersession/revert
@@ -123,3 +125,86 @@ def fate_success(verdict: FateVerdict) -> bool | None:
     if verdict.polarity is FatePolarity.NEGATIVE:
         return False
     return None
+
+
+_HEX = frozenset("0123456789abcdef")
+
+
+@dataclass(frozen=True, slots=True)
+class FateContext:
+    """Pre-loaded fate inputs, keyed by memory id — populated from external sources at the I/O
+    edge (the supersession index, git, the attribution map, the retrieval/usage logs) so the
+    aggregation below stays pure and unit-testable in isolation."""
+
+    superseded: Mapping[MemoryId, Supersession]
+    reverted_shas: frozenset[str] = frozenset()
+    reuse_sessions: Mapping[MemoryId, int] = field(default_factory=dict)
+    survived_activity: Mapping[MemoryId, int] = field(default_factory=dict)
+    churn_ratio: Mapping[MemoryId, float] = field(default_factory=dict)
+
+
+def _episode_sha(memory_id: str) -> str | None:
+    """The git sha a commit-episode id encodes (``episode:<sha>``); None for session episodes
+    (``episode:session:…``) or curated memories (``retained:…``)."""
+    prefix = "episode:"
+    if not memory_id.startswith(prefix):
+        return None
+    rest = memory_id[len(prefix) :]
+    if not rest or rest.startswith("session:"):
+        return None
+    return rest if all(char in _HEX for char in rest.lower()) else None
+
+
+def _sha_reverted(sha: str | None, reverted_shas: frozenset[str]) -> bool:
+    """Prefix-tolerant membership (git abbreviates shas, so neither side's length is fixed)."""
+    if sha is None or not reverted_shas:
+        return False
+    return any(
+        other == sha or other.startswith(sha) or sha.startswith(other) for other in reverted_shas
+    )
+
+
+def fate_signals_for(memory: MemoryRecord, context: FateContext) -> FateSignals:
+    """Assemble one memory's :class:`FateSignals` from the pre-loaded context. Pure.
+
+    The supersession *reason* and the memory text both go through the action-grounded extractor
+    (:func:`parse_recorded_outcome`) — never a sentiment read — so the model-text contribution is
+    the same firewall-safe ``UNDONE``/``LANDED`` event used everywhere else."""
+    text = parse_recorded_outcome(memory.content)
+    superseded = context.superseded.get(memory.memory_id)
+    reason_negative = False
+    if superseded is not None:
+        parsed_reason = parse_recorded_outcome(superseded.reason)
+        reason_negative = parsed_reason is not None and parsed_reason.event is RecordedEvent.UNDONE
+    reverted = _sha_reverted(text.sha if text else None, context.reverted_shas) or _sha_reverted(
+        _episode_sha(memory.memory_id), context.reverted_shas
+    )
+    return FateSignals(
+        superseded=superseded is not None,
+        superseded_reason_negative=reason_negative,
+        reverted=reverted,
+        churn_ratio=context.churn_ratio.get(memory.memory_id, 0.0),
+        reuse_sessions=context.reuse_sessions.get(memory.memory_id, 0),
+        survived_activity=context.survived_activity.get(memory.memory_id, 0),
+        text_event=text.event if text else None,
+    )
+
+
+def compute_fate(
+    memories: Sequence[MemoryRecord],
+    context: FateContext,
+    *,
+    survival_threshold: int = _DEFAULT_SURVIVAL_THRESHOLD,
+    reuse_threshold: int = _DEFAULT_REUSE_THRESHOLD,
+    churn_threshold: float = _DEFAULT_CHURN_THRESHOLD,
+) -> dict[MemoryId, FateVerdict]:
+    """Assess every memory's fate → a verdict per memory id. Pure (I/O is the caller's job)."""
+    return {
+        memory.memory_id: assess_fate(
+            fate_signals_for(memory, context),
+            survival_threshold=survival_threshold,
+            reuse_threshold=reuse_threshold,
+            churn_threshold=churn_threshold,
+        )
+        for memory in memories
+    }
