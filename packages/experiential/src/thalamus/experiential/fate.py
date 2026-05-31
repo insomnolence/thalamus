@@ -245,12 +245,15 @@ def build_fate_context(
     superseded: Mapping[MemoryRef, Supersession],
     events: Iterable[RetrievalEvent],
     signals: Iterable[UsageSignal],
+    *,
+    reverted_shas: frozenset[str] = frozenset(),
 ) -> FateContext:
-    """Assemble a :class:`FateContext` from the supersession index + the recall/usage logs — the
-    loaders that fire on our own backlog. Churn (attribution map) and git-revert are added later;
-    until then those signals stay at their empty defaults, so the verdict is honest about what it
-    can and cannot yet see."""
+    """Assemble a :class:`FateContext` from the supersession index + recall/usage logs (+ optional
+    git ``reverted_shas``) — the loaders that fire on our own backlog. Churn (attribution map) and
+    survival are added later; until then those signals stay at their empty defaults, so the
+    credibility view is honest about what it can and cannot yet see."""
     return FateContext(
         superseded={ref.memory_id: record for ref, record in superseded.items()},
+        reverted_shas=reverted_shas,
         reuse_sessions=reuse_by_memory(events, signals),
     )

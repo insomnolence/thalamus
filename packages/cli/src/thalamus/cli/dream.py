@@ -15,15 +15,16 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from thalamus.core.protocols import Store, SupersessionIndex
-from thalamus.core.types import RepoId, Scope, TenantId
+from thalamus.core.types import MemoryId, MemoryRecord, RepoId, Scope, TenantId
 from thalamus.dreaming import (
     BeliefAuditPass,
+    CredibilityPass,
     CycleReport,
     DreamingPass,
     DreamLog,
@@ -34,22 +35,70 @@ from thalamus.dreaming import (
     Scheduler,
     StructuralRefreshPass,
 )
+from thalamus.experiential import build_fate_context, compute_fate
 from thalamus.gateway import Gateway
+from thalamus.instrumentation import (
+    UsageSignal,
+    read_event_log,
+    read_usage_log,
+    reverted_shas,
+)
 
 
-def build_dream_scheduler(gateway: Gateway, *, dream_log: DreamLog | None = None) -> Scheduler:
+def build_dream_scheduler(
+    gateway: Gateway,
+    *,
+    dream_log: DreamLog | None = None,
+    credibility: DreamingPass | None = None,
+) -> Scheduler:
     """The v0 pass set, in dreaming.md DAG order.
 
     ``structural-refresh`` (actor) re-links episodes to current code modules — included only when
     the gateway exposes a structural graph + link index (Brain 2 present). ``link-resolution``
     (actor) refreshes the gateway's derived views (superseded frontier + staleness).
+    ``credibility`` (actor, when supplied) assesses each curated memory's fate-based standing —
+    after link-resolution (it reads the refreshed superseded frontier) and before the proposer.
     ``belief-audit`` (proposer) records propose-only supersession suggestions."""
     passes: list[DreamingPass] = []
     if gateway.graph is not None and gateway.links is not None:
         passes.append(StructuralRefreshPass(gateway.graph, gateway.links))
     passes.append(LinkResolutionPass(gateway.refresh))
+    if credibility is not None:
+        passes.append(credibility)
     passes.append(BeliefAuditPass())
     return Scheduler(passes, log=dream_log)
+
+
+def build_credibility_pass(
+    repo: Path, supersession: SupersessionIndex | None, scope: Scope
+) -> CredibilityPass | None:
+    """Wire the fate-based credibility pass to this repo's logs + git reverts (the composition
+    that closes over the ``experiential`` fate primitives, keeping ``dreaming`` decoupled). Needs
+    the supersession index — the belief layer it assesses; returns ``None`` otherwise."""
+    if supersession is None:
+        return None
+    logs = repo / ".thalamus" / "logs"
+
+    def assess(memories: Sequence[MemoryRecord]) -> dict[MemoryId, tuple[str, str]]:
+        events = (
+            list(read_event_log(logs / "retrieval.jsonl"))
+            if (logs / "retrieval.jsonl").exists()
+            else []
+        )
+        signals: list[UsageSignal] = []
+        for name in ("usage.jsonl", "usage_attributed.jsonl"):
+            path = logs / name
+            if path.exists():
+                signals.extend(read_usage_log(path))
+        context = build_fate_context(
+            supersession.superseded(scope), events, signals, reverted_shas=reverted_shas(repo)
+        )
+        return {
+            memory_id: (verdict.polarity.value, verdict.tier.value)
+            for memory_id, verdict in compute_fate(memories, context).items()
+        }
+
+    return CredibilityPass(assess)
 
 
 def make_dream_context_factory(
@@ -154,15 +203,15 @@ def run_dream(config: DreamConfig) -> None:
         session=False,
     )
     gateway, store, _episodes, supersession = build_serve_gateway(serve_config)
+    scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     try:
         scheduler = build_dream_scheduler(
-            gateway, dream_log=JsonlDreamLog(dream_log_path(config.repo))
+            gateway,
+            dream_log=JsonlDreamLog(dream_log_path(config.repo)),
+            credibility=build_credibility_pass(config.repo, supersession, scope),
         )
         context = make_dream_context_factory(
-            store=store,
-            supersession=supersession,
-            scope=Scope(TenantId(config.tenant), RepoId(config.repo_id)),
-            repo=config.repo,
+            store=store, supersession=supersession, scope=scope, repo=config.repo
         )
         _print_report(scheduler.run(context()))
     finally:
