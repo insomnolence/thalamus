@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 from thalamus.core.types import EventId, RepoId, Scope, TenantId
-from thalamus.instrumentation import GitObserver, TrajectoryEventKind
+from thalamus.instrumentation import GitObserver, TrajectoryEventKind, reverted_shas
 
 SCOPE = Scope(tenant_id=TenantId("t1"), repo_id=RepoId("r1"))
 
@@ -57,3 +57,29 @@ def test_poll_since_only_new_commits(tmp_path: Path) -> None:
     events = observer.poll(since=first_head)
     assert [e.payload["subject"] for e in events] == ["add b"]
     assert events[0].payload["files"] == ["b.py"]
+
+
+def _head(repo: Path) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    )
+    return out.stdout.strip()
+
+
+def test_reverted_shas_detects_an_explicit_revert(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _commit(repo, "a.py", "add a")
+    _commit(repo, "b.py", "add b")
+    reverted = _head(repo)  # the sha of "add b", which we now revert
+    _git(repo, "revert", "--no-edit", "HEAD")
+    assert reverted in reverted_shas(repo)
+
+
+def test_reverted_shas_empty_without_reverts(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _commit(repo, "a.py", "add a")
+    assert reverted_shas(repo) == frozenset()
+
+
+def test_reverted_shas_on_non_repo_is_empty(tmp_path: Path) -> None:
+    assert reverted_shas(tmp_path / "nope") == frozenset()

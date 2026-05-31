@@ -9,6 +9,7 @@ pattern: produce :class:`TrajectoryEvent`s, hand them to a sink.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import uuid
 from collections.abc import Callable
@@ -88,3 +89,30 @@ class GitObserver:
                 )
             )
         return events
+
+
+_REVERTS_RE = re.compile(r"[Tt]his reverts commit ([0-9a-f]{7,40})")
+
+
+def _reverted_from_log(log_text: str) -> frozenset[str]:
+    """The original shas named by ``This reverts commit <sha>`` lines in commit bodies. Pure."""
+    return frozenset(match.group(1) for match in _REVERTS_RE.finditer(log_text))
+
+
+def reverted_shas(repo_path: Path) -> frozenset[str]:
+    """Commit shas a later ``git revert`` undid, read from history — deterministic, out-of-band.
+
+    The intentional, costly-to-fake negative Tier-2 signal (OLR §13.8): work *deliberately* undone.
+    Reads commit bodies for git's ``This reverts commit <sha>`` line. Force-pushed / reset history
+    is invisible (those commits are gone) — only explicit reverts are detected, which is the signal
+    we trust. Returns an empty set if ``repo_path`` is not a git repo."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "log", "--format=%b"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return frozenset()
+    return _reverted_from_log(result.stdout)

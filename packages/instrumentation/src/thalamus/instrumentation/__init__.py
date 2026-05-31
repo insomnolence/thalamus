@@ -20,7 +20,7 @@ from thalamus.instrumentation.events import (
     deserialize_event,
     serialize_event,
 )
-from thalamus.instrumentation.git_observer import GitObserver
+from thalamus.instrumentation.git_observer import GitObserver, reverted_shas
 from thalamus.instrumentation.junit_observer import JUnitObserver
 from thalamus.instrumentation.logging_retriever import LoggingRetriever
 from thalamus.instrumentation.session import (
@@ -102,6 +102,7 @@ __all__ = [
     "read_event_log",
     "read_usage_log",
     "read_trajectory_log",
+    "reverted_shas",
     "serialize_event",
     "serialize_session_context",
     "serialize_trajectory_event",
