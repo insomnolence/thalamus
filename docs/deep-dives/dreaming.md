@@ -180,6 +180,39 @@ brain first (dogfood), then a deliberate dollhouse serve restart** (the pass run
 long-running serve, so dollhouse only picks it up on restart). *(Done; the early text-outcome parser
 was backed out in step (1) — see the core-move note.)*
 
+### Credibility: automatic vs manual, and the A/B/C roadmap (clarified 2026-05-31)
+
+A long session got confused here, so, plainly:
+
+- **"Dreaming" = the automatic interval process** — the `DreamTicker` inside the long-running serve
+  (every `--dream-tick-minutes` + on each write). **`thalamus dream` is a manual dev/inspection
+  tool** that runs one cycle and exits; it is *not* "dreaming" and does not count as the feature.
+- **Fate = credibility = one engine** (`assess_fate` over superseded / reverted / reused / survived
+  / churn). Two consumers: per-memory **credibility** (the `CredibilityPass`, a dreaming actor) and
+  per-session **fate → Tier-2** (in the `verdict` report — a manual read-only *measurement*, not
+  dreaming).
+- The automatic dreaming loop runs (once the serve picks up this code): structural-refresh
+  (**incremental** — only episodes new since the last tick, so no per-`remember` re-link storm),
+  link-resolution, **credibility**, belief-audit.
+
+**The roadmap — three steps; only A is done, C is the goal and is gated:**
+
+- **A ✓ — credibility computed in the automatic loop.** The `CredibilityPass` runs on the
+  `DreamTicker`, so the brain continuously scores each memory's fate. **Inert on its own** — nothing
+  acts on the score yet (no recall change).
+- **B — un-blind the proxy↔truth monitor.** Restart the serve (the supersede fix then lets
+  supersessions actually *record* → fate **negatives** accrue) + accrue use → the monitor gets real,
+  *discriminating* data (today it's starved: few units, ~all positive).
+- **C — recall re-ranks by credibility (the goal: the brain reorganizes itself).** Recall surfaces
+  high-credibility memories and demotes low-credibility ones. **Gated on B** — you do not deploy a
+  feedback layer you cannot measure (§13.12: "if starved, *don't deploy a learned layer* — flying
+  blind is the failure" — the Polynoica trap). When B gives the monitor eyes, turn C on *measured*
+  (A/B recall with vs without), **conservatively — never suppress a memory that is merely NEW**
+  (unknown fate), only confirmed-bad.
+
+Doing **C before B is the one thing not to do.** A is safe and done; B is enabled by the deliberate
+serve restart; C is the payoff, on the far side of a working monitor.
+
 ## Open questions remaining
 
 - Damping/hysteresis design for cross-cycle stability (hard part #2).

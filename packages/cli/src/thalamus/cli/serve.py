@@ -22,7 +22,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_store
-from thalamus.cli.dream import build_dream_scheduler, dream_log_path, make_dream_context_factory
+from thalamus.cli.dream import (
+    build_credibility_pass,
+    build_dream_scheduler,
+    dream_log_path,
+    make_dream_context_factory,
+)
 from thalamus.cli.remember import RememberConfig, run_remember
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
@@ -472,7 +477,15 @@ def run_serve(config: ServeConfig) -> None:
     ticker: DreamTicker | None = None
     if config.dream_tick and supersession is not None and not config.investigate:
         ticker = DreamTicker(
-            build_dream_scheduler(gateway, dream_log=JsonlDreamLog(dream_log_path(data_dir))),
+            build_dream_scheduler(
+                gateway,
+                dream_log=JsonlDreamLog(dream_log_path(data_dir)),
+                # The credibility pass runs in the automatic loop too — logs from the data dir,
+                # git reverts from the code root (they differ for e.g. dollhouse).
+                credibility=build_credibility_pass(
+                    logs_dir=data_dir, code_repo=config.repo, supersession=supersession, scope=scope
+                ),
+            ),
             make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo
             ),

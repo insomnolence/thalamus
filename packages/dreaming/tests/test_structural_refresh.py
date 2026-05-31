@@ -77,3 +77,35 @@ def test_skips_without_store_or_repo_root() -> None:
         PassContext(scope=SCOPE, now=NOW)
     )
     assert outcome.status is PassStatus.SKIPPED
+
+
+def test_only_links_new_memories_on_later_ticks(tmp_path: Path) -> None:
+    # The storm fix: a long-running serve must NOT re-link every episode on every tick.
+    _write(tmp_path, "foo.py", "x = 1\n")
+    _write(tmp_path, "bar.py", "y = 2\n")
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(PythonAstIngestor().ingest_path(tmp_path, SCOPE))
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    pass_ = StructuralRefreshPass(graph, InMemoryCrossLinkIndex())
+
+    ep1 = MemoryRecord(
+        MemoryId("ep1"), Hemisphere.EXPERIENTIAL, "episode", "t", SCOPE, NOW,
+        metadata={"footprint": ["foo.py"]},
+    )
+    store.add(ep1, encoder.encode([ep1.content])[0])
+    first = pass_.run(_ctx(store, tmp_path))
+    assert first.details["new_memories"] == 1
+    assert first.details["links"] == 1
+
+    again = pass_.run(_ctx(store, tmp_path))  # nothing new → re-links nothing (no storm)
+    assert again.details["new_memories"] == 0
+    assert again.details["links"] == 0
+
+    ep2 = MemoryRecord(
+        MemoryId("ep2"), Hemisphere.EXPERIENTIAL, "episode", "t", SCOPE, NOW,
+        metadata={"footprint": ["bar.py"]},
+    )
+    store.add(ep2, encoder.encode([ep2.content])[0])
+    third = pass_.run(_ctx(store, tmp_path))  # only the new episode is processed
+    assert third.details["new_memories"] == 1

@@ -70,14 +70,20 @@ def build_dream_scheduler(
 
 
 def build_credibility_pass(
-    repo: Path, supersession: SupersessionIndex | None, scope: Scope
+    *,
+    logs_dir: Path,
+    code_repo: Path,
+    supersession: SupersessionIndex | None,
+    scope: Scope,
 ) -> CredibilityPass | None:
-    """Wire the fate-based credibility pass to this repo's logs + git reverts (the composition
-    that closes over the ``experiential`` fate primitives, keeping ``dreaming`` decoupled). Needs
-    the supersession index — the belief layer it assesses; returns ``None`` otherwise."""
+    """Wire the fate-based credibility pass to the brain's logs + git reverts (the composition that
+    closes over the ``experiential`` fate primitives, keeping ``dreaming`` decoupled). ``logs_dir``
+    holds ``.thalamus/logs`` (the data dir); ``code_repo`` is the git repo whose reverts are read
+    (the code root — may differ from ``logs_dir``, e.g. dollhouse). Needs the supersession index —
+    the belief layer it assesses; returns ``None`` otherwise."""
     if supersession is None:
         return None
-    logs = repo / ".thalamus" / "logs"
+    logs = logs_dir / ".thalamus" / "logs"
 
     def assess(memories: Sequence[MemoryRecord]) -> dict[MemoryId, tuple[str, str]]:
         events = (
@@ -91,7 +97,7 @@ def build_credibility_pass(
             if path.exists():
                 signals.extend(read_usage_log(path))
         context = build_fate_context(
-            supersession.superseded(scope), events, signals, reverted_shas=reverted_shas(repo)
+            supersession.superseded(scope), events, signals, reverted_shas=reverted_shas(code_repo)
         )
         return {
             memory_id: (verdict.polarity.value, verdict.tier.value)
@@ -208,7 +214,9 @@ def run_dream(config: DreamConfig) -> None:
         scheduler = build_dream_scheduler(
             gateway,
             dream_log=JsonlDreamLog(dream_log_path(config.repo)),
-            credibility=build_credibility_pass(config.repo, supersession, scope),
+            credibility=build_credibility_pass(
+                logs_dir=config.repo, code_repo=config.repo, supersession=supersession, scope=scope
+            ),
         )
         context = make_dream_context_factory(
             store=store, supersession=supersession, scope=scope, repo=config.repo

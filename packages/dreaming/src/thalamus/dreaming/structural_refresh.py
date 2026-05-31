@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from thalamus.core.types import MemoryId
 from thalamus.dreaming.base import PassContext, PassKind, PassOutcome
 from thalamus.structural import CrossLinkIndex, StructuralGraph, link_by_footprint
 
@@ -30,6 +31,11 @@ class StructuralRefreshPass:
         # The same handles the gateway queries — updating them is seen by live recall.
         self._graph = graph
         self._links = links
+        # Memory ids already linked this process. A long-running serve then re-links only the NEW
+        # episodes each tick, not all ~thousands every time — killing the per-`remember` re-link
+        # storm (the ~5-min CPU spikes). Safe to skip a seen memory: Brain 2's modules are fixed
+        # at serve start (not re-derived mid-serve), so a memory's link result is stable for life.
+        self._linked: set[MemoryId] = set()
 
     def run(self, ctx: PassContext) -> PassOutcome:
         if ctx.store is None or ctx.repo_root is None:
@@ -38,11 +44,13 @@ class StructuralRefreshPass:
         footprints = [
             (record.ref, tuple(record.metadata.get("footprint", ())))
             for record in ctx.store.scan(ctx.scope)
+            if record.memory_id not in self._linked  # only memories new since the last tick
         ]
         applied = link_by_footprint(
             footprints, modules, self._links, repo_root=Path(ctx.repo_root)
         )
+        self._linked.update(ref.memory_id for ref, _footprint in footprints)
         return PassOutcome(
-            summary=f"re-linked footprints: {applied} link(s) over {len(modules)} module(s)",
-            details={"links": applied, "modules": len(modules)},
+            summary=f"re-linked {applied} link(s) over {len(footprints)} new memory(ies)",
+            details={"links": applied, "new_memories": len(footprints), "modules": len(modules)},
         )
