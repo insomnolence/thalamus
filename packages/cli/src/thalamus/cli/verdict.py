@@ -72,10 +72,10 @@ class VerdictReport:
     utility: UtilityReport  # Tier-1, over all events
     n_tier1_sessions: int  # sessions with a per-session Tier-1 utility
     n_tier2_sessions: int  # sessions with a captured Tier-2 outcome label
-    monitor: ProxyTruthReport  # the joined proxy↔truth verdict (test-label + session-work fate)
+    monitor: ProxyTruthReport  # proxy↔truth with Tier-2 = structural fate (session-work)
     monitor_coverage: float  # joined sessions / sessions with Tier-1
     n_reverted_sessions: int  # sessions whose committed work was later reverted (fate negative)
-    monitor_without_fate: ProxyTruthReport  # the same monitor minus the fate layer (with/without)
+    monitor_without_fate: ProxyTruthReport  # classify (test path) alone — usually empty
 
 
 def add_verdict_arguments(parser: argparse.ArgumentParser) -> None:
@@ -178,19 +178,29 @@ def compute_verdict(
 ) -> VerdictReport:
     """The pure verdict computation over already-loaded logs (no I/O — unit-testable).
 
-    Tier-2 is the test-based ``classify_outcome`` label, **augmented by session-work fate**: a
-    session whose committed work was later reverted is forced negative (the post-hoc signal the
-    in-span classifier misses). Reported with *and* without the fate layer so it stays removable
-    and measurable — the revert override is the costly-to-fake negative; survival positives are
-    not folded into the gate yet (conservative)."""
+    **Tier-2 is the structural fate** of each session's committed work — kept-vs-reverted via
+    :func:`session_fate` (survived → success, reverted → failure) — the decided truth signal
+    (dreaming.md "Pass: fate-based credibility"). The test-based ``classify_outcome`` is kept only
+    as a **fallback** for sessions fate leaves unlabelled, and is usually absent in a workflow
+    without captured test runs. ``monitor_without_fate`` reports the test path alone for comparison,
+    making it visible that the fate signal is what carries the verdict."""
     tier1 = session_utility(events, signals, k)
-    base_tier2 = tier2_by_session(trajectory)
     fate = session_fate(events, trajectory, reverted, window=window)
-    reverted_sessions = {
-        session for session, verdict in fate.items() if fate_success(verdict) is False
-    }
-    tier2 = {**base_tier2, **{session: False for session in reverted_sessions}}
+    fate_tier2: dict[SessionId, bool] = {}
+    for session, verdict in fate.items():
+        success = fate_success(verdict)
+        if success is not None:
+            fate_tier2[session] = success
+    classify_tier2 = tier2_by_session(trajectory)  # optional fallback (needs tests/terminal/revert)
+    # Structural fate is the primary Tier-2; classify (test path) fills sessions fate left
+    # unlabelled. A failure from either source wins — a revert or a real test-fail is a precious
+    # negative we never let a weak survival-positive overwrite.
+    tier2: dict[SessionId, bool] = dict(classify_tier2)
+    for session, success in fate_tier2.items():
+        if success is False or session not in tier2:
+            tier2[session] = success
     units = join_proxy_truth(tier1, tier2)
+    reverted_sessions = {s for s, verdict in fate.items() if fate_success(verdict) is False}
     return VerdictReport(
         k=k,
         utility=utility_at_k(events, signals, k),
@@ -199,7 +209,7 @@ def compute_verdict(
         monitor=proxy_truth(units),
         monitor_coverage=len(units) / len(tier1) if tier1 else 0.0,
         n_reverted_sessions=len(reverted_sessions),
-        monitor_without_fate=proxy_truth(join_proxy_truth(tier1, base_tier2)),
+        monitor_without_fate=proxy_truth(join_proxy_truth(tier1, classify_tier2)),
     )
 
 
@@ -230,9 +240,9 @@ def _render(report: VerdictReport) -> str:
             f"  reward-hacking suspected: {m.reward_hacking_suspected}",
         ]
     lines.append(
-        f"session-work fate: {report.n_reverted_sessions} session(s) with reverted work "
-        f"(alignment without fate {report.monitor_without_fate.alignment:+.3f} "
-        f"→ with fate {m.alignment:+.3f})"
+        f"Tier-2 = structural fate: {report.n_tier2_sessions} session(s) labelled, "
+        f"{report.n_reverted_sessions} reverted-negative "
+        f"(classify/test-path alone would join {report.monitor_without_fate.n_units})"
     )
     return "\n".join(lines)
 
