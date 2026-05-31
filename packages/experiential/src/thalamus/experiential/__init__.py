@@ -14,9 +14,11 @@ from thalamus.experiential.fate import (
     FateVerdict,
     OutcomeTier,
     assess_fate,
+    build_fate_context,
     compute_fate,
     fate_signals_for,
     fate_success,
+    reuse_by_memory,
 )
 from thalamus.experiential.ingest import ingest_episodes
 from thalamus.experiential.neo4j_supersession import Neo4jSupersessionIndex
@@ -67,11 +69,13 @@ __all__ = [
     "WhyComponent",
     "WhyProvenance",
     "assess_fate",
+    "build_fate_context",
     "classify_outcome",
     "compute_fate",
     "fate_signals_for",
     "fate_success",
     "ingest_episodes",
+    "reuse_by_memory",
     "is_success",
     "parse_recorded_outcome",
 ]

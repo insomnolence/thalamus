@@ -10,11 +10,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from thalamus.core.types import (
+    EventId,
     Hemisphere,
     MemoryId,
     MemoryRecord,
+    MemoryRef,
     RepoId,
     Scope,
+    SessionId,
     Supersession,
     TenantId,
 )
@@ -24,10 +27,13 @@ from thalamus.experiential.fate import (
     FateSignals,
     OutcomeTier,
     assess_fate,
+    build_fate_context,
     compute_fate,
     fate_success,
+    reuse_by_memory,
 )
 from thalamus.experiential.recorded_outcome import RecordedEvent
+from thalamus.instrumentation import RetrievalEvent, ShownItem, UsageSignal
 
 
 def test_reverted_is_an_objective_negative() -> None:
@@ -176,3 +182,56 @@ def test_compute_fate_plain_memory_is_unknown() -> None:
     memory = _mem("m1", "We will derive the profile from the host signal.")
     verdict = compute_fate([memory], FateContext(superseded={}))[MemoryId("m1")]
     assert verdict.polarity is FatePolarity.UNKNOWN
+
+
+# --- the log-derived loaders (reuse / context assembly) ---
+
+
+def _event(eid: str, session: str, shown: list[str]) -> RetrievalEvent:
+    return RetrievalEvent(
+        event_id=EventId(eid),
+        timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+        scope=_SCOPE,
+        policy_id="L0",
+        cue_text="q",
+        k_requested=len(shown),
+        candidates=[],
+        shown=[ShownItem(MemoryId(m), rank=i, propensity=1.0) for i, m in enumerate(shown)],
+        session_id=SessionId(session),
+    )
+
+
+def _signal(eid: str, mid: str, *, used: bool) -> UsageSignal:
+    return UsageSignal(EventId(eid), MemoryId(mid), "footprint", 1.0 if used else 0.0, used)
+
+
+def test_reuse_by_memory_counts_distinct_used_sessions() -> None:
+    events = [_event("e1", "s1", ["m1"]), _event("e2", "s2", ["m1"]), _event("e3", "s1", ["m1"])]
+    signals = [_signal(e, "m1", used=True) for e in ("e1", "e2", "e3")]
+    # used in sessions s1 (e1, e3) and s2 (e2) → 2 distinct sessions
+    assert reuse_by_memory(events, signals) == {MemoryId("m1"): 2}
+
+
+def test_reuse_by_memory_ignores_unused_and_unkeyed_events() -> None:
+    events = [_event("e1", "s1", ["m1"])]
+    signals = [_signal("e1", "m1", used=False), _signal("eX", "m2", used=True)]  # unused / no event
+    assert reuse_by_memory(events, signals) == {}
+
+
+def test_build_fate_context_feeds_compute_fate() -> None:
+    superseded = {
+        MemoryRef(_SCOPE, MemoryId("old")): Supersession(
+            superseded_by=MemoryId("new"),
+            reason="reverted and redid it",
+            at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+    }
+    events = [_event("e1", "s1", ["hot"]), _event("e2", "s2", ["hot"])]
+    signals = [_signal("e1", "hot", used=True), _signal("e2", "hot", used=True)]
+    context = build_fate_context(superseded, events, signals)
+    assert context.reuse_sessions[MemoryId("hot")] == 2
+    assert MemoryId("old") in context.superseded
+
+    verdicts = compute_fate([_mem("hot"), _mem("old")], context)
+    assert verdicts[MemoryId("hot")].polarity is FatePolarity.POSITIVE  # reused in 2 sessions
+    assert verdicts[MemoryId("old")].polarity is FatePolarity.NEGATIVE  # superseded, undo reason

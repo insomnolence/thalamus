@@ -16,12 +16,20 @@ manufactured positive.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from thalamus.core.types import MemoryId, MemoryRecord, Supersession
+from thalamus.core.types import (
+    EventId,
+    MemoryId,
+    MemoryRecord,
+    MemoryRef,
+    SessionId,
+    Supersession,
+)
 from thalamus.experiential.recorded_outcome import RecordedEvent, parse_recorded_outcome
+from thalamus.instrumentation import RetrievalEvent, UsageSignal
 
 # Defaults are conservative starting points; tuned on the settled backlog (dreaming.md open Qs).
 _DEFAULT_SURVIVAL_THRESHOLD = 5  # subsequent commits/events survived without supersession/revert
@@ -208,3 +216,37 @@ def compute_fate(
         )
         for memory in memories
     }
+
+
+def reuse_by_memory(
+    events: Iterable[RetrievalEvent], signals: Iterable[UsageSignal]
+) -> dict[MemoryId, int]:
+    """Count the distinct later sessions in which each memory was recalled **and used** — the
+    recurring-usefulness fate signal. Joins each ``used`` usage signal to its recall event's
+    session (an unkeyed event is skipped). Pure."""
+    session_of: dict[EventId, SessionId] = {
+        event.event_id: event.session_id for event in events if event.session_id is not None
+    }
+    sessions: dict[MemoryId, set[SessionId]] = {}
+    for signal in signals:
+        if not signal.used:
+            continue
+        session = session_of.get(signal.event_id)
+        if session is not None:
+            sessions.setdefault(signal.memory_id, set()).add(session)
+    return {memory_id: len(found) for memory_id, found in sessions.items()}
+
+
+def build_fate_context(
+    superseded: Mapping[MemoryRef, Supersession],
+    events: Iterable[RetrievalEvent],
+    signals: Iterable[UsageSignal],
+) -> FateContext:
+    """Assemble a :class:`FateContext` from the supersession index + the recall/usage logs — the
+    loaders that fire on our own backlog. Churn (attribution map) and git-revert are added later;
+    until then those signals stay at their empty defaults, so the verdict is honest about what it
+    can and cannot yet see."""
+    return FateContext(
+        superseded={ref.memory_id: record for ref, record in superseded.items()},
+        reuse_sessions=reuse_by_memory(events, signals),
+    )
