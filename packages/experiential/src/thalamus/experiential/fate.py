@@ -1,17 +1,17 @@
-"""Fate-based credibility primitives — the Tier-2 / recorded-outcome producer (OLR §13.17;
+"""Fate-based credibility primitives — the credibility producer (OLR §13.17;
 see docs/deep-dives/dreaming.md, "Pass: fate-based credibility").
 
 The pure core: a subject's observed *fate* (:class:`FateSignals` — what happened to it afterward,
-read from external facts) combined into a polarity + grounding tier (:class:`FateVerdict`). The
-fate *sources* (the supersession graph, git, the attribution map, the usage log) are wired in a
-later step; this module is I/O-free so the combiner policy is unit-testable in isolation.
+read from external facts) combined into a polarity (:class:`FateVerdict`). The fate *sources* (the
+supersession graph, git, the attribution map, the usage log) are wired at the I/O edge; this module
+is I/O-free so the combiner policy is unit-testable in isolation.
 
-**Firewall (§13.7).** Objective fate — revert, the supersession *edge*, recurring reuse, survival,
-churn (external facts) — is the strong tier; the supersession *reason* and any text-event are
-*model-arbitrated*, so the verdict can report proxy↔truth **with and without** them. Committing is
-not validated success, so positives must be *earned* objectively (survived + reused); the
-model-arbitrated text-event contributes only the valuable **negative** (``UNDONE``), never a
-manufactured positive.
+**Read fate, not words (§13.7 firewall).** Credibility is derived purely from *what happened to a
+memory* — superseded (a graph edge), reverted (git), reused / survived (logs + time) — never from
+parsing the memory's prose for good/bad sentiment (that is the Polynoica self-reference trap: the
+model's opinion becoming its own label). Every signal here is therefore an external fact, tier
+``OBJECTIVE``. ``OutcomeTier.MODEL_ARBITRATED`` is reserved for a future LLM-judge proposer
+(propose-only, calibrated against objective fate, not yet built) — no current signal uses it.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from thalamus.core.types import (
     SessionId,
     Supersession,
 )
-from thalamus.experiential.recorded_outcome import RecordedEvent, parse_recorded_outcome
 from thalamus.instrumentation import RetrievalEvent, UsageSignal
 
 # Defaults are conservative starting points; tuned on the settled backlog (dreaming.md open Qs).
@@ -46,28 +45,27 @@ class FatePolarity(StrEnum):
 
 
 class OutcomeTier(StrEnum):
-    """How the polarity is grounded — the axis the verdict splits on for with/without reporting."""
+    """How the polarity is grounded. Everything is ``OBJECTIVE`` today (external facts only);
+    ``MODEL_ARBITRATED`` is reserved for a future LLM-judge proposer (propose-only, calibrated)."""
 
     OBJECTIVE = "objective"  # an external act (git / graph edge / logs)
-    MODEL_ARBITRATED = "model"  # model-written text — tiered below objective, calibrated
+    MODEL_ARBITRATED = "model"  # reserved: a future LLM judge, tiered below objective
 
 
 @dataclass(frozen=True, slots=True)
 class FateSignals:
-    """What happened to a subject afterward — populated from external sources (a later step)."""
+    """What happened to a subject afterward — external facts only, populated at the I/O edge."""
 
     superseded: bool = False  # a SUPERSEDES edge targets it (graph fact)
-    superseded_reason_negative: bool = False  # its supersession reason reads as failure (text)
-    reverted: bool = False  # a sha it named was reverted (git)
+    reverted: bool = False  # the commit it is (episode:<sha>) was reverted (git)
     churn_ratio: float = 0.0  # fraction of its footprint rewritten within the horizon [0, 1]
     reuse_sessions: int = 0  # distinct later sessions that recalled + used it
     survived_activity: int = 0  # subsequent commits/events without supersession/revert
-    text_event: RecordedEvent | None = None  # an optional grounded text-event (minor input)
 
 
 @dataclass(frozen=True, slots=True)
 class FateVerdict:
-    """Combined verdict: polarity, the strongest tier of evidence behind it, and provenance."""
+    """Combined verdict: polarity, the tier of evidence behind it, and provenance."""
 
     polarity: FatePolarity
     tier: OutcomeTier
@@ -81,29 +79,21 @@ def assess_fate(
     reuse_threshold: int = _DEFAULT_REUSE_THRESHOLD,
     churn_threshold: float = _DEFAULT_CHURN_THRESHOLD,
 ) -> FateVerdict:
-    """Combine observed fate into a polarity + grounding tier. Pure. Precedence:
+    """Combine observed fate into a polarity. Pure, all-objective. Precedence:
 
-    1. **Objective negative** — an external undo (revert) dominates any prior positive.
-    2. **Superseded** — negative *iff* its reason reads as failure (model tier); else excluded
-       (no longer current truth, but not a failure of the work).
-    3. **Objective positive** — kept proving useful (reuse) and/or survived real later activity.
-    4. **Weak objective negative** — its footprint was largely rewritten soon after (noisy → high
-       threshold, lowest structural precedence; reached only if nothing above rescued it).
-    5. **Model-arbitrated text event** — an *undone* act reported in text (never a positive: a
-       reported/landed commit is not validated success).
-    6. Otherwise **unknown**.
+    1. **Reverted** — an external undo dominates any prior positive.
+    2. **Superseded** — the belief was revised away (the SUPERSEDES edge is a fact); it is no
+       longer current truth → a demote (negative). We do *not* read the reason text to guess
+       wrong-vs-evolved — that would be reading words, not fate.
+    3. **Positive** — kept proving useful (reuse) and/or survived substantial later activity.
+    4. **Weak negative** — its footprint was largely rewritten soon after (noisy → high threshold,
+       lowest precedence; reached only if nothing above applied).
+    5. Otherwise **unknown** (insufficient fate — excluded, never counted "good").
     """
     if signals.reverted:
         return FateVerdict(FatePolarity.NEGATIVE, OutcomeTier.OBJECTIVE, ("reverted",))
-
     if signals.superseded:
-        if signals.superseded_reason_negative:
-            return FateVerdict(
-                FatePolarity.NEGATIVE,
-                OutcomeTier.MODEL_ARBITRATED,
-                ("superseded", "reason:negative"),
-            )
-        return FateVerdict(FatePolarity.UNKNOWN, OutcomeTier.OBJECTIVE, ("superseded:neutral",))
+        return FateVerdict(FatePolarity.NEGATIVE, OutcomeTier.OBJECTIVE, ("superseded",))
 
     reused = signals.reuse_sessions >= reuse_threshold
     survived = signals.survived_activity >= survival_threshold
@@ -118,10 +108,6 @@ def assess_fate(
             FatePolarity.NEGATIVE, OutcomeTier.OBJECTIVE, (f"churn:{signals.churn_ratio:.2f}",)
         )
 
-    if signals.text_event is RecordedEvent.UNDONE:
-        return FateVerdict(FatePolarity.NEGATIVE, OutcomeTier.MODEL_ARBITRATED, ("text:undone",))
-    # RecordedEvent.LANDED is intentionally NOT a positive (committing ≠ validated success);
-    # it is kept upstream only for disambiguation + future difficulty grading.
     return FateVerdict(FatePolarity.UNKNOWN, OutcomeTier.OBJECTIVE, ())
 
 
@@ -173,32 +159,16 @@ def _sha_reverted(sha: str | None, reverted_shas: frozenset[str]) -> bool:
 
 
 def fate_signals_for(memory: MemoryRecord, context: FateContext) -> FateSignals:
-    """Assemble one memory's :class:`FateSignals` from the pre-loaded context. Pure.
-
-    A curated memory's *body* is descriptive — it is *about* a topic — not a self-report of its
-    own outcome, so the body is NOT read for a ``LANDED``/``UNDONE`` event here: that misfires on
-    memories that merely *discuss* reverts (the first-reading finding, 2026-05-30 — the R3 memories
-    flagged themselves). The grounded text we *do* trust is the supersession **reason** (precisely
-    about why this belief was replaced). The body's sha is still used for revert-linking, and
-    ``FateSignals.text_event`` stays available for the session-work consumer to set from genuine
-    "I redid this" work-reports."""
-    text = parse_recorded_outcome(memory.content)
-    superseded = context.superseded.get(memory.memory_id)
-    reason_negative = False
-    if superseded is not None:
-        parsed_reason = parse_recorded_outcome(superseded.reason)
-        reason_negative = parsed_reason is not None and parsed_reason.event is RecordedEvent.UNDONE
-    reverted = _sha_reverted(text.sha if text else None, context.reverted_shas) or _sha_reverted(
-        _episode_sha(memory.memory_id), context.reverted_shas
-    )
+    """Assemble one memory's :class:`FateSignals` from the pre-loaded context. Pure — reads only
+    external facts about the memory's fate, never its prose. A curated memory (``retained:…``) is
+    never "reverted" (revert is for committed work — an ``episode:<sha>`` whose commit git shows
+    reverted); its credibility comes from supersession + reuse + survival."""
     return FateSignals(
-        superseded=superseded is not None,
-        superseded_reason_negative=reason_negative,
-        reverted=reverted,
+        superseded=memory.memory_id in context.superseded,
+        reverted=_sha_reverted(_episode_sha(memory.memory_id), context.reverted_shas),
         churn_ratio=context.churn_ratio.get(memory.memory_id, 0.0),
         reuse_sessions=context.reuse_sessions.get(memory.memory_id, 0),
         survived_activity=context.survived_activity.get(memory.memory_id, 0),
-        text_event=None,  # curated body is descriptive, not a self-report — see docstring
     )
 
 

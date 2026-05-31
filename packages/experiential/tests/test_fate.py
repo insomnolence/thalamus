@@ -1,8 +1,9 @@
-"""Tests for the fate combiner — the pure policy that turns observed fate into a Tier-2 verdict.
+"""Tests for the fate combiner + aggregator — purely structural fate, no prose-reading.
 
-Each branch is exercised with hand-built :class:`FateSignals` (no I/O), including the firewall
-properties: an objective undo dominates any prior positive, a model-arbitrated text ``LANDED`` is
-NOT a positive, and the objective/model tier is reported so the verdict can split with/without it.
+Each branch is exercised with hand-built FateSignals (no I/O). The firewall property under test:
+credibility is derived only from what happened to a memory (superseded / reverted / reused /
+survived / churn), never from its text — so a memory whose body merely *discusses* reverts is not
+flagged.
 """
 
 from __future__ import annotations
@@ -32,7 +33,6 @@ from thalamus.experiential.fate import (
     fate_success,
     reuse_by_memory,
 )
-from thalamus.experiential.recorded_outcome import RecordedEvent
 from thalamus.instrumentation import RetrievalEvent, ShownItem, UsageSignal
 
 
@@ -44,22 +44,21 @@ def test_reverted_is_an_objective_negative() -> None:
 
 
 def test_revert_dominates_prior_reuse() -> None:
-    # An external undo dominates any prior positive — reuse must not rescue a reverted subject.
     verdict = assess_fate(FateSignals(reverted=True, reuse_sessions=9, survived_activity=20))
     assert verdict.polarity is FatePolarity.NEGATIVE
 
 
-def test_superseded_with_negative_reason_is_a_model_tier_negative() -> None:
-    verdict = assess_fate(FateSignals(superseded=True, superseded_reason_negative=True))
+def test_superseded_is_an_objective_negative() -> None:
+    # The SUPERSEDES edge is a fact: the belief was revised away → demote. No reason text is read.
+    verdict = assess_fate(FateSignals(superseded=True))
     assert verdict.polarity is FatePolarity.NEGATIVE
-    assert verdict.tier is OutcomeTier.MODEL_ARBITRATED
-
-
-def test_superseded_neutral_is_excluded_not_a_failure() -> None:
-    # No longer current truth, but not a failure of the work → unknown (excluded), objective edge.
-    verdict = assess_fate(FateSignals(superseded=True, superseded_reason_negative=False))
-    assert verdict.polarity is FatePolarity.UNKNOWN
     assert verdict.tier is OutcomeTier.OBJECTIVE
+    assert "superseded" in verdict.evidence
+
+
+def test_superseded_dominates_prior_reuse() -> None:
+    verdict = assess_fate(FateSignals(superseded=True, reuse_sessions=9, survived_activity=20))
+    assert verdict.polarity is FatePolarity.NEGATIVE
 
 
 def test_recurring_reuse_is_an_objective_positive() -> None:
@@ -93,28 +92,14 @@ def test_survival_outranks_churn() -> None:
     assert verdict.polarity is FatePolarity.POSITIVE
 
 
-def test_text_undone_is_a_model_tier_negative() -> None:
-    verdict = assess_fate(FateSignals(text_event=RecordedEvent.UNDONE))
-    assert verdict.polarity is FatePolarity.NEGATIVE
-    assert verdict.tier is OutcomeTier.MODEL_ARBITRATED
-
-
-def test_text_landed_is_not_a_positive() -> None:
-    # Firewall: committing / a model approval is not validated success → excluded, never positive.
-    verdict = assess_fate(FateSignals(text_event=RecordedEvent.LANDED))
-    assert verdict.polarity is FatePolarity.UNKNOWN
-
-
 def test_no_signals_is_unknown() -> None:
-    verdict = assess_fate(FateSignals())
-    assert verdict.polarity is FatePolarity.UNKNOWN
+    assert assess_fate(FateSignals()).polarity is FatePolarity.UNKNOWN
 
 
 def test_thresholds_are_configurable() -> None:
     signals = FateSignals(reuse_sessions=1, survived_activity=1)
     assert assess_fate(signals).polarity is FatePolarity.UNKNOWN  # below defaults
-    loosened = assess_fate(signals, reuse_threshold=1)
-    assert loosened.polarity is FatePolarity.POSITIVE
+    assert assess_fate(signals, reuse_threshold=1).polarity is FatePolarity.POSITIVE
 
 
 def test_fate_success_mapping() -> None:
@@ -123,7 +108,7 @@ def test_fate_success_mapping() -> None:
     assert fate_success(assess_fate(FateSignals())) is None
 
 
-# --- compute_fate: the pure aggregator that assembles signals from pre-loaded fate context ---
+# --- compute_fate: the pure aggregator over a pre-loaded fate context ---
 
 _SCOPE = Scope(tenant_id=TenantId("t"), repo_id=RepoId("r"))
 
@@ -139,25 +124,16 @@ def _mem(memory_id: str, content: str = "") -> MemoryRecord:
     )
 
 
-def _superseded(memory_id: str, reason: str) -> dict[MemoryId, Supersession]:
+def _superseded(memory_id: str) -> dict[MemoryId, Supersession]:
     record = Supersession(
-        superseded_by=MemoryId("newer"), reason=reason, at=datetime(2026, 1, 2, tzinfo=UTC)
+        superseded_by=MemoryId("newer"), reason="replaced", at=datetime(2026, 1, 2, tzinfo=UTC)
     )
     return {MemoryId(memory_id): record}
 
 
 def test_compute_fate_positive_from_reuse() -> None:
     context = FateContext(superseded={}, reuse_sessions={MemoryId("m1"): 3})
-    verdicts = compute_fate([_mem("m1")], context)
-    assert verdicts[MemoryId("m1")].polarity is FatePolarity.POSITIVE
-
-
-def test_compute_fate_negative_when_a_sha_named_in_text_was_reverted() -> None:
-    context = FateContext(superseded={}, reverted_shas=frozenset({"abc1234"}))
-    verdicts = compute_fate([_mem("m1", "committed as abc1234 then it broke")], context)
-    verdict = verdicts[MemoryId("m1")]
-    assert verdict.polarity is FatePolarity.NEGATIVE  # revert dominates the LANDED text-event
-    assert verdict.tier is OutcomeTier.OBJECTIVE
+    assert compute_fate([_mem("m1")], context)[MemoryId("m1")].polarity is FatePolarity.POSITIVE
 
 
 def test_compute_fate_negative_from_reverted_episode_sha() -> None:
@@ -166,27 +142,20 @@ def test_compute_fate_negative_from_reverted_episode_sha() -> None:
     assert verdict.polarity is FatePolarity.NEGATIVE
 
 
-def test_compute_fate_superseded_with_undo_reason_is_model_negative() -> None:
-    context = FateContext(superseded=_superseded("m1", "reverted the approach and redid it"))
-    verdict = compute_fate([_mem("m1")], context)[MemoryId("m1")]
+def test_compute_fate_superseded_is_negative() -> None:
+    verdict = compute_fate([_mem("m1")], FateContext(superseded=_superseded("m1")))[MemoryId("m1")]
     assert verdict.polarity is FatePolarity.NEGATIVE
-    assert verdict.tier is OutcomeTier.MODEL_ARBITRATED
-
-
-def test_compute_fate_superseded_neutral_reason_is_excluded() -> None:
-    context = FateContext(superseded=_superseded("m1", "switched to Y; requirements changed"))
-    assert compute_fate([_mem("m1")], context)[MemoryId("m1")].polarity is FatePolarity.UNKNOWN
+    assert verdict.tier is OutcomeTier.OBJECTIVE
 
 
 def test_compute_fate_plain_memory_is_unknown() -> None:
-    memory = _mem("m1", "We will derive the profile from the host signal.")
-    verdict = compute_fate([memory], FateContext(superseded={}))[MemoryId("m1")]
+    verdict = compute_fate([_mem("m1")], FateContext(superseded={}))[MemoryId("m1")]
     assert verdict.polarity is FatePolarity.UNKNOWN
 
 
-def test_curated_body_that_discusses_reverts_is_not_flagged_negative() -> None:
-    # First-reading finding (2026-05-30): a memory whose BODY discusses reverts/redo/pushed-back
-    # (its topic) is not a self-report of its own undoing — it must not become a negative.
+def test_curated_body_is_never_read_for_fate() -> None:
+    # Credibility is structural: a curated memory whose body merely *discusses* reverts/redo — with
+    # no supersession/revert/reuse fate of its own — stays unknown (we never parse its prose).
     memory = _mem("m1", "Decided to add git revert detection; the dev pushed back the CI approach.")
     verdict = compute_fate([memory], FateContext(superseded={}))[MemoryId("m1")]
     assert verdict.polarity is FatePolarity.UNKNOWN
@@ -222,16 +191,14 @@ def test_reuse_by_memory_counts_distinct_used_sessions() -> None:
 
 def test_reuse_by_memory_ignores_unused_and_unkeyed_events() -> None:
     events = [_event("e1", "s1", ["m1"])]
-    signals = [_signal("e1", "m1", used=False), _signal("eX", "m2", used=True)]  # unused / no event
+    signals = [_signal("e1", "m1", used=False), _signal("eX", "m2", used=True)]
     assert reuse_by_memory(events, signals) == {}
 
 
 def test_build_fate_context_feeds_compute_fate() -> None:
     superseded = {
         MemoryRef(_SCOPE, MemoryId("old")): Supersession(
-            superseded_by=MemoryId("new"),
-            reason="reverted and redid it",
-            at=datetime(2026, 1, 2, tzinfo=UTC),
+            superseded_by=MemoryId("new"), reason="replaced", at=datetime(2026, 1, 2, tzinfo=UTC)
         )
     }
     events = [_event("e1", "s1", ["hot"]), _event("e2", "s2", ["hot"])]
@@ -242,4 +209,4 @@ def test_build_fate_context_feeds_compute_fate() -> None:
 
     verdicts = compute_fate([_mem("hot"), _mem("old")], context)
     assert verdicts[MemoryId("hot")].polarity is FatePolarity.POSITIVE  # reused in 2 sessions
-    assert verdicts[MemoryId("old")].polarity is FatePolarity.NEGATIVE  # superseded, undo reason
+    assert verdicts[MemoryId("old")].polarity is FatePolarity.NEGATIVE  # superseded

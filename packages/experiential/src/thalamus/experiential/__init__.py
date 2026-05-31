@@ -23,11 +23,6 @@ from thalamus.experiential.fate import (
 from thalamus.experiential.ingest import ingest_episodes
 from thalamus.experiential.neo4j_supersession import Neo4jSupersessionIndex
 from thalamus.experiential.outcome import EpisodeOutcome, classify_outcome, is_success
-from thalamus.experiential.recorded_outcome import (
-    RecordedEvent,
-    TextOutcome,
-    parse_recorded_outcome,
-)
 from thalamus.experiential.segmentation import (
     CommitBoundedSegmenter,
     EpisodeSegmenter,
@@ -62,10 +57,8 @@ __all__ = [
     "InMemorySupersessionIndex",
     "Neo4jSupersessionIndex",
     "OutcomeTier",
-    "RecordedEvent",
     "SessionBoundedSegmenter",
     "SessionStampingSource",
-    "TextOutcome",
     "WhyComponent",
     "WhyProvenance",
     "assess_fate",
@@ -75,7 +68,6 @@ __all__ = [
     "fate_signals_for",
     "fate_success",
     "ingest_episodes",
-    "reuse_by_memory",
     "is_success",
-    "parse_recorded_outcome",
+    "reuse_by_memory",
 ]
