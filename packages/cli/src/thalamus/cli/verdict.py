@@ -27,10 +27,12 @@ from pathlib import Path
 from thalamus.core.types import SessionId
 from thalamus.eval import (
     ProxyTruthReport,
+    UsageStabilityReport,
     UtilityReport,
     join_proxy_truth,
     proxy_truth,
     session_utility,
+    usage_stability,
     utility_at_k,
 )
 from thalamus.experiential import (
@@ -76,6 +78,7 @@ class VerdictReport:
     monitor_coverage: float  # joined sessions / sessions with Tier-1
     n_reverted_sessions: int  # sessions whose committed work was later reverted (fate negative)
     monitor_without_fate: ProxyTruthReport  # classify (test path) alone — usually empty
+    usage: UsageStabilityReport  # per-memory usefulness: is "used vs. ignored" stable, not noise?
 
 
 def add_verdict_arguments(parser: argparse.ArgumentParser) -> None:
@@ -210,6 +213,7 @@ def compute_verdict(
         monitor_coverage=len(units) / len(tier1) if tier1 else 0.0,
         n_reverted_sessions=len(reverted_sessions),
         monitor_without_fate=proxy_truth(join_proxy_truth(tier1, classify_tier2)),
+        usage=usage_stability(events, signals),
     )
 
 
@@ -244,6 +248,20 @@ def _render(report: VerdictReport) -> str:
         f"{report.n_reverted_sessions} reverted-negative "
         f"(classify/test-path alone would join {report.monitor_without_fate.n_units})"
     )
+    s = report.usage
+    if s.n_eligible == 0:
+        lines.append(
+            f"Usage stability: no memory surfaced >={s.min_surfaced}x with a captured "
+            "outcome yet — needs more usage volume."
+        )
+    else:
+        lines += [
+            f"Usage stability: {s.n_eligible} memories surfaced >={s.min_surfaced}x — "
+            f"{s.n_reliable} reliably-used / {s.n_ignored} reliably-ignored / {s.n_mixed} mixed "
+            f"(separation={s.separation:.2f}, mean rate={s.mean_rate:.2f})",
+            f"  cross-session reuse: {s.n_reused} memory(ies) used in >=2 sessions "
+            f"(max {s.max_reuse}) — the reliably-useful core",
+        ]
     return "\n".join(lines)
 
 

@@ -32,6 +32,7 @@ from thalamus.eval.proxy_truth import (
     session_proxy_truth,
     session_utility,
 )
+from thalamus.eval.stability import UsageStabilityReport, usage_stability
 from thalamus.eval.transcripts import (
     TranscriptProbe,
     default_transcripts_dir,
@@ -48,6 +49,7 @@ __all__ = [
     "ProbeReport",
     "ProxyTruthReport",
     "TranscriptProbe",
+    "UsageStabilityReport",
     "UtilityReport",
     "compare",
     "compare_probes",
@@ -65,5 +67,6 @@ __all__ = [
     "reciprocal_rank",
     "session_proxy_truth",
     "session_utility",
+    "usage_stability",
     "utility_at_k",
 ]

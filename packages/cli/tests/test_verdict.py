@@ -104,6 +104,20 @@ def test_compute_verdict_joins_recalls_to_outcomes() -> None:
     assert report.monitor_coverage == 1.0
 
 
+def test_verdict_reports_usage_stability() -> None:
+    # m1 reliably used across two sessions, m2 reliably ignored — the per-memory usefulness
+    # signal rides along on the same logs (no failure/outcome label needed).
+    events = [_event("e1", "s1", ["m1", "m2"]), _event("e2", "s2", ["m1", "m2"])]
+    signals = [
+        _signal("e1", "m1", used=True), _signal("e1", "m2", used=False),
+        _signal("e2", "m1", used=True), _signal("e2", "m2", used=False),
+    ]
+    report = compute_verdict(events, signals, [], k=5)
+    assert (report.usage.n_reliable, report.usage.n_ignored) == (1, 1)
+    assert report.usage.separation == 1.0  # both memories cleanly classed
+    assert report.usage.n_reused == 1  # only m1 was used across >= 2 sessions
+
+
 def test_compute_verdict_excludes_sessions_without_an_outcome_label() -> None:
     # s2 has Tier-1 recalls but only a non-terminal/unknown outcome -> dropped from the join
     events = [_event("e1", "s1", ["a"]), _event("e2", "s2", ["b"])]
