@@ -184,6 +184,14 @@ def test_compute_fate_plain_memory_is_unknown() -> None:
     assert verdict.polarity is FatePolarity.UNKNOWN
 
 
+def test_curated_body_that_discusses_reverts_is_not_flagged_negative() -> None:
+    # First-reading finding (2026-05-30): a memory whose BODY discusses reverts/redo/pushed-back
+    # (its topic) is not a self-report of its own undoing — it must not become a negative.
+    memory = _mem("m1", "Decided to add git revert detection; the dev pushed back the CI approach.")
+    verdict = compute_fate([memory], FateContext(superseded={}))[MemoryId("m1")]
+    assert verdict.polarity is FatePolarity.UNKNOWN
+
+
 # --- the log-derived loaders (reuse / context assembly) ---
 
 

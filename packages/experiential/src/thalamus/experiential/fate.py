@@ -175,9 +175,13 @@ def _sha_reverted(sha: str | None, reverted_shas: frozenset[str]) -> bool:
 def fate_signals_for(memory: MemoryRecord, context: FateContext) -> FateSignals:
     """Assemble one memory's :class:`FateSignals` from the pre-loaded context. Pure.
 
-    The supersession *reason* and the memory text both go through the action-grounded extractor
-    (:func:`parse_recorded_outcome`) — never a sentiment read — so the model-text contribution is
-    the same firewall-safe ``UNDONE``/``LANDED`` event used everywhere else."""
+    A curated memory's *body* is descriptive — it is *about* a topic — not a self-report of its
+    own outcome, so the body is NOT read for a ``LANDED``/``UNDONE`` event here: that misfires on
+    memories that merely *discuss* reverts (the first-reading finding, 2026-05-30 — the R3 memories
+    flagged themselves). The grounded text we *do* trust is the supersession **reason** (precisely
+    about why this belief was replaced). The body's sha is still used for revert-linking, and
+    ``FateSignals.text_event`` stays available for the session-work consumer to set from genuine
+    "I redid this" work-reports."""
     text = parse_recorded_outcome(memory.content)
     superseded = context.superseded.get(memory.memory_id)
     reason_negative = False
@@ -194,7 +198,7 @@ def fate_signals_for(memory: MemoryRecord, context: FateContext) -> FateSignals:
         churn_ratio=context.churn_ratio.get(memory.memory_id, 0.0),
         reuse_sessions=context.reuse_sessions.get(memory.memory_id, 0),
         survived_activity=context.survived_activity.get(memory.memory_id, 0),
-        text_event=text.event if text else None,
+        text_event=None,  # curated body is descriptive, not a self-report — see docstring
     )
 
 
