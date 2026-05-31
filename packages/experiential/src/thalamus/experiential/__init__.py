@@ -7,9 +7,22 @@ materializes them as Brain-1 records — the unfinished half of §10 step 1
 """
 
 from thalamus.experiential.episode import EpisodeBuilder, WhyComponent, WhyProvenance
+from thalamus.experiential.fate import (
+    FatePolarity,
+    FateSignals,
+    FateVerdict,
+    OutcomeTier,
+    assess_fate,
+    fate_success,
+)
 from thalamus.experiential.ingest import ingest_episodes
 from thalamus.experiential.neo4j_supersession import Neo4jSupersessionIndex
 from thalamus.experiential.outcome import EpisodeOutcome, classify_outcome, is_success
+from thalamus.experiential.recorded_outcome import (
+    RecordedEvent,
+    TextOutcome,
+    parse_recorded_outcome,
+)
 from thalamus.experiential.segmentation import (
     CommitBoundedSegmenter,
     EpisodeSegmenter,
@@ -34,16 +47,25 @@ __all__ = [
     "EpisodeOutcome",
     "EpisodeSegmenter",
     "EpisodeSpan",
+    "FatePolarity",
+    "FateSignals",
+    "FateVerdict",
     "FileCheckpoint",
     "GitEpisodeIngestor",
     "InMemoryCheckpoint",
     "InMemorySupersessionIndex",
     "Neo4jSupersessionIndex",
+    "OutcomeTier",
+    "RecordedEvent",
     "SessionBoundedSegmenter",
     "SessionStampingSource",
+    "TextOutcome",
     "WhyComponent",
     "WhyProvenance",
+    "assess_fate",
     "classify_outcome",
+    "fate_success",
     "ingest_episodes",
     "is_success",
+    "parse_recorded_outcome",
 ]
