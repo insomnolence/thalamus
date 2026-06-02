@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from thalamus.core.exceptions import ThalamusError
+from thalamus.core.taxonomy import RememberKindInput
 from thalamus.core.types import EventId, MemoryId, MemoryRecord, Scope, SessionId
 from thalamus.gateway.gateway import Gateway
 from thalamus.gateway.payload import ContextPayload
@@ -163,7 +164,7 @@ def build_server(
 
         @server.tool
         async def remember(
-            kind: str,
+            kind: RememberKindInput,
             text: str,
             why: str | None = None,
             files: list[str] | None = None,
@@ -173,10 +174,11 @@ def build_server(
         ) -> str:
             """Save a durable fact so future sessions don't rediscover it: after a decision,
             gotcha, correction, or finished chunk of work. `kind`:
-            decision|constraint|gotcha|investigation|preference. `why`: the reasoning (makes it
-            useful later). `files`: paths it's about. `importance`: 1 normal, 2 load-bearing,
-            3 project-defining. `supersedes`: id of a memory this replaces (kept but demoted,
-            never dropped)."""
+            decision|constraint|gotcha|investigation|preference (project→decision,
+            user/feedback→preference, reference→investigation are also accepted and normalized).
+            `why`: the reasoning (makes it useful later). `files`: paths it's about.
+            `importance`: 1 normal, 2 load-bearing, 3 project-defining. `supersedes`: id of a
+            memory this replaces (kept but demoted, never dropped)."""
             record = remember_writer(
                 kind, text, why, files or (), importance, memory_id, supersedes
             )

@@ -22,6 +22,7 @@ from pathlib import Path
 from thalamus.cli.brain import build_store, close_store
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
+from thalamus.core.taxonomy import ACCEPTED_KINDS, normalize_kind
 from thalamus.core.types import (
     Hemisphere,
     MemoryId,
@@ -37,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DIM = 128
 _DEFAULT_ENCODER = "bge-small"
-_KINDS = ("decision", "constraint", "gotcha", "investigation", "preference")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +72,9 @@ def add_remember_arguments(parser: argparse.ArgumentParser) -> None:
         "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
         help="embedding model (default: bge-small; deterministic is for smoke tests)",
     )
-    parser.add_argument("--kind", choices=_KINDS, required=True, help="type of retained knowledge")
+    parser.add_argument(
+        "--kind", choices=ACCEPTED_KINDS, required=True, help="type of retained knowledge"
+    )
     parser.add_argument("--text", required=True, help="concise fact the agent should recall")
     parser.add_argument("--why", default=None, help="supporting rationale or evidence")
     parser.add_argument(
@@ -142,8 +144,7 @@ def build_retained_record(
     config: RememberConfig, *, now: Callable[[], datetime] = lambda: datetime.now(UTC)
 ) -> MemoryRecord:
     """Build an idempotently-addressed curated memory for storage."""
-    if config.kind not in _KINDS:
-        raise ThalamusError(f"unsupported retained memory kind: {config.kind}")
+    kind = normalize_kind(config.kind)  # synonyms (e.g. project→decision) map to the canonical set
     if not config.text.strip():
         raise ThalamusError("retained memory text must not be empty")
     if not math.isfinite(config.importance):
@@ -151,7 +152,7 @@ def build_retained_record(
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     raw_id = config.memory_id
     if raw_id is None:
-        digest = hashlib.sha256(f"{config.kind}\n{config.text}".encode()).hexdigest()[:16]
+        digest = hashlib.sha256(f"{kind}\n{config.text}".encode()).hexdigest()[:16]
         raw_id = f"retained:{digest}"
     elif not raw_id.startswith("retained:"):
         raw_id = f"retained:{raw_id}"
@@ -160,12 +161,14 @@ def build_retained_record(
         "importance": config.importance,
         "footprint": _footprint(config),
     }
+    if kind != config.kind:
+        metadata["requested_kind"] = config.kind  # audit trail: what the caller actually asked for
     if config.why is not None:
         metadata["why"] = config.why
     return MemoryRecord(
         memory_id=MemoryId(raw_id),
         hemisphere=Hemisphere.EXPERIENTIAL,
-        kind=config.kind,
+        kind=kind,
         content=config.text,
         scope=scope,
         created_at=now(),

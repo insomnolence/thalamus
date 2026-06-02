@@ -21,6 +21,14 @@ from thalamus.core.protocols import (
     SupersessionIndex,
 )
 from thalamus.core.serde import deserialize_memory_record, serialize_memory_record
+from thalamus.core.taxonomy import (
+    ACCEPTED_KINDS,
+    KIND_SYNONYMS,
+    RETAINED_KINDS,
+    RememberKindInput,
+    RetainedKind,
+    normalize_kind,
+)
 from thalamus.core.types import (
     Cue,
     EpisodeId,
@@ -41,6 +49,7 @@ from thalamus.core.types import (
 )
 
 __all__ = [
+    "ACCEPTED_KINDS",
     "ConfigurationError",
     "Cue",
     "DimensionMismatchError",
@@ -50,10 +59,14 @@ __all__ = [
     "EpisodeId",
     "EventId",
     "Hemisphere",
+    "KIND_SYNONYMS",
     "MemoryId",
     "MemoryRef",
     "MemoryRecord",
+    "RETAINED_KINDS",
+    "RememberKindInput",
     "RepoId",
+    "RetainedKind",
     "RetrievalResult",
     "Retriever",
     "Router",
@@ -69,5 +82,6 @@ __all__ = [
     "ThalamusError",
     "Vector",
     "deserialize_memory_record",
+    "normalize_kind",
     "serialize_memory_record",
 ]

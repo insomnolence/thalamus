@@ -100,6 +100,18 @@ def test_remember_rejects_invalid_mcp_inputs(tmp_path: Path) -> None:
         build_retained_record(_config(tmp_path, text="   "), now=lambda: NOW)
 
 
+def test_remember_normalizes_a_claude_code_synonym_kind(tmp_path: Path) -> None:
+    # An actuator's native kind (e.g. `project`) must not lose the write — it normalizes to the
+    # canonical kind, keeps the original in metadata, and the id is keyed off the canonical kind.
+    record = build_retained_record(_config(tmp_path, kind="project"), now=lambda: NOW)
+    assert record.kind == "decision"
+    assert record.metadata["requested_kind"] == "project"
+    # Same fact under the canonical kind → same idempotent id (synonym never forks identity).
+    canonical = build_retained_record(_config(tmp_path, kind="decision"), now=lambda: NOW)
+    assert record.memory_id == canonical.memory_id
+    assert "requested_kind" not in canonical.metadata
+
+
 def test_remember_records_supersession_edge(tmp_path: Path) -> None:
     encoder = DeterministicEncoder(dim=64)
     store = InMemoryStore(dim=64)

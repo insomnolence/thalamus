@@ -214,3 +214,34 @@ async def test_remember_tool_is_exposed_only_with_writer_and_calls_it() -> None:
     assert "remembered retained:scope" in str(result.data)
     assert "Supersedes retained:old" in str(result.data)
     assert "after the MCP server restarts" in str(result.data)
+
+
+async def test_remember_tool_accepts_a_synonym_kind_but_rejects_an_unknown_one() -> None:
+    from fastmcp import Client
+    from fastmcp.exceptions import ToolError
+
+    calls: list[str] = []
+
+    def write(
+        kind: str,
+        text: str,
+        why: str | None,
+        files: Sequence[str],
+        importance: float,
+        memory_id: str | None,
+        supersedes: str | None,
+    ) -> MemoryRecord:
+        calls.append(kind)
+        return MemoryRecord(
+            MemoryId("retained:scope"), Hemisphere.EXPERIENTIAL, kind, text, SCOPE, NOW, {}
+        )
+
+    server = build_server(_gateway(), SCOPE, remember_writer=write)
+    async with Client(server) as client:
+        # An accepted synonym passes schema validation and reaches the writer (normalized later).
+        await client.call_tool("remember", {"kind": "project", "text": "x"})
+        # A genuinely unknown kind is rejected at the schema boundary — a clean tool error, never
+        # an uncaught traceback, and the writer is never invoked.
+        with pytest.raises(ToolError):
+            await client.call_tool("remember", {"kind": "conversation", "text": "x"})
+    assert calls == ["project"]
