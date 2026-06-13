@@ -22,6 +22,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from thalamus.cli.project import CorpusConfig
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Retriever, Store, SupersessionIndex
 from thalamus.core.types import Hemisphere, MemoryRecord, Scope
@@ -57,6 +58,7 @@ from thalamus.structural import (
     StructuralRetriever,
     code_files,
     footprint_staleness,
+    glob_files,
     incremental_ingest,
     link_by_footprint,
     markdown_files,
@@ -80,7 +82,7 @@ def _default_ingestor(resolve_calls: bool) -> Ingestor:
     return CompositeIngestor([ast_pass, JediCallIngestor()])
 
 
-def _scip_ingestor(scip_index: Path) -> Ingestor:
+def _scip_ingestor(scip_index: Path, *, root_package: str | None = None) -> Ingestor:
     """The language-agnostic SCIP ingestor (structure + precise calls in one pass).
 
     ``scip_index`` is a `.scip` artifact built out-of-band (e.g. ``scip-typescript``;
@@ -89,7 +91,7 @@ def _scip_ingestor(scip_index: Path) -> Ingestor:
         raise ThalamusError(
             "SCIP ingestion needs the 'scip' extra: install thalamus-structural[scip]"
         )
-    return ScipIngestor(scip_index)
+    return ScipIngestor(scip_index, root_package=root_package)
 
 
 def _code_ingestor(code_language: str, scip_index: Path | None, resolve_calls: bool) -> Ingestor:
@@ -161,6 +163,60 @@ def build_corpora(
         doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
         corpora.append(CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs"))
     return corpora
+
+
+def _scip_change_files(scip_index: Path, include: tuple[str, ...]) -> Callable[[Path], list[Path]]:
+    """Change-detection enumerator for a SCIP corpus: its source files (the ``include`` globs) PLUS
+    the ``.scip`` artifact itself — so a live re-derive fires on a code edit OR an externally
+    rebuilt index. (The ingestor reads the ``.scip``; this only drives change detection.)"""
+    source = glob_files(*include)
+
+    def files(root: Path) -> list[Path]:
+        out = list(source(root))
+        if scip_index.exists():
+            out.append(scip_index)
+        return out
+
+    return files
+
+
+def build_corpora_from_configs(
+    configs: Sequence[CorpusConfig],
+    *,
+    encoder: Encoder,
+    index_factory: Callable[[str], StructuralIndex] | None = None,
+    resolve_calls: bool = True,
+) -> list[CorpusSpec]:
+    """Build Brain-2 corpora from declarative ``[[corpus]]`` configs — the language-agnostic path.
+
+    Each corpus gets its own (no-pollution) index via ``index_factory`` (else in-memory). ``scip``
+    corpora work for ANY SCIP language (TS/Rust/C++/Go/…) with no new code; their change detection
+    hashes the source (``include`` globs) plus the ``.scip``. An empty ``include`` falls back to the
+    kind's default walker for python/docs (Python source / Markdown)."""
+
+    def make_index(name: str) -> StructuralIndex:
+        if index_factory is not None:
+            return index_factory(name)
+        return InMemoryStructuralIndex(dim=encoder.dim)
+
+    specs: list[CorpusSpec] = []
+    for cfg in configs:
+        index = make_index(cfg.name)
+        if cfg.kind == "python-ast":
+            files = glob_files(*cfg.include) if cfg.include else code_files
+            ingestor: Ingestor = _default_ingestor(resolve_calls)
+        elif cfg.kind == "scip":
+            if cfg.scip_index is None:  # defensive — parse_corpora already enforces this
+                raise ThalamusError(f"corpus {cfg.name!r}: kind='scip' requires a scip_index")
+            files = _scip_change_files(cfg.scip_index, cfg.include)
+            ingestor = _scip_ingestor(cfg.scip_index, root_package=cfg.root_package)
+        elif cfg.kind == "docs":
+            files = glob_files(*cfg.include) if cfg.include else markdown_files
+            ingestor = DocIngestor(id_namespace=cfg.name)
+        else:  # defensive — parse_corpora already enforces the kind set
+            raise ThalamusError(f"corpus {cfg.name!r}: unknown kind {cfg.kind!r}")
+        specs.append(CorpusSpec(ingestor, index, files, cfg.name, root=cfg.root))
+    return specs
 
 
 def build_two_hemisphere_gateway(

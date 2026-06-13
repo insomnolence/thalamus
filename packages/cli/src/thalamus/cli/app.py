@@ -109,12 +109,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     command, config_arg = _prescan(raw_argv)
     config_path = find_project_config(config_arg)
     if config_path is not None and command in parsers:
-        arg_defaults, env_defaults = load_project_config(config_path)
+        arg_defaults, env_defaults, corpora = load_project_config(config_path)
         for var, val in env_defaults.items():
             os.environ.setdefault(var, val)
         target = parsers[command]
         valid = {action.dest for action in target._actions}
         target.set_defaults(**{k: v for k, v in arg_defaults.items() if k in valid})
+        # The declarative [[corpus]] set isn't a CLI flag (it's structured); stash it on the
+        # serve namespace directly so serve_config can pick it up. Harmless on other commands.
+        if corpora:
+            target.set_defaults(corpora=corpora)
 
     args = parser.parse_args(raw_argv)
     if args.command == "sync":

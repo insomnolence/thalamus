@@ -7,6 +7,7 @@ ignored or hidden directories — the corpus is the project, not its dependencie
 
 from __future__ import annotations
 
+import fnmatch
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -75,6 +76,30 @@ def _is_typescript_source(name: str) -> bool:
     if name.endswith(".d.ts"):  # ambient type declarations — not project structure
         return False
     return not name.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"))
+
+
+def glob_files(
+    *patterns: str, ignore_dirs: Iterable[str] = IGNORE_DIRS
+) -> Callable[[Path], list[Path]]:
+    """A corpus-file enumerator matching filename glob ``patterns`` under a root.
+
+    The language-agnostic counterpart of the built-in Python/TS/Markdown walkers: it lets a
+    declarative ``[[corpus]]`` config name its own source files for any language —
+    ``glob_files("*.rs")`` (Rust), ``glob_files("*.cpp", "*.hpp", "*.h")`` (C++), etc. A file
+    matches when its *name* matches any pattern; the same ignored/hidden dirs are pruned. Used for
+    change detection — for a SCIP corpus the ingestor reads the prebuilt index, but the enumerator
+    must hash the on-disk source so a code edit triggers a re-derive."""
+    pats = tuple(patterns)
+
+    def accept(name: str) -> bool:
+        return any(fnmatch.fnmatch(name, pat) for pat in pats)
+
+    def enumerate_files(root: Path, ignore: Iterable[str] = ignore_dirs) -> list[Path]:
+        if root.is_file():
+            return [root] if accept(root.name) else []
+        return _walk(root, accept, ignore)
+
+    return enumerate_files
 
 
 def typescript_files(root: Path, ignore_dirs: Iterable[str] = IGNORE_DIRS) -> list[Path]:

@@ -28,7 +28,7 @@ def _write_toml(tmp_path: Path) -> Path:
 
 
 def test_load_maps_keys_and_resolves_paths(tmp_path: Path) -> None:
-    arg_defaults, env_defaults = load_project_config(_write_toml(tmp_path))
+    arg_defaults, env_defaults, _ = load_project_config(_write_toml(tmp_path))
     # friendly keys -> argparse dests
     assert arg_defaults["repo_id"] == "dollhouse"
     assert arg_defaults["code_language"] == "typescript"
@@ -51,7 +51,7 @@ def test_load_maps_keys_and_resolves_paths(tmp_path: Path) -> None:
 def test_unknown_keys_ignored(tmp_path: Path) -> None:
     path = tmp_path / "thalamus.toml"
     path.write_text('repo_id = "x"\nfuture_knob = 42\n', encoding="utf-8")
-    arg_defaults, _ = load_project_config(path)
+    arg_defaults, _, _ = load_project_config(path)
     assert arg_defaults == {"repo_id": "x"}  # forward-compatible: unknown key dropped
 
 
@@ -66,7 +66,7 @@ def test_find_prefers_explicit_then_cwd(tmp_path: Path, monkeypatch) -> None:  #
 
 
 def test_toml_defaults_flow_into_serve_config_and_cli_overrides(tmp_path: Path) -> None:
-    arg_defaults, _ = load_project_config(_write_toml(tmp_path))
+    arg_defaults, _, _ = load_project_config(_write_toml(tmp_path))
     parser = argparse.ArgumentParser()
     add_serve_arguments(parser)
     valid = {a.dest for a in parser._actions}
@@ -85,3 +85,72 @@ def test_toml_defaults_flow_into_serve_config_and_cli_overrides(tmp_path: Path) 
     cfg2 = serve_config(parser.parse_args(["--port", "9999"]))
     assert cfg2.port == 9999
     assert cfg2.repo_id == "dollhouse"  # untouched keys still from the toml
+
+
+# ── declarative [[corpus]] config ────────────────────────────────────────────────────────────
+
+_CORPUS_TOML = """
+repo_id = "poly"
+
+[[corpus]]
+name = "rust-core"
+root = "crates"
+kind = "scip"
+scip_index = "rust.scip"
+include = ["*.rs"]
+regen_command = "rust-analyzer scip . --output rust.scip"
+
+[[corpus]]
+name = "py-tools"
+root = "tools"
+kind = "python-ast"
+
+[[corpus]]
+name = "design-docs"
+root = "docs"
+kind = "docs"
+"""
+
+
+def test_parse_corpora_reads_mixed_languages_and_resolves_paths(tmp_path: Path) -> None:
+    path = tmp_path / "thalamus.toml"
+    path.write_text(_CORPUS_TOML, encoding="utf-8")
+    _, _, corpora = load_project_config(path)
+    assert [c.name for c in corpora] == ["rust-core", "py-tools", "design-docs"]
+    rust = corpora[0]
+    assert rust.kind == "scip"
+    assert rust.root == (tmp_path / "crates").resolve()
+    assert rust.scip_index == (tmp_path / "rust.scip").resolve()
+    assert rust.include == ("*.rs",)
+    assert rust.regen_command == "rust-analyzer scip . --output rust.scip"
+    assert corpora[1].kind == "python-ast"
+    assert corpora[2].kind == "docs"
+
+
+def test_flat_config_has_no_explicit_corpora(tmp_path: Path) -> None:
+    _, _, corpora = load_project_config(_write_toml(tmp_path))
+    assert corpora == []  # flat keys drive the build; [[corpus]] is opt-in
+
+
+def _parse(tmp_path: Path, body: str) -> None:
+    path = tmp_path / "thalamus.toml"
+    path.write_text(body, encoding="utf-8")
+    load_project_config(path)
+
+
+def test_corpus_validation_errors(tmp_path: Path) -> None:
+    import pytest
+    from thalamus.core.exceptions import ThalamusError
+
+    with pytest.raises(ThalamusError, match="kind must be one of"):
+        _parse(tmp_path, '[[corpus]]\nname="x"\nroot="."\nkind="rust"\n')
+    with pytest.raises(ThalamusError, match="'root' is required"):
+        _parse(tmp_path, '[[corpus]]\nname="x"\nkind="docs"\n')
+    with pytest.raises(ThalamusError, match="requires 'scip_index'"):
+        _parse(tmp_path, '[[corpus]]\nname="x"\nroot="."\nkind="scip"\n')
+    with pytest.raises(ThalamusError, match="needs 'include'"):
+        _parse(
+            tmp_path,
+            '[[corpus]]\nname="x"\nroot="."\nkind="scip"\nscip_index="x.scip"\n'
+            'regen_command="build"\n',
+        )

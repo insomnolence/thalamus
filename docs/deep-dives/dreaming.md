@@ -202,9 +202,14 @@ A long session got confused here, so, plainly:
   / churn). Two consumers: per-memory **credibility** (the `CredibilityPass`, a dreaming actor) and
   per-session **fate → Tier-2** (in the `verdict` report — a manual read-only *measurement*, not
   dreaming).
-- The automatic dreaming loop runs (once the serve picks up this code): structural-refresh
-  (**incremental** — only episodes new since the last tick, so no per-`remember` re-link storm),
-  link-resolution, **credibility**, belief-audit.
+- The automatic dreaming loop runs (once the serve picks up this code): **structural-rederive**
+  (re-derive Brain 2 itself from current source — hash-gated, language-agnostic over the configured
+  corpora; runs first so new code nodes exist before re-linking), structural-refresh (**incremental**
+  — only episodes new since the last tick, so no per-`remember` re-link storm), link-resolution,
+  **credibility**, belief-audit. The corpora are declared per project (a `thalamus.toml`
+  `[[corpus]]` array: `python-ast` / `scip` for any SCIP language / `docs`), so Brain 2 is not
+  bespoke to one language; a corpus' `regen_command` lets the pass rebuild an external index (e.g.
+  a `.scip`) when its source changes.
 
 **The roadmap — three steps; only A is done, C is the goal and is gated:**
 

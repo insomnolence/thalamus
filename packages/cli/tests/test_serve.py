@@ -234,3 +234,42 @@ async def test_served_mcp_remember_is_immediately_recallable(tmp_path: Path) -> 
     assert "sqlite migrations require a rollback test" in str(recalled.data)
     (record,) = store.scan(scope)
     assert record.metadata["source"] == "curated"
+
+
+def test_regen_hook_runs_only_after_the_source_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regen step rebuilds a corpus' external index only when its source changed since the
+    last tick — seeded on the first cycle so a freshly-built artifact isn't needlessly rebuilt."""
+    from thalamus.cli import serve as serve_mod
+    from thalamus.cli.project import CorpusConfig
+    from thalamus.structural import CorpusSpec, glob_files
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.ts").write_text("v1", encoding="utf-8")
+    cfg = CorpusConfig(
+        name="ts", root=src, kind="scip", scip_index=tmp_path / "i.scip",
+        include=("*.ts",), regen_command="build-index",
+    )
+    ran: list[str] = []
+    monkeypatch.setattr(serve_mod, "_run_regen", lambda corpus: ran.append(corpus.name))
+    hook = serve_mod.build_regen_hook([cfg])
+    assert hook is not None
+    spec = CorpusSpec(None, None, glob_files("*.ts"), "ts", root=src)  # type: ignore[arg-type]
+
+    hook([spec])  # first cycle: seed the digest, do not rebuild the fresh index
+    assert ran == []
+    hook([spec])  # unchanged source → still no rebuild
+    assert ran == []
+    (src / "a.ts").write_text("v2", encoding="utf-8")
+    hook([spec])  # source changed → the heavy index rebuild runs, once
+    assert ran == ["ts"]
+
+
+def test_regen_hook_is_none_without_any_regen_command(tmp_path: Path) -> None:
+    from thalamus.cli import serve as serve_mod
+    from thalamus.cli.project import CorpusConfig
+
+    cfg = CorpusConfig(name="py", root=tmp_path, kind="python-ast")
+    assert serve_mod.build_regen_hook([cfg]) is None

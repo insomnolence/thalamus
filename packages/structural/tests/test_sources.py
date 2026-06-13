@@ -75,3 +75,17 @@ def test_typescript_files_single_file(tmp_path: Path) -> None:
     decl = tmp_path / "x.d.ts"
     _touch(decl)
     assert typescript_files(decl) == []
+
+
+def test_glob_files_matches_patterns_and_prunes_noise(tmp_path: Path) -> None:
+    from thalamus.structural import glob_files
+
+    _write(tmp_path, "src/a.rs")
+    _write(tmp_path, "src/b.rs")
+    _write(tmp_path, "src/c.py")
+    _write(tmp_path, "node_modules/d.rs")  # ignored dependency dir
+    _write(tmp_path, ".hidden/e.rs")  # hidden dir
+    rust = glob_files("*.rs")(tmp_path)
+    assert [p.name for p in rust] == ["a.rs", "b.rs"]  # sorted; .py + ignored/hidden excluded
+    multi = glob_files("*.rs", "*.py")(tmp_path)
+    assert {p.name for p in multi} == {"a.rs", "b.rs", "c.py"}  # multiple patterns union

@@ -50,6 +50,7 @@ from thalamus.structural.schema import (
 from thalamus.structural.scip_ingestor import ScipIngestor
 from thalamus.structural.sources import (
     code_files,
+    glob_files,
     markdown_files,
     python_files,
     typescript_files,
@@ -90,6 +91,7 @@ __all__ = [
     "StructuralRetriever",
     "UsageAttributor",
     "code_files",
+    "glob_files",
     "footprint_staleness",
     "incremental_ingest",
     "link_by_footprint",

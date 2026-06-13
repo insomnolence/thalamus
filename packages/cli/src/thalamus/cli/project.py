@@ -17,13 +17,34 @@ file — they stay in the environment. Example::
     doc_roots  = ["docs", "mcp-server/docs"]
     http_port  = 8788
     neo4j_uri  = "bolt://localhost:7688"   # password via THALAMUS_NEO4J_PASSWORD (env)
+
+For Brain 2 beyond a single code language, declare an explicit set of corpora as ``[[corpus]]``
+tables (any mix of languages, or docs only) — so the brain is customised per project, not bespoke
+to Python/TS. Any language with a SCIP indexer is ``kind = "scip"``; ``regen_command`` (optional)
+lets the live re-derive pass rebuild that corpus' index when its source changes::
+
+    [[corpus]]
+    name = "rust-core"
+    root = "crates"
+    kind = "scip"                       # any SCIP language: Rust, C++, Go, TS, …
+    scip_index    = "rust-core.scip"
+    include       = ["*.rs"]            # source globs (change detection + regen gating)
+    regen_command = "rust-analyzer scip . --output rust-core.scip"
+
+    [[corpus]]
+    name = "design-docs"
+    root = "docs"
+    kind = "docs"                       # Markdown; 'python-ast' for in-process Python parsing
 """
 
 from __future__ import annotations
 
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from thalamus.core.exceptions import ThalamusError
 
 # Friendly TOML key -> argparse dest (serve/sync/health share these dests).
 _KEY_TO_DEST: dict[str, str] = {
@@ -65,12 +86,15 @@ def find_project_config(explicit: Path | None) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def load_project_config(path: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    """Parse a ``thalamus.toml`` into (argparse-default overrides, environment overrides).
+def load_project_config(
+    path: Path,
+) -> tuple[dict[str, Any], dict[str, str], list[CorpusConfig]]:
+    """Parse a ``thalamus.toml`` into (argparse-default overrides, environment overrides, corpora).
 
     Path-valued keys are resolved relative to ``path``'s directory. Unknown keys are ignored
-    (forward-compatible). Returns dests keyed for ``parser.set_defaults`` plus env vars to
-    ``setdefault`` (so an explicit env var still wins)."""
+    (forward-compatible). Returns dests keyed for ``parser.set_defaults``, env vars to
+    ``setdefault`` (so an explicit env var still wins), and the declarative ``[[corpus]]`` set
+    (empty when absent — the flat ``code_root``/``language``/``doc_roots`` keys then drive it)."""
     base = path.resolve().parent
     with path.open("rb") as fh:
         raw = tomllib.load(fh)
@@ -90,10 +114,82 @@ def load_project_config(path: Path) -> tuple[dict[str, Any], dict[str, str]]:
             arg_defaults[dest] = [_resolve(base, item) for item in value]
         else:
             arg_defaults[dest] = value
-    return arg_defaults, env_defaults
+    return arg_defaults, env_defaults, parse_corpora(raw, base)
 
 
 def _resolve(base: Path, value: Any) -> Path:
     """Resolve a path value relative to the config file's directory (absolute kept as-is)."""
     p = Path(str(value))
     return p if p.is_absolute() else (base / p).resolve()
+
+
+# ── Declarative Brain-2 corpora ──────────────────────────────────────────────────────────────
+# Beyond the flat code_root/language/scip_index/doc_roots keys (one code corpus + docs), a project
+# may declare an explicit set of corpora — any mix of languages or docs — as [[corpus]] tables, so
+# Brain 2 is customised per project without bespoke code. Any language with a SCIP indexer
+# (TS/Rust/C++/Go/…) is a 'scip' corpus; Python is 'python-ast'; Markdown is 'docs'.
+
+CORPUS_KINDS = frozenset({"python-ast", "scip", "docs"})
+
+
+@dataclass(frozen=True, slots=True)
+class CorpusConfig:
+    """One Brain-2 corpus declared in a ``thalamus.toml`` ``[[corpus]]`` table.
+
+    ``kind`` is ``python-ast`` (in-process AST + jedi), ``scip`` (consume a prebuilt ``.scip`` —
+    any SCIP language), or ``docs`` (Markdown). ``root`` is the dir to ingest. ``scip_index`` (for
+    ``scip``) is the artifact. ``include`` are filename globs naming the corpus' source files for
+    change detection (e.g. ``["*.rs"]``); empty falls back to the kind's default walker.
+    ``regen_command`` (optional) is the shell command that rebuilds the artifact (e.g.
+    ``scip-rust-analyzer …``), run by the re-derive pass when the source changes. ``root_package``
+    optionally prefixes module ids."""
+
+    name: str
+    root: Path
+    kind: str
+    scip_index: Path | None = None
+    include: tuple[str, ...] = ()
+    regen_command: str | None = None
+    root_package: str | None = None
+
+
+def parse_corpora(raw: dict[str, Any], base: Path) -> list[CorpusConfig]:
+    """Parse the ``[[corpus]]`` array-of-tables into validated configs (empty when absent).
+
+    Paths (``root``/``scip_index``) resolve relative to the config file's directory. Raises a
+    clean :class:`ThalamusError` on a malformed entry (unknown kind, missing root, scip without
+    an index) rather than failing deep in the build."""
+    corpora: list[CorpusConfig] = []
+    for i, entry in enumerate(raw.get("corpus", [])):
+        if not isinstance(entry, dict):
+            raise ThalamusError(f"[[corpus]] entry {i} must be a table")
+        label = str(entry.get("name", i))
+        kind = str(entry.get("kind", "")).strip()
+        if kind not in CORPUS_KINDS:
+            raise ThalamusError(
+                f"[[corpus]] '{label}': kind must be one of {sorted(CORPUS_KINDS)}, got {kind!r}"
+            )
+        if entry.get("root") is None:
+            raise ThalamusError(f"[[corpus]] '{label}': 'root' is required")
+        scip = entry.get("scip_index")
+        if kind == "scip" and scip is None:
+            raise ThalamusError(f"[[corpus]] '{label}': kind='scip' requires 'scip_index'")
+        regen = entry.get("regen_command")
+        if regen and not entry.get("include"):
+            raise ThalamusError(
+                f"[[corpus]] '{label}': 'regen_command' needs 'include' globs so the re-derive "
+                "pass can tell when the source changed and the artifact must be rebuilt"
+            )
+        pkg = entry.get("root_package")
+        corpora.append(
+            CorpusConfig(
+                name=str(entry.get("name") or entry["root"]),
+                root=_resolve(base, entry["root"]),
+                kind=kind,
+                scip_index=_resolve(base, scip) if scip is not None else None,
+                include=tuple(str(pat) for pat in entry.get("include", ())),
+                regen_command=str(regen) if regen else None,
+                root_package=str(pkg) if pkg else None,
+            )
+        )
+    return corpora

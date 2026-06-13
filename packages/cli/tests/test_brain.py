@@ -130,3 +130,28 @@ def test_focus_path_recovers_linked_memory_over_semantic_distractor(tmp_path: Pa
         prompt="rename database connector", focus="pkg/store.py", scope=SCOPE
     )
     assert payload.memories[0].memory_id == MemoryId("linked")
+
+
+def test_build_corpora_from_configs_mixes_kinds_with_separate_indexes(tmp_path: Path) -> None:
+    from thalamus.cli.brain import build_corpora_from_configs
+    from thalamus.cli.project import CorpusConfig
+
+    configs = [
+        CorpusConfig(name="py", root=tmp_path / "src", kind="python-ast"),
+        CorpusConfig(name="design-docs", root=tmp_path / "docs", kind="docs"),
+    ]
+    specs = build_corpora_from_configs(configs, encoder=DeterministicEncoder(dim=32))
+    assert [s.corpus for s in specs] == ["py", "design-docs"]
+    assert specs[0].root == tmp_path / "src"
+    assert specs[0].index is not specs[1].index  # no-pollution: each corpus its own index
+
+
+def test_scip_change_files_tracks_source_and_the_artifact(tmp_path: Path) -> None:
+    from thalamus.cli.brain import _scip_change_files
+
+    (tmp_path / "a.ts").write_text("x", encoding="utf-8")
+    (tmp_path / "b.py").write_text("x", encoding="utf-8")  # not in the include globs
+    scip = tmp_path / "index.scip"
+    scip.write_text("binary", encoding="utf-8")
+    files = {p.name for p in _scip_change_files(scip, ("*.ts",))(tmp_path)}
+    assert files == {"a.ts", "index.scip"}  # source (by glob) + the artifact; a re-derive on either

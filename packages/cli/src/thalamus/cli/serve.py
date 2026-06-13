@@ -14,7 +14,10 @@ without it the store is in-memory (empty) and serving is a no-op shell (warned).
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import os
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -23,6 +26,7 @@ from pathlib import Path
 
 from thalamus.cli.brain import (
     build_corpora,
+    build_corpora_from_configs,
     build_store,
     build_two_hemisphere_gateway,
     close_store,
@@ -33,6 +37,7 @@ from thalamus.cli.dream import (
     dream_log_path,
     make_dream_context_factory,
 )
+from thalamus.cli.project import CorpusConfig
 from thalamus.cli.remember import RememberConfig, run_remember
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
@@ -88,6 +93,7 @@ from thalamus.structural import (
     Neo4jStructuralIndex,
     StructuralGraph,
     StructuralIndex,
+    glob_files,
 )
 
 _DEFAULT_DIM = 128
@@ -144,6 +150,10 @@ class ServeConfig:
     # set it to keep brain data OUT of the code root — e.g. serve a TS project at --repo
     # <mcp-server> but write the brain's data under an outer dir, leaving the code repo pristine.
     data_dir: Path | None = None
+    # Declarative Brain-2 corpora from thalamus.toml [[corpus]] (any mix of languages / docs). When
+    # non-empty these REPLACE the flat code_language/scip_index/doc_roots build — the project
+    # describes its own corpora, so Brain 2 isn't bespoke to one language. Empty = the flat path.
+    corpora: tuple[CorpusConfig, ...] = ()
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -298,6 +308,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         dream_tick_minutes=float(args.dream_tick_minutes),
         capture_tick=bool(args.capture_tick),
         structural_tick=bool(args.structural_tick),
+        corpora=tuple(getattr(args, "corpora", ()) or ()),
         transport=str(args.transport),
         host=str(args.host),
         port=int(args.port),
@@ -369,11 +380,19 @@ def build_serve_gateway(
         )
     episodes = store.scan(scope)  # cold-load Brain 1 to re-resolve cross-hemisphere links
     logs = (config.data_dir or config.repo) / ".thalamus" / "logs"
-    # Build the corpora ONCE (durable/Neo4j only) so the live re-derive pass shares the exact specs
-    # and index handles the startup build uses; the in-memory shell re-derives fully each start, so
-    # it has no persistent handles to refresh and builds its corpora inside the gateway call.
+    # Build the corpora ONCE so the live re-derive pass shares the exact specs + index handles the
+    # startup build uses. A declarative [[corpus]] set (any mix of languages / docs) takes priority
+    # over the flat code_language/doc_roots build; index_factory makes each corpus' Neo4j index when
+    # durable (else in-memory). The in-memory shell with no config builds corpora in the gateway.
     corpora: list[CorpusSpec] | None = None
-    if graph is not None and manifest is not None:
+    if config.corpora:
+        corpora = build_corpora_from_configs(
+            config.corpora,
+            encoder=encoder,
+            index_factory=doc_index_factory,
+            resolve_calls=config.resolve_calls,
+        )
+    elif graph is not None and manifest is not None:
         corpora = build_corpora(
             encoder=encoder,
             code_index=code_index,
@@ -414,11 +433,76 @@ def build_serve_gateway(
         usage_sink=None if config.investigate else JsonlUsageSink(logs / "usage.jsonl"),
     )
     rederive = (
-        StructuralRederivePass(corpora, graph, manifest, encoder)
+        StructuralRederivePass(
+            corpora, graph, manifest, encoder, regen=build_regen_hook(config.corpora)
+        )
         if corpora is not None and graph is not None and manifest is not None
         else None
     )
     return gateway, store, episodes, supersession, rederive
+
+
+def _source_digest(root: Path, include: tuple[str, ...]) -> str:
+    """A content digest of a corpus' source files (its ``include`` globs) — the regen gate."""
+    digest = hashlib.sha256()
+    for path in glob_files(*include)(root):  # sorted, so the digest is order-stable
+        digest.update(str(path).encode("utf-8"))
+        with contextlib.suppress(OSError):
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _run_regen(corpus: CorpusConfig) -> None:
+    """Run a corpus' ``regen_command`` (rebuild its external index artifact) in its root dir."""
+    if corpus.regen_command is None:
+        return
+    print(
+        f"thalamus: regenerating corpus '{corpus.name}' index — {corpus.regen_command}",
+        file=sys.stderr,
+    )
+    try:
+        # shell=True: command is from the project's own thalamus.toml (trusted, like a Makefile).
+        result = subprocess.run(
+            corpus.regen_command, shell=True, cwd=corpus.root,
+            capture_output=True, text=True, timeout=900,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"thalamus: corpus '{corpus.name}' regen failed to launch: {exc}", file=sys.stderr)
+        return
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout).strip()[-300:]
+        print(
+            f"thalamus: corpus '{corpus.name}' regen exited {result.returncode}: {tail}",
+            file=sys.stderr,
+        )
+
+
+def build_regen_hook(
+    configs: Sequence[CorpusConfig],
+) -> Callable[[Sequence[CorpusSpec]], None] | None:
+    """The re-derive pass' regen step: rebuild each corpus' external index when its source changed.
+
+    Gated by an in-process per-corpus source digest, seeded on the first cycle (so a freshly-built
+    index isn't needlessly rebuilt), the heavy command (e.g. ``scip-typescript``) runs at most once
+    per maintenance tick and only when that corpus' source actually changed — bursts of commits
+    between ticks collapse to one rebuild. ``None`` when no corpus declares a ``regen_command``."""
+    commands = {cfg.name: cfg for cfg in configs if cfg.regen_command is not None}
+    if not commands:
+        return None
+    digests: dict[str, str] = {}
+
+    def regen(specs: Sequence[CorpusSpec]) -> None:
+        for spec in specs:
+            corpus = commands.get(spec.corpus)
+            if corpus is None:
+                continue
+            digest = _source_digest(corpus.root, corpus.include)
+            previous = digests.get(corpus.name)
+            digests[corpus.name] = digest
+            if previous is not None and previous != digest:
+                _run_regen(corpus)  # source changed since last tick → rebuild the artifact
+
+    return regen
 
 
 def build_remember_writer(
