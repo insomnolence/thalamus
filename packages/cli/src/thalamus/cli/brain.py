@@ -284,10 +284,13 @@ def build_two_hemisphere_gateway(
     ingest = incremental_ingest(
         repo, scope, corpora=corpora, graph=graph, manifest=manifest, encoder=encoder
     )
-    # Code module nodes to link episode footprints against: the fresh parse if Brain 2 was
-    # rebuilt, else the persisted graph (a no-change build skips parsing, but episodes may be new).
+    # Module nodes to link episode footprints against: the fresh parse if Brain 2 was rebuilt (from
+    # ALL corpora — corpus names are arbitrary under [[corpus]], and link_by_footprint's
+    # module_index filters to modules, so doc nodes are ignored), else the persisted graph (a
+    # no-change build skips parsing, but episodes may be new).
     code_modules = (
-        ingest.results["code"].nodes if ingest.rebuilt
+        [node for result in ingest.results.values() for node in result.nodes]
+        if ingest.rebuilt
         else graph.nodes_of_kind(scope, "module")
     )
 

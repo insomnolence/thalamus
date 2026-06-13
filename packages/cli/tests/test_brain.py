@@ -155,3 +155,34 @@ def test_scip_change_files_tracks_source_and_the_artifact(tmp_path: Path) -> Non
     scip.write_text("binary", encoding="utf-8")
     files = {p.name for p in _scip_change_files(scip, ("*.ts",))(tmp_path)}
     assert files == {"a.ts", "index.scip"}  # source (by glob) + the artifact; a re-derive on either
+
+
+def test_gateway_builds_with_a_named_corpus_and_relinks_footprints(tmp_path: Path) -> None:
+    """The full [[corpus]] build path: a code corpus named something other than 'code' must build
+    and re-link episode footprints (regression for the hardcoded ingest.results['code'], which
+    KeyError'd on a rebuild whenever a corpus was named, e.g., 'mcp-server')."""
+    from thalamus.cli.brain import build_corpora_from_configs
+    from thalamus.cli.project import CorpusConfig
+
+    repo = tmp_path / "repo"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "store.py").write_text(
+        "class Store:\n    def add(self):\n        return 1\n", encoding="utf-8"
+    )
+    encoder = DeterministicEncoder(dim=64)
+    store = InMemoryStore(dim=64)
+    episode = MemoryRecord(
+        MemoryId("ep1"), Hemisphere.EXPERIENTIAL, "episode", "reworked the store add path",
+        SCOPE, NOW, metadata={"footprint": ["pkg/store.py"]},
+    )
+    store.add(episode, encoder.encode([episode.content])[0])
+
+    corpora = build_corpora_from_configs(
+        [CorpusConfig(name="my-code", root=repo, kind="python-ast")], encoder=encoder
+    )
+    gateway = build_two_hemisphere_gateway(  # fresh in-memory → rebuilt=True, the bug's path
+        repo, store=store, encoder=encoder, scope=SCOPE, episodes=[episode], corpora=corpora
+    )
+    payload = gateway.recall(prompt="reworked the store add path", scope=SCOPE)
+    assert [m.memory_id for m in payload.memories] == [MemoryId("ep1")]
+    assert any("store" in item.node_id for item in payload.structural)  # footprint re-linked
