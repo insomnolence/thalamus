@@ -236,35 +236,57 @@ async def test_served_mcp_remember_is_immediately_recallable(tmp_path: Path) -> 
     assert record.metadata["source"] == "curated"
 
 
-def test_regen_hook_runs_only_after_the_source_changes(
+def _regen_fixture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The regen step rebuilds a corpus' external index only when its source changed since the
-    last tick — seeded on the first cycle so a freshly-built artifact isn't needlessly rebuilt."""
+) -> tuple[object, object, list[str], Path, Path]:
     from thalamus.cli import serve as serve_mod
     from thalamus.cli.project import CorpusConfig
     from thalamus.structural import CorpusSpec, glob_files
 
     src = tmp_path / "src"
     src.mkdir()
-    (src / "a.ts").write_text("v1", encoding="utf-8")
+    ts = src / "a.ts"
+    ts.write_text("v1", encoding="utf-8")
+    scip = tmp_path / "i.scip"
+    scip.write_text("idx", encoding="utf-8")
     cfg = CorpusConfig(
-        name="ts", root=src, kind="scip", scip_index=tmp_path / "i.scip",
+        name="ts", root=src, kind="scip", scip_index=scip,
         include=("*.ts",), regen_command="build-index",
     )
     ran: list[str] = []
     monkeypatch.setattr(serve_mod, "_run_regen", lambda corpus: ran.append(corpus.name))
     hook = serve_mod.build_regen_hook([cfg])
-    assert hook is not None
     spec = CorpusSpec(None, None, glob_files("*.ts"), "ts", root=src)  # type: ignore[arg-type]
+    return hook, spec, ran, ts, scip
 
-    hook([spec])  # first cycle: seed the digest, do not rebuild the fresh index
+
+def test_regen_runs_only_when_source_is_newer_than_the_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    hook, spec, ran, ts, scip = _regen_fixture(tmp_path, monkeypatch)
+    assert hook is not None
+    os.utime(ts, (1000, 1000))
+    os.utime(scip, (2000, 2000))  # artifact built AFTER the source → fresh → no regen
+    hook([spec])
     assert ran == []
-    hook([spec])  # unchanged source → still no rebuild
-    assert ran == []
-    (src / "a.ts").write_text("v2", encoding="utf-8")
-    hook([spec])  # source changed → the heavy index rebuild runs, once
+    os.utime(ts, (3000, 3000))  # source edited after the artifact → regen, once
+    hook([spec])
     assert ran == ["ts"]
+
+
+def test_regen_fires_when_the_artifact_is_stale_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    hook, spec, ran, ts, scip = _regen_fixture(tmp_path, monkeypatch)
+    assert hook is not None
+    os.utime(scip, (1000, 1000))
+    os.utime(ts, (2000, 2000))  # source changed while the serve was down → stale index at startup
+    hook([spec])
+    assert ran == ["ts"]  # the very first tick catches it (an mtime gate, not seed-on-first-sight)
 
 
 def test_regen_hook_is_none_without_any_regen_command(tmp_path: Path) -> None:

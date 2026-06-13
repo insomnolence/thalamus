@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import hashlib
 import os
 import subprocess
 import sys
@@ -442,14 +441,22 @@ def build_serve_gateway(
     return gateway, store, episodes, supersession, rederive
 
 
-def _source_digest(root: Path, include: tuple[str, ...]) -> str:
-    """A content digest of a corpus' source files (its ``include`` globs) — the regen gate."""
-    digest = hashlib.sha256()
-    for path in glob_files(*include)(root):  # sorted, so the digest is order-stable
-        digest.update(str(path).encode("utf-8"))
+def _source_newer_than_artifact(root: Path, include: tuple[str, ...], artifact: Path) -> bool:
+    """The regen gate: is any source file (the ``include`` globs) newer than the built ``artifact``?
+
+    mtime-based and stateless, so it fires not only on a live edit but also when the artifact is
+    *already* stale at startup (source changed while the serve was down) — the case an in-process
+    'changed since last tick' gate would miss on every restart. A redundant regen (e.g. a touch that
+    didn't change content) is harmless: it rebuilds an identical artifact, which the downstream
+    content-hashed ingest then skips re-embedding."""
+    if not artifact.exists():
+        return True
+    artifact_mtime = artifact.stat().st_mtime
+    for path in glob_files(*include)(root):
         with contextlib.suppress(OSError):
-            digest.update(path.read_bytes())
-    return digest.hexdigest()
+            if path.stat().st_mtime > artifact_mtime:
+                return True
+    return False
 
 
 def _run_regen(corpus: CorpusConfig) -> None:
@@ -480,27 +487,24 @@ def _run_regen(corpus: CorpusConfig) -> None:
 def build_regen_hook(
     configs: Sequence[CorpusConfig],
 ) -> Callable[[Sequence[CorpusSpec]], None] | None:
-    """The re-derive pass' regen step: rebuild each corpus' external index when its source changed.
+    """The re-derive pass' regen step: rebuild each corpus' external index when its source is newer.
 
-    Gated by an in-process per-corpus source digest, seeded on the first cycle (so a freshly-built
-    index isn't needlessly rebuilt), the heavy command (e.g. ``scip-typescript``) runs at most once
-    per maintenance tick and only when that corpus' source actually changed — bursts of commits
-    between ticks collapse to one rebuild. ``None`` when no corpus declares a ``regen_command``."""
+    Gated by source-vs-artifact mtime (``_source_newer_than_artifact``), so the heavy command (e.g.
+    ``scip-typescript``) runs at most once per maintenance tick and only when the corpus' source is
+    actually ahead of its built index — bursts of commits between ticks collapse to one rebuild, and
+    a stale-at-startup artifact is caught on the first tick. ``None`` when no corpus declares a
+    ``regen_command``."""
     commands = {cfg.name: cfg for cfg in configs if cfg.regen_command is not None}
     if not commands:
         return None
-    digests: dict[str, str] = {}
 
     def regen(specs: Sequence[CorpusSpec]) -> None:
         for spec in specs:
             corpus = commands.get(spec.corpus)
-            if corpus is None:
+            if corpus is None or corpus.scip_index is None:
                 continue
-            digest = _source_digest(corpus.root, corpus.include)
-            previous = digests.get(corpus.name)
-            digests[corpus.name] = digest
-            if previous is not None and previous != digest:
-                _run_regen(corpus)  # source changed since last tick → rebuild the artifact
+            if _source_newer_than_artifact(corpus.root, corpus.include, corpus.scip_index):
+                _run_regen(corpus)
 
     return regen
 
