@@ -21,7 +21,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from thalamus.cli.brain import build_store, build_two_hemisphere_gateway, close_store
+from thalamus.cli.brain import (
+    build_corpora,
+    build_store,
+    build_two_hemisphere_gateway,
+    close_store,
+)
 from thalamus.cli.dream import (
     build_credibility_pass,
     build_dream_scheduler,
@@ -42,7 +47,13 @@ from thalamus.core.types import (
     SessionId,
     TenantId,
 )
-from thalamus.dreaming import JsonlDreamLog, MaintenanceTicker, PassContext, Scheduler
+from thalamus.dreaming import (
+    JsonlDreamLog,
+    MaintenanceTicker,
+    PassContext,
+    Scheduler,
+    StructuralRederivePass,
+)
 from thalamus.experiential import (
     FileCheckpoint,
     GitEpisodeIngestor,
@@ -68,6 +79,7 @@ from thalamus.retrieval import render_recent, select_recent
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import (
+    CorpusSpec,
     CrossLinkIndex,
     FileManifest,
     Neo4jCrossLinkIndex,
@@ -108,6 +120,10 @@ class ServeConfig:
     # encoder (no per-commit cold start), then consolidates them. The durable replacement for an
     # external post-commit→sync hook. Rides the maintenance ticker, so it needs a durable brain.
     capture_tick: bool = True
+    # Re-derive Brain 2 (the structural code/doc graph) from current source on the same clock, so
+    # new/changed/removed code becomes recallable without a serve restart. Hash-gated (a no-change
+    # tick is ~free) and durable-only. Runs before the cross-link refresh so new modules link.
+    structural_tick: bool = True
     transport: str = "stdio"
     host: str = "127.0.0.1"
     port: int = 8000
@@ -217,6 +233,12 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "--no-capture-tick disables it; capture rides the maintenance ticker (durable brain only)",
     )
     parser.add_argument(
+        "--structural-tick", action=argparse.BooleanOptionalAction, default=True,
+        help="re-derive Brain 2 (code/doc structure) from current source on each maintenance tick "
+        "so new/changed code is recallable without a restart (hash-gated, so a no-change tick is "
+        "cheap). --no-structural-tick disables it (durable brain only)",
+    )
+    parser.add_argument(
         "--data-dir", type=Path, default=None,
         help="directory under which the brain's .thalamus data (logs/session/checkpoints) lives "
         "(default: --repo). Set it to keep brain data out of the code root — e.g. serve "
@@ -275,6 +297,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         dream_tick=bool(args.dream_tick),
         dream_tick_minutes=float(args.dream_tick_minutes),
         capture_tick=bool(args.capture_tick),
+        structural_tick=bool(args.structural_tick),
         transport=str(args.transport),
         host=str(args.host),
         port=int(args.port),
@@ -291,13 +314,16 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
 
 def build_serve_gateway(
     config: ServeConfig, *, store: Store | None = None, encoder: Encoder | None = None
-) -> tuple[Gateway, Store, list[MemoryRecord], SupersessionIndex | None]:
+) -> tuple[
+    Gateway, Store, list[MemoryRecord], SupersessionIndex | None, StructuralRederivePass | None
+]:
     """Assemble the two-hemisphere gateway from durable Brain 1 + the current repo.
 
-    Returns the gateway, the (open) store, the episodes scanned for re-linking, and the
-    durable supersession index (when Neo4j-backed; ``None`` for an injected/in-memory store
-    — the gateway then uses its own ephemeral index). ``store`` may be injected (tests);
-    otherwise it is built from the Neo4j config."""
+    Returns the gateway, the (open) store, the episodes scanned for re-linking, the durable
+    supersession index (when Neo4j-backed; ``None`` for an injected/in-memory store — the gateway
+    then uses its own ephemeral index), and a :class:`StructuralRederivePass` that re-derives
+    Brain 2 live into the same durable handles (``None`` for the in-memory shell, which re-derives
+    at start). ``store`` may be injected (tests); otherwise it is built from the Neo4j config."""
     encoder = encoder or (
         BgeEncoder("BAAI/bge-small-en-v1.5")
         if config.encoder == "bge-small"
@@ -343,6 +369,21 @@ def build_serve_gateway(
         )
     episodes = store.scan(scope)  # cold-load Brain 1 to re-resolve cross-hemisphere links
     logs = (config.data_dir or config.repo) / ".thalamus" / "logs"
+    # Build the corpora ONCE (durable/Neo4j only) so the live re-derive pass shares the exact specs
+    # and index handles the startup build uses; the in-memory shell re-derives fully each start, so
+    # it has no persistent handles to refresh and builds its corpora inside the gateway call.
+    corpora: list[CorpusSpec] | None = None
+    if graph is not None and manifest is not None:
+        corpora = build_corpora(
+            encoder=encoder,
+            code_index=code_index,
+            doc_index=doc_index,
+            doc_index_factory=doc_index_factory,
+            doc_roots=config.doc_roots or None,
+            code_language=config.code_language,
+            scip_index=config.scip_index,
+            resolve_calls=config.resolve_calls,
+        )
     gateway = build_two_hemisphere_gateway(
         config.repo,
         store=store,
@@ -355,6 +396,7 @@ def build_serve_gateway(
         doc_index=doc_index,
         doc_roots=config.doc_roots or None,
         doc_index_factory=doc_index_factory,
+        corpora=corpora,
         manifest=manifest,
         supersession=supersession,
         rebuild=config.rebuild,
@@ -371,7 +413,12 @@ def build_serve_gateway(
         event_sink=None if config.investigate else JsonlEventSink(logs / "retrieval.jsonl"),
         usage_sink=None if config.investigate else JsonlUsageSink(logs / "usage.jsonl"),
     )
-    return gateway, store, episodes, supersession
+    rederive = (
+        StructuralRederivePass(corpora, graph, manifest, encoder)
+        if corpora is not None and graph is not None and manifest is not None
+        else None
+    )
+    return gateway, store, episodes, supersession, rederive
 
 
 def build_remember_writer(
@@ -529,7 +576,7 @@ def run_serve(config: ServeConfig) -> None:
         if config.encoder == "bge-small"
         else DeterministicEncoder(dim=config.dim)
     )
-    gateway, store, episodes, supersession = build_serve_gateway(config, encoder=encoder)
+    gateway, store, episodes, supersession, rederive = build_serve_gateway(config, encoder=encoder)
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     # Brain data home (logs/session/dream) — may differ from the code root (--repo).
     data_dir = config.data_dir or config.repo
@@ -573,6 +620,10 @@ def run_serve(config: ServeConfig) -> None:
                 credibility=build_credibility_pass(
                     logs_dir=data_dir, code_repo=config.repo, supersession=supersession, scope=scope
                 ),
+                # Re-derive Brain 2 from current source each cycle (durable serves only) so new/
+                # changed code becomes recallable without a restart — hash-gated, so a no-change
+                # tick is nearly free. Toggle with --structural-tick.
+                structural_rederive=rederive if config.structural_tick else None,
             )
             context_factory = make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo

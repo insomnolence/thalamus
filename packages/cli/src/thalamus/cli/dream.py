@@ -50,16 +50,22 @@ def build_dream_scheduler(
     *,
     dream_log: DreamLog | None = None,
     credibility: DreamingPass | None = None,
+    structural_rederive: DreamingPass | None = None,
 ) -> Scheduler:
     """The v0 pass set, in dreaming.md DAG order.
 
-    ``structural-refresh`` (actor) re-links episodes to current code modules — included only when
-    the gateway exposes a structural graph + link index (Brain 2 present). ``link-resolution``
-    (actor) refreshes the gateway's derived views (superseded frontier + staleness).
-    ``credibility`` (actor, when supplied) assesses each curated memory's fate-based standing —
-    after link-resolution (it reads the refreshed superseded frontier) and before the proposer.
-    ``belief-audit`` (proposer) records propose-only supersession suggestions."""
+    ``structural-rederive`` (actor, when supplied) re-derives Brain 2 itself from current source
+    (new/changed/removed code), so it runs FIRST — before ``structural-refresh`` re-links episode
+    footprints, which must see the freshly-added module nodes. ``structural-refresh`` (actor)
+    re-links episodes to current code modules — included only when the gateway exposes a structural
+    graph + link index (Brain 2 present). ``link-resolution`` (actor) refreshes the gateway's
+    derived views (superseded frontier + staleness). ``credibility`` (actor, when supplied) assesses
+    each curated memory's fate-based standing — after link-resolution (it reads the refreshed
+    superseded frontier) and before the proposer. ``belief-audit`` (proposer) records propose-only
+    supersession suggestions."""
     passes: list[DreamingPass] = []
+    if structural_rederive is not None:
+        passes.append(structural_rederive)
     if gateway.graph is not None and gateway.links is not None:
         passes.append(StructuralRefreshPass(gateway.graph, gateway.links))
     passes.append(LinkResolutionPass(gateway.refresh))
@@ -208,7 +214,7 @@ def run_dream(config: DreamConfig) -> None:
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
         session=False,
     )
-    gateway, store, _episodes, supersession = build_serve_gateway(serve_config)
+    gateway, store, _episodes, supersession, rederive = build_serve_gateway(serve_config)
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     try:
         scheduler = build_dream_scheduler(
@@ -217,6 +223,7 @@ def run_dream(config: DreamConfig) -> None:
             credibility=build_credibility_pass(
                 logs_dir=config.repo, code_repo=config.repo, supersession=supersession, scope=scope
             ),
+            structural_rederive=rederive,
         )
         context = make_dream_context_factory(
             store=store, supersession=supersession, scope=scope, repo=config.repo

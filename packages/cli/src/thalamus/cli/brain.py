@@ -115,6 +115,54 @@ def _doc_corpus_label(root: Path) -> str:
     return root.parent.name if root.name.lower() in generic else root.name
 
 
+def build_corpora(
+    *,
+    encoder: Encoder,
+    ingestor: Ingestor | None = None,
+    code_index: StructuralIndex | None = None,
+    doc_index: StructuralIndex | None = None,
+    doc_index_factory: Callable[[str], StructuralIndex] | None = None,
+    doc_roots: Sequence[Path] | None = None,
+    code_language: str = "python",
+    scip_index: Path | None = None,
+    resolve_calls: bool = True,
+    resolve_docs: bool = True,
+) -> list[CorpusSpec]:
+    """The Brain-2 corpora: code (Python AST + jedi, or SCIP for TS/others) and docs (Markdown).
+
+    Each corpus pairs an ingestor with its OWN (no-pollution) vector index and a change-detection
+    file enumerator. Factored out of :func:`build_two_hemisphere_gateway` so the startup build and
+    the live re-derive pass build the *same* corpora over the *same* index handles — the re-derive
+    then re-ingests into exactly what recall queries. An explicitly injected ``ingestor`` overrides
+    the language default; ``code_index``/``doc_index`` default to in-memory when not supplied."""
+    code_ingestor = (
+        ingestor if ingestor is not None
+        else _code_ingestor(code_language, scip_index, resolve_calls)
+    )
+    code_index = code_index if code_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
+    corpora = [CorpusSpec(code_ingestor, code_index, _code_files_for(code_language), "code")]
+    if doc_roots:
+        # Each doc root is its own labeled corpus (own index + namespaced node ids → no
+        # cross-root collision), surfaced as a "Related docs (<label>)" payload section.
+        for root in doc_roots:
+            label = _doc_corpus_label(root)
+            corpus = f"docs ({label})"
+            index = (
+                doc_index_factory(corpus)
+                if doc_index_factory is not None
+                else InMemoryStructuralIndex(dim=encoder.dim)
+            )
+            corpora.append(
+                CorpusSpec(
+                    DocIngestor(id_namespace=label), index, markdown_files, corpus, root=root
+                )
+            )
+    elif resolve_docs:
+        doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
+        corpora.append(CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs"))
+    return corpora
+
+
 def build_two_hemisphere_gateway(
     repo: Path,
     *,
@@ -129,6 +177,7 @@ def build_two_hemisphere_gateway(
     doc_index: StructuralIndex | None = None,
     doc_roots: Sequence[Path] | None = None,
     doc_index_factory: Callable[[str], StructuralIndex] | None = None,
+    corpora: Sequence[CorpusSpec] | None = None,
     manifest: FileManifest | None = None,
     supersession: SupersessionIndex | None = None,
     rebuild: bool = False,
@@ -153,37 +202,24 @@ def build_two_hemisphere_gateway(
     ``rebuild=True`` forces the full re-derive oracle (drop the persisted graph + manifest).
     Returns a :class:`Gateway` whose recall fuses experiential memories with the structural
     nodes they touched (plus their ``k_hop`` neighbours)."""
-    # Two re-derivable Brain-2 corpora: code (Python AST + jedi, or SCIP for TS/others) and
-    # docs (Markdown). They share the one graph substrate (typed nodes) but get SEPARATE vector
-    # indexes (no-pollution). The code language selects both the ingestor and the change-detection
-    # file enumerator; an explicitly injected ``ingestor`` overrides the language default.
-    code_ingestor = (
-        ingestor if ingestor is not None
-        else _code_ingestor(code_language, scip_index, resolve_calls)
-    )
+    # Two re-derivable Brain-2 corpora: code (Python AST + jedi, or SCIP for TS/others) and docs
+    # (Markdown), each over its OWN vector index (no-pollution) on the shared graph substrate. The
+    # caller may inject a prebuilt ``corpora`` (so the live re-derive pass shares the exact same
+    # specs); otherwise build them here from the language params.
     graph = graph if graph is not None else InMemoryStructuralGraph(scope)
     manifest = manifest if manifest is not None else InMemoryFileManifest()
-    code_index = code_index if code_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
-    corpora = [CorpusSpec(code_ingestor, code_index, _code_files_for(code_language), "code")]
-    if doc_roots:
-        # Each doc root is its own labeled corpus (own index + namespaced node ids → no
-        # cross-root collision), surfaced as a "Related docs (<label>)" payload section.
-        for root in doc_roots:
-            label = _doc_corpus_label(root)
-            corpus = f"docs ({label})"
-            index = (
-                doc_index_factory(corpus)
-                if doc_index_factory is not None
-                else InMemoryStructuralIndex(dim=encoder.dim)
-            )
-            corpora.append(
-                CorpusSpec(
-                    DocIngestor(id_namespace=label), index, markdown_files, corpus, root=root
-                )
-            )
-    elif resolve_docs:
-        doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
-        corpora.append(CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs"))
+    corpora = list(corpora) if corpora is not None else build_corpora(
+        encoder=encoder,
+        ingestor=ingestor,
+        code_index=code_index,
+        doc_index=doc_index,
+        doc_index_factory=doc_index_factory,
+        doc_roots=doc_roots,
+        code_language=code_language,
+        scip_index=scip_index,
+        resolve_calls=resolve_calls,
+        resolve_docs=resolve_docs,
+    )
 
     if rebuild:  # force the full re-derive: clear persisted graph + manifest so all files are "new"
         graph.replace(IngestResult(nodes=[], edges=[]))

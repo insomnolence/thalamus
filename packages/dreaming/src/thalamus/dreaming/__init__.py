@@ -29,6 +29,7 @@ from thalamus.dreaming.log import (
 )
 from thalamus.dreaming.runtime import MaintenanceTicker
 from thalamus.dreaming.scheduler import Scheduler
+from thalamus.dreaming.structural_rederive import StructuralRederivePass
 from thalamus.dreaming.structural_refresh import StructuralRefreshPass
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "PassReport",
     "PassStatus",
     "Scheduler",
+    "StructuralRederivePass",
     "StructuralRefreshPass",
     "SupersessionProposal",
     "deserialize_dream_record",
