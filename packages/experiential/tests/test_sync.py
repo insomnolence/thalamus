@@ -74,6 +74,43 @@ def test_second_sync_is_a_noop_when_nothing_new() -> None:
     assert len(store) == 2
 
 
+def test_incremental_sync_embeds_only_unknown_episodes() -> None:
+    # known_ids pre-seeded with the first commit's episode id (as the warm serve seeds from its
+    # startup scan) -> only the genuinely new episode is encoded and stored.
+    source = _FakeSource([_commit("e1", 10, "aaa"), _commit("e2", 20, "bbb")])
+    store = InMemoryStore(dim=64)
+    known = {"episode:aaa"}
+    ingestor = GitEpisodeIngestor(
+        source,
+        encoder=DeterministicEncoder(dim=64),
+        store=store,
+        checkpoint=InMemoryCheckpoint(),
+        known_ids=known,
+    )
+    records = ingestor.sync()
+    assert {r.memory_id for r in records} == {MemoryId("episode:bbb")}  # aaa skipped as known
+    assert len(store) == 1  # only the unknown episode embedded + stored
+    assert known == {"episode:aaa", "episode:bbb"}  # newly ingested id now tracked in-process
+
+
+def test_incremental_idle_sync_short_circuits_without_re_ingesting() -> None:
+    # raw_events would re-segment the whole log every call; in incremental mode a poll that finds
+    # no new commits must return early WITHOUT re-running ingest (the O(1) idle tick).
+    source = _FakeSource([_commit("e1", 10, "aaa")])
+    store = InMemoryStore(dim=64)
+    ingestor = GitEpisodeIngestor(
+        source,
+        encoder=DeterministicEncoder(dim=64),
+        store=store,
+        checkpoint=InMemoryCheckpoint(),
+        raw_events=lambda: [_commit("e1", 10, "aaa")],
+        known_ids=set(),
+    )
+    assert {r.memory_id for r in ingestor.sync()} == {MemoryId("episode:aaa")}
+    assert ingestor.sync() == []  # cursor now at newest -> no new commits -> short-circuit
+    assert len(store) == 1
+
+
 def test_file_checkpoint_persists_across_instances(tmp_path: Path) -> None:
     path = tmp_path / "state" / "git.cursor"
     cp = FileCheckpoint(path)

@@ -10,7 +10,7 @@ return behind this same seam without changing callers. Two invariants matter:
   the cycle nor corrupt its siblings (dreaming.md "safe to get wrong"). A failed
   pass is recorded and the cycle continues.
 * **Synchronous by design** — ``run`` blocks. ``serve`` drives it from a
-  background daemon thread (``DreamTicker``) so a tick never blocks the FastMCP
+  background daemon thread (``MaintenanceTicker``) so a tick never blocks the FastMCP
   event loop in the long-running, many-session server; keeping the engine itself
   plain makes it trivially unit-testable and thread-agnostic.
 """

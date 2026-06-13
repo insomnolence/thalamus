@@ -1,5 +1,6 @@
-"""DreamTicker drives the scheduler off-thread: on demand via trigger(), and
-without dying when a cycle errors."""
+"""MaintenanceTicker drives the serve's upkeep off-thread: a periodic wake perceives
+(capture) then consolidates (dream); a write-trigger consolidates only; and a hiccup in
+either phase never kills the daemon thread."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ from datetime import UTC, datetime
 
 from thalamus.core import RepoId, Scope, TenantId
 from thalamus.dreaming import (
-    DreamTicker,
+    MaintenanceTicker,
     PassContext,
     PassKind,
     PassOutcome,
@@ -39,23 +40,69 @@ class _SignallingPass:
         return PassOutcome(summary="ok")
 
 
-def test_run_once_runs_the_scheduler_synchronously() -> None:
+class _Capture:
+    """A stand-in capture phase: counts calls, fires an event, optionally raises."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.runs = 0
+        self.ran = threading.Event()
+        self._fail = fail
+
+    def __call__(self) -> object:
+        self.runs += 1
+        self.ran.set()
+        if self._fail:
+            raise RuntimeError("capture backend hiccup")
+        return {"ingested": 0}
+
+
+def test_run_once_runs_capture_then_the_scheduler_synchronously() -> None:
     dpass = _SignallingPass()
-    ticker = DreamTicker(Scheduler([dpass]), _ctx, interval_seconds=3600)
+    capture = _Capture()
+    ticker = MaintenanceTicker(Scheduler([dpass]), _ctx, capture=capture, interval_seconds=3600)
     report = ticker.run_once()
+    assert capture.runs == 1
     assert dpass.runs == 1
-    assert report.ok
+    assert report is not None and report.ok
 
 
-def test_trigger_runs_a_cycle_without_waiting_for_the_interval() -> None:
+def test_trigger_consolidates_only_and_does_not_capture() -> None:
     dpass = _SignallingPass()
-    # Long interval: only a trigger should make it run within the test's lifetime.
-    ticker = DreamTicker(Scheduler([dpass]), _ctx, interval_seconds=3600)
+    capture = _Capture()
+    # Long interval: only a trigger should run within the test's lifetime, and a write-trigger
+    # must refresh views WITHOUT polling git (no capture).
+    ticker = MaintenanceTicker(Scheduler([dpass]), _ctx, capture=capture, interval_seconds=3600)
     ticker.start()
     try:
         ticker.trigger()
-        assert dpass.ran.wait(timeout=5.0), "trigger did not run a cycle"
-        assert dpass.runs >= 1
+        assert dpass.ran.wait(timeout=5.0), "trigger did not run a consolidation cycle"
+        assert capture.runs == 0, "a write-trigger must not run the capture phase"
+    finally:
+        ticker.stop()
+
+
+def test_periodic_wake_captures_then_consolidates() -> None:
+    dpass = _SignallingPass()
+    capture = _Capture()
+    # Short interval, no trigger: the only path that runs is the periodic one, which must
+    # perceive (capture) and then consolidate (dream).
+    ticker = MaintenanceTicker(Scheduler([dpass]), _ctx, capture=capture, interval_seconds=0.05)
+    ticker.start()
+    try:
+        assert capture.ran.wait(timeout=5.0), "periodic wake never captured"
+        assert dpass.ran.wait(timeout=5.0), "periodic wake never consolidated"
+    finally:
+        ticker.stop()
+
+
+def test_a_capture_failure_does_not_skip_consolidation() -> None:
+    dpass = _SignallingPass()
+    capture = _Capture(fail=True)
+    ticker = MaintenanceTicker(Scheduler([dpass]), _ctx, capture=capture, interval_seconds=0.05)
+    ticker.start()
+    try:
+        assert capture.ran.wait(timeout=5.0), "capture never attempted"
+        assert dpass.ran.wait(timeout=5.0), "a capture failure wrongly skipped consolidation"
     finally:
         ticker.stop()
 
@@ -72,7 +119,7 @@ def test_a_failing_context_factory_does_not_kill_the_thread() -> None:
             raise RuntimeError("transient backend hiccup")
         return _ctx()
 
-    ticker = DreamTicker(Scheduler([dpass]), flaky_ctx, interval_seconds=3600)
+    ticker = MaintenanceTicker(Scheduler([dpass]), flaky_ctx, interval_seconds=3600)
     ticker.start()
     try:
         ticker.trigger()  # first cycle: context factory raises
@@ -82,3 +129,11 @@ def test_a_failing_context_factory_does_not_kill_the_thread() -> None:
         assert dpass.runs >= 1
     finally:
         ticker.stop()
+
+
+def test_dream_only_ticker_with_no_capture_still_consolidates() -> None:
+    dpass = _SignallingPass()
+    ticker = MaintenanceTicker(Scheduler([dpass]), _ctx, interval_seconds=3600)
+    report = ticker.run_once()
+    assert dpass.runs == 1
+    assert report is not None and report.ok

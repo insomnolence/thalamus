@@ -7,7 +7,7 @@ code has vanished) and records each to the dream log. The standalone command run
 exactly one cycle against a freshly-built gateway and prints the report — useful
 to inspect proposals and to validate the passes against the real (dogfood) brain;
 the refresh it applies lives for the process. In ``serve`` the same scheduler runs
-on a background thread so the long-running brain stays fresh (see DreamTicker).
+on a background thread so the long-running brain stays fresh (see MaintenanceTicker).
 """
 
 from __future__ import annotations

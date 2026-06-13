@@ -184,9 +184,20 @@ was backed out in step (1) — see the core-move note.)*
 
 A long session got confused here, so, plainly:
 
-- **"Dreaming" = the automatic interval process** — the `DreamTicker` inside the long-running serve
-  (every `--dream-tick-minutes` + on each write). **`thalamus dream` is a manual dev/inspection
-  tool** that runs one cycle and exits; it is *not* "dreaming" and does not count as the feature.
+- **"Dreaming" = the automatic interval process** — the consolidation phase of the
+  `MaintenanceTicker` inside the long-running serve (every `--dream-tick-minutes` + on each write).
+  **`thalamus dream` is a manual dev/inspection tool** that runs one cycle and exits; it is *not*
+  "dreaming" and does not count as the feature.
+- **Perception ≠ consolidation (capture is a sibling phase, not a dreaming pass).** The same warm
+  background clock (`MaintenanceTicker`) runs *two* phases per periodic tick: **perceive** — poll the
+  code repo's git history into Brain 1 episodes (`--capture-tick`, warm in-process so there is no
+  per-commit BGE cold start — the durable replacement for an external post-commit→sync hook) — *then*
+  **consolidate** (dreaming), so a tick links and credibility-scores what it just captured. Capture is
+  deliberately **not** a `DreamingPass`: a pass takes a read-only `PassContext` and writes only
+  regenerable derived views (the §14.3 firewall), whereas capture writes raw, source-of-truth episodes
+  from an *external* git source and sits *upstream* of the dream DAG. Same clock, distinct contracts;
+  a write-trigger consolidates only (no git poll). `health --code-root` reports commits-behind-HEAD so
+  a stalled capture can't hide.
 - **Fate = credibility = one engine** (`assess_fate` over superseded / reverted / reused / survived
   / churn). Two consumers: per-memory **credibility** (the `CredibilityPass`, a dreaming actor) and
   per-session **fate → Tier-2** (in the `verdict` report — a manual read-only *measurement*, not
@@ -198,8 +209,8 @@ A long session got confused here, so, plainly:
 **The roadmap — three steps; only A is done, C is the goal and is gated:**
 
 - **A ✓ — credibility computed in the automatic loop.** The `CredibilityPass` runs on the
-  `DreamTicker`, so the brain continuously scores each memory's fate. **Inert on its own** — nothing
-  acts on the score yet (no recall change).
+  `MaintenanceTicker`'s consolidation phase, so the brain continuously scores each memory's fate.
+  **Inert on its own** — nothing acts on the score yet (no recall change).
 - **B — un-blind the proxy↔truth monitor.** Restart the serve (the supersede fix then lets
   supersessions actually *record* → fate **negatives** accrue) + accrue use → the monitor gets real,
   *discriminating* data (today it's starved: few units, ~all positive).

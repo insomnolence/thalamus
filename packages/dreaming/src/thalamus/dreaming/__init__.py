@@ -27,7 +27,7 @@ from thalamus.dreaming.log import (
     read_dream_log,
     serialize_dream_record,
 )
-from thalamus.dreaming.runtime import DreamTicker
+from thalamus.dreaming.runtime import MaintenanceTicker
 from thalamus.dreaming.scheduler import Scheduler
 from thalamus.dreaming.structural_refresh import StructuralRefreshPass
 
@@ -38,11 +38,11 @@ __all__ = [
     "CycleReport",
     "DreamLog",
     "DreamRecord",
-    "DreamTicker",
     "DreamingPass",
     "InMemoryDreamLog",
     "JsonlDreamLog",
     "LinkResolutionPass",
+    "MaintenanceTicker",
     "PassContext",
     "PassKind",
     "PassOutcome",

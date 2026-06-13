@@ -94,6 +94,7 @@ class GitEpisodeIngestor:
         raw_events: Callable[[], Sequence[TrajectoryEvent]] | None = None,
         segmenter: EpisodeSegmenter | None = None,
         builder: EpisodeBuilder | None = None,
+        known_ids: set[str] | None = None,
     ) -> None:
         self._source = source
         self._encoder = encoder
@@ -103,23 +104,39 @@ class GitEpisodeIngestor:
         self._raw_events = raw_events
         self._segmenter = segmenter
         self._builder = builder
+        # Incremental mode: when a set of already-held episode ids is injected, sync embeds
+        # only genuinely new spans (and keeps the set current as it ingests). A long-running
+        # warm process — the serve's capture tick — seeds it from its startup scan so each
+        # tick is O(new commits), not O(all episodes re-embedded). ``None`` keeps the original
+        # re-embed-in-place behaviour (the one-shot CLI's full refresh).
+        self._known_ids = known_ids
 
     def sync(self) -> list[MemoryRecord]:
-        """Ingest commits since the checkpoint as episodes; advance the checkpoint."""
+        """Ingest commits since the checkpoint as episodes; advance the checkpoint.
+
+        Idempotent and checkpoint-resumable. In incremental mode (``known_ids`` injected) a
+        poll that finds no new commits short-circuits before touching the trajectory log, so
+        an idle tick costs one ``git log`` and nothing else.
+        """
         events = self._source.poll(self._checkpoint.load())
-        if not events and self._raw_events is None:
+        incremental = self._known_ids is not None
+        if not events and (self._raw_events is None or incremental):
             return []
         if self._trajectory_sink is not None:
             for event in events:
                 self._trajectory_sink.emit(event)
         source_events = self._raw_events() if self._raw_events is not None else events
+        known = self._known_ids
         records = ingest_episodes(
             source_events,
             encoder=self._encoder,
             store=self._store,
             segmenter=self._segmenter,
             builder=self._builder,
+            skip_existing=(lambda episode_id: episode_id in known) if known is not None else None,
         )
+        if known is not None:
+            known.update(str(record.memory_id) for record in records)
         cursor = self._newest_commit_sha(events)
         if cursor is not None:
             self._checkpoint.save(cursor)

@@ -42,19 +42,27 @@ from thalamus.core.types import (
     SessionId,
     TenantId,
 )
-from thalamus.dreaming import DreamTicker, JsonlDreamLog
-from thalamus.experiential import Neo4jSupersessionIndex
+from thalamus.dreaming import JsonlDreamLog, MaintenanceTicker, PassContext, Scheduler
+from thalamus.experiential import (
+    FileCheckpoint,
+    GitEpisodeIngestor,
+    Neo4jSupersessionIndex,
+    SessionStampingSource,
+)
 from thalamus.gateway import Gateway
 from thalamus.gateway.http_security import build_security_middleware
 from thalamus.gateway.server import RecentReader, RememberWriter, ShownResolver
 from thalamus.instrumentation import (
     FileSessionContextStore,
+    GitObserver,
     JsonlEventSink,
+    JsonlTrajectorySink,
     JsonlUsageSink,
     SessionContext,
     default_session_path,
     mint_session_id,
     read_event_log,
+    read_trajectory_log,
 )
 from thalamus.retrieval import render_recent, select_recent
 from thalamus.routing import BgeEncoder, DeterministicEncoder
@@ -95,6 +103,11 @@ class ServeConfig:
     rebuild: bool = False
     dream_tick: bool = True
     dream_tick_minutes: float = 30.0
+    # Perceive new commits into Brain 1 on the same background clock as dreaming: each periodic
+    # tick polls the code repo's git history and ingests new episodes with the already-warm
+    # encoder (no per-commit cold start), then consolidates them. The durable replacement for an
+    # external post-commit→sync hook. Rides the maintenance ticker, so it needs a durable brain.
+    capture_tick: bool = True
     transport: str = "stdio"
     host: str = "127.0.0.1"
     port: int = 8000
@@ -198,6 +211,12 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "immediately); default 30",
     )
     parser.add_argument(
+        "--capture-tick", action=argparse.BooleanOptionalAction, default=True,
+        help="poll the code repo's git history into Brain 1 episodes on each periodic maintenance "
+        "tick, using the warm encoder (the durable replacement for a post-commit sync hook). "
+        "--no-capture-tick disables it; capture rides the maintenance ticker (durable brain only)",
+    )
+    parser.add_argument(
         "--data-dir", type=Path, default=None,
         help="directory under which the brain's .thalamus data (logs/session/checkpoints) lives "
         "(default: --repo). Set it to keep brain data out of the code root — e.g. serve "
@@ -255,6 +274,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         rebuild=bool(args.rebuild),
         dream_tick=bool(args.dream_tick),
         dream_tick_minutes=float(args.dream_tick_minutes),
+        capture_tick=bool(args.capture_tick),
         transport=str(args.transport),
         host=str(args.host),
         port=int(args.port),
@@ -445,6 +465,61 @@ def build_recent_reader(store: Store, scope: Scope) -> RecentReader:
     return read
 
 
+def _is_git_repo(path: Path) -> bool:
+    """True if ``path`` is a git working tree we can poll for commits."""
+    return (path / ".git").exists()
+
+
+def build_capture_phase(
+    config: ServeConfig,
+    *,
+    store: Store,
+    encoder: Encoder,
+    scope: Scope,
+    data_dir: Path,
+    known_ids: set[str],
+) -> Callable[[], None] | None:
+    """The serve's perception phase: poll the code repo's git history into Brain 1 episodes.
+
+    Reuses the serve's already-warm encoder + durable store, so a tick costs only the embedding
+    of genuinely new spans (``known_ids``, seeded from the startup scan, drives the incremental
+    skip). New commits are stamped with the active serve session (the cue↔outcome join), appended
+    to the trajectory log, and the checkpoint advances — exactly what the old post-commit→sync
+    hook did, but warm and in-process. Returns ``None`` when ``--repo`` is not a git working tree
+    (nothing to perceive).
+    """
+    if not _is_git_repo(config.repo):
+        print(
+            f"thalamus: capture-tick on but {config.repo} is not a git repo — capture disabled",
+            file=sys.stderr,
+        )
+        return None
+    logs = data_dir / ".thalamus" / "logs"
+    trajectory_path = logs / "trajectory.jsonl"
+    ingestor = GitEpisodeIngestor(
+        SessionStampingSource(
+            GitObserver(config.repo, scope),
+            FileSessionContextStore(default_session_path(data_dir)),
+        ),
+        encoder=encoder,
+        store=store,
+        checkpoint=FileCheckpoint(data_dir / ".thalamus" / "checkpoints" / "git.cursor"),
+        trajectory_sink=JsonlTrajectorySink(trajectory_path),
+        raw_events=lambda: list(read_trajectory_log(trajectory_path)),
+        known_ids=known_ids,
+    )
+
+    def capture() -> None:
+        records = ingestor.sync()
+        if records:
+            print(
+                f"thalamus: captured {len(records)} new episode(s) into Brain 1 [{config.repo_id}]",
+                file=sys.stderr,
+            )
+
+    return capture
+
+
 def run_serve(config: ServeConfig) -> None:
     """Build the brain from durable state and serve ``recall`` over MCP (blocking)."""
     from thalamus.gateway import build_server  # lazy: the 'mcp' extra
@@ -470,14 +545,27 @@ def run_serve(config: ServeConfig) -> None:
             SessionContext(session_id=default_session_id, started_at=datetime.now(UTC))
         )
 
-    # Dreaming on a background thread keeps the gateway's derived views (superseded frontier +
-    # footprint staleness) fresh as writes accumulate — the long-running-serve refresh the frozen
-    # composition-time dicts otherwise never get. Off the FastMCP event loop by construction.
-    # Only meaningful with a durable supersession index (in-memory shell has nothing to refresh).
-    ticker: DreamTicker | None = None
-    if config.dream_tick and supersession is not None and not config.investigate:
-        ticker = DreamTicker(
-            build_dream_scheduler(
+    # One background daemon thread runs the serve's upkeep off the FastMCP event loop: a periodic
+    # wake perceives (capture new commits → episodes) then consolidates (dreaming refreshes the
+    # gateway's derived views), and a write-trigger consolidates only. Dreaming needs a durable
+    # supersession index (the in-memory shell has nothing to refresh); capture needs a git --repo.
+    capture: Callable[[], None] | None = None
+    if config.capture_tick and not config.investigate:
+        capture = build_capture_phase(
+            config,
+            store=store,
+            encoder=encoder,
+            scope=scope,
+            data_dir=data_dir,
+            known_ids={str(episode.memory_id) for episode in episodes},
+        )
+    dream_on = config.dream_tick and supersession is not None and not config.investigate
+    ticker: MaintenanceTicker | None = None
+    if not config.investigate and (capture is not None or dream_on):
+        scheduler: Scheduler | None = None
+        context_factory: Callable[[], PassContext] | None = None
+        if dream_on and supersession is not None:
+            scheduler = build_dream_scheduler(
                 gateway,
                 dream_log=JsonlDreamLog(dream_log_path(data_dir)),
                 # The credibility pass runs in the automatic loop too — logs from the data dir,
@@ -485,10 +573,14 @@ def run_serve(config: ServeConfig) -> None:
                 credibility=build_credibility_pass(
                     logs_dir=data_dir, code_repo=config.repo, supersession=supersession, scope=scope
                 ),
-            ),
-            make_dream_context_factory(
+            )
+            context_factory = make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo
-            ),
+            )
+        ticker = MaintenanceTicker(
+            scheduler,
+            context_factory,
+            capture=capture,
             interval_seconds=max(config.dream_tick_minutes, 0.0) * 60.0,
         )
 
@@ -520,8 +612,15 @@ def run_serve(config: ServeConfig) -> None:
         session_note = (
             f"session {default_session_id}" if default_session_id else "session tagging off"
         )
+        active_phases = [
+            phase
+            for phase, on in (("capture", capture is not None), ("dream", dream_on))
+            if on
+        ]
         dream_note = (
-            f"dream-tick every {config.dream_tick_minutes:g}m" if ticker else "dream-tick off"
+            f"maintenance every {config.dream_tick_minutes:g}m [{'+'.join(active_phases)}]"
+            if ticker is not None and active_phases
+            else "maintenance off"
         )
         where = (
             f"HTTP http://{config.host}:{config.port}/mcp"
