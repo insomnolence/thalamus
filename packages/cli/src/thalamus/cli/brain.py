@@ -35,7 +35,7 @@ from thalamus.gateway import (
     SupersededDemotingRetriever,
 )
 from thalamus.instrumentation import EventSink, LoggingRetriever, UsageSink
-from thalamus.retrieval import L0Retriever
+from thalamus.retrieval import HybridRetriever, L0Retriever, LexicalRetriever
 from thalamus.store import InMemoryStore, Neo4jStore, connect
 from thalamus.structural import (
     CompositeIngestor,
@@ -244,6 +244,7 @@ def build_two_hemisphere_gateway(
     resolve_calls: bool = True,
     resolve_docs: bool = True,
     structural_min_relevance: float = 0.0,
+    hybrid_retrieval: bool = True,
     max_structural_items: int = 12,
     max_memory_chars: int = 1000,
     event_sink: EventSink | None = None,
@@ -333,12 +334,19 @@ def build_two_hemisphere_gateway(
         DerivedViews(superseded=superseded, stale_references=stale_references)
     )
 
-    base = L0Retriever(encoder, store)
+    # The relevance retriever: L0 (semantic) alone, or fused with a BM25 lexical leg so exact
+    # identifiers/error-strings the vector pool misses still surface (hybrid recall). L0 stays the
+    # pristine baseline; hybrid is an ablatable rung behind the same Retriever seam.
+    base: Retriever = L0Retriever(encoder, store)
+    policy = "L0"
+    if hybrid_retrieval:
+        base = HybridRetriever(base, LexicalRetriever(store))
+        policy = "L0+lexical"
     retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)
     retriever = SupersededDemotingRetriever(retriever, views=views_ref)
     if event_sink is not None:
         retriever = LoggingRetriever(
-            retriever, event_sink, policy_id="L0+structural+supersession"
+            retriever, event_sink, policy_id=f"{policy}+structural+supersession"
         )
     return Gateway(
         retriever,

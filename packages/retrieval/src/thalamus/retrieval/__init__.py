@@ -4,7 +4,17 @@ Provides the L0 baseline now; gated rungs (bandit reweighting, bent geometry)
 land as later implementations behind the same ``core.Retriever`` protocol.
 """
 
+from thalamus.retrieval.hybrid import HybridRetriever
 from thalamus.retrieval.l0 import L0Retriever
+from thalamus.retrieval.lexical import LexicalRetriever, bm25_scores, tokenize
 from thalamus.retrieval.recent import render_recent, select_recent
 
-__all__ = ["L0Retriever", "render_recent", "select_recent"]
+__all__ = [
+    "HybridRetriever",
+    "L0Retriever",
+    "LexicalRetriever",
+    "bm25_scores",
+    "render_recent",
+    "select_recent",
+    "tokenize",
+]

@@ -129,6 +129,10 @@ class ServeConfig:
     # new/changed/removed code becomes recallable without a serve restart. Hash-gated (a no-change
     # tick is ~free) and durable-only. Runs before the cross-link refresh so new modules link.
     structural_tick: bool = True
+    # Fuse a BM25 lexical leg with the semantic retriever (hybrid recall) so exact identifiers /
+    # error strings / rare terms the vector pool misses still surface. L0 stays the baseline; this
+    # is an ablatable rung. Default on.
+    hybrid_retrieval: bool = True
     transport: str = "stdio"
     host: str = "127.0.0.1"
     port: int = 8000
@@ -248,6 +252,11 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "cheap). --no-structural-tick disables it (durable brain only)",
     )
     parser.add_argument(
+        "--hybrid-retrieval", action=argparse.BooleanOptionalAction, default=True,
+        help="fuse a BM25 lexical leg with semantic recall so exact identifiers / error strings / "
+        "rare terms still surface (--no-hybrid-retrieval falls back to semantic-only L0)",
+    )
+    parser.add_argument(
         "--data-dir", type=Path, default=None,
         help="directory under which the brain's .thalamus data (logs/session/checkpoints) lives "
         "(default: --repo). Set it to keep brain data out of the code root — e.g. serve "
@@ -307,6 +316,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         dream_tick_minutes=float(args.dream_tick_minutes),
         capture_tick=bool(args.capture_tick),
         structural_tick=bool(args.structural_tick),
+        hybrid_retrieval=bool(args.hybrid_retrieval),
         corpora=tuple(getattr(args, "corpora", ()) or ()),
         transport=str(args.transport),
         host=str(args.host),
@@ -424,6 +434,7 @@ def build_serve_gateway(
         scip_index=config.scip_index,
         resolve_calls=config.resolve_calls,
         structural_min_relevance=config.structural_min_relevance,
+        hybrid_retrieval=config.hybrid_retrieval,
         max_structural_items=config.max_structural_items,
         max_memory_chars=config.max_memory_chars,
         # Investigate mode logs nothing — inspecting a brain must not write retrieval/usage events

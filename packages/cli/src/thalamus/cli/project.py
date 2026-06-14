@@ -64,6 +64,7 @@ _KEY_TO_DEST: dict[str, str] = {
     "k_hop": "k_hop",
     "resolve_calls": "resolve_calls",
     "structural_min_relevance": "structural_min_relevance",
+    "hybrid_retrieval": "hybrid_retrieval",
     "dream_tick": "dream_tick",
     "dream_tick_minutes": "dream_tick_minutes",
     "checkpoint": "checkpoint",
