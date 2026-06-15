@@ -19,7 +19,7 @@ the Tier-2 producer (``classify_outcome`` + the segmenter) lives here in the com
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -38,11 +38,13 @@ from thalamus.eval import (
 from thalamus.experiential import (
     FateSignals,
     FateVerdict,
+    GitSurvivalLabeler,
     SessionBoundedSegmenter,
     assess_fate,
     classify_outcome,
     fate_success,
     is_success,
+    region_fate,
 )
 from thalamus.instrumentation import (
     RetrievalEvent,
@@ -76,7 +78,7 @@ class VerdictReport:
     n_tier2_sessions: int  # sessions with a captured Tier-2 outcome label
     monitor: ProxyTruthReport  # proxy↔truth with Tier-2 = structural fate (session-work)
     monitor_coverage: float  # joined sessions / sessions with Tier-1
-    n_reverted_sessions: int  # sessions whose committed work was later reverted (fate negative)
+    n_negative_sessions: int  # sessions whose work fated negative (reverted or overwritten)
     monitor_without_fate: ProxyTruthReport  # classify (test path) alone — usually empty
     usage: UsageStabilityReport  # per-memory usefulness: is "used vs. ignored" stable, not noise?
 
@@ -130,6 +132,54 @@ def tier2_by_session(trajectory: Iterable[TrajectoryEvent]) -> dict[SessionId, b
     return result
 
 
+def _session_spans(
+    events: Iterable[RetrievalEvent],
+) -> dict[SessionId, tuple[datetime, datetime]]:
+    """Each keyed session's recall time-span ``(first, last)`` — the window the out-of-band
+    time-join (commits, test runs) is measured against. Unkeyed events are skipped."""
+    spans: dict[SessionId, tuple[datetime, datetime]] = {}
+    for event in events:
+        if event.session_id is None:
+            continue
+        lo, hi = spans.get(event.session_id, (event.timestamp, event.timestamp))
+        spans[event.session_id] = (min(lo, event.timestamp), max(hi, event.timestamp))
+    return spans
+
+
+def session_struggle(
+    events: Iterable[RetrievalEvent],
+    trajectory: Iterable[TrajectoryEvent],
+    *,
+    window: timedelta = _DEFAULT_WINDOW,
+    fail_threshold: int = 2,
+) -> frozenset[SessionId]:
+    """⚠️ PARKED (2026-06-15, candidate for removal) — part of the *outcome* loop the learning track
+    was re-aimed away from (ROADMAP Track L / retained:dc134e4a). Needs captured failing test runs,
+    which this workflow doesn't produce. Kept + tested; remove if instrumented coding never resumes.
+
+    Sessions that **struggled** — ``>= fail_threshold`` failing test runs in the session window.
+
+    The dead-end / "banging on it" negative that never reaches a commit, so the revert/overwrite
+    fate (:func:`session_fate`) misses it entirely — and which ``classify_outcome`` deliberately
+    discards (an intermediate red "may have been fixed before the commit"). It is a **weak**
+    negative: :func:`compute_verdict` applies it last, only to sessions the stronger signals leave
+    UNKNOWN, so it never overrides a clean success — it surfaces negatives that live in the
+    *process*, not the terminal state. Test runs are joined by time, like ``session_fate``."""
+    spans = _session_spans(events)
+    failed_runs = sorted(
+        event.timestamp
+        for event in trajectory
+        if event.kind is TrajectoryEventKind.TEST_RUN
+        and int(event.payload.get("failures", 0)) + int(event.payload.get("errors", 0)) > 0
+    )
+    struggling = {
+        session_id
+        for session_id, (lo, hi) in spans.items()
+        if sum(1 for ts in failed_runs if lo <= ts <= hi + window) >= fail_threshold
+    }
+    return frozenset(struggling)
+
+
 def session_fate(
     events: Iterable[RetrievalEvent],
     trajectory: Iterable[TrajectoryEvent],
@@ -137,20 +187,27 @@ def session_fate(
     *,
     window: timedelta = _DEFAULT_WINDOW,
     survival_threshold: int = 5,
+    commit_lines: Mapping[str, tuple[int, int]] | None = None,
 ) -> dict[SessionId, FateVerdict]:
     """Per-session fate of the work the session committed (OLR §13.17, the session-work consumer).
 
-    NEGATIVE if any of the session's commits were later reverted — the post-hoc objective negative
-    that ``classify_outcome``'s in-span view misses — POSITIVE if its work survived substantial
-    later activity. Commits are joined to a session by **time** (its recall span + ``window``), the
-    same out-of-band join Tier-1 footprint attribution uses (so it holds for a brain shared by many
-    agents over HTTP). Sessions with no committed work in their window are omitted."""
-    spans: dict[SessionId, tuple[datetime, datetime]] = {}
-    for event in events:
-        if event.session_id is None:
-            continue
-        lo, hi = spans.get(event.session_id, (event.timestamp, event.timestamp))
-        spans[event.session_id] = (min(lo, event.timestamp), max(hi, event.timestamp))
+    NEGATIVE if any of the session's commits were later reverted **or its own code was largely
+    overwritten** (the fix-forward negative — the dead-end is a rewrite, not a `git revert`);
+    POSITIVE if its work survived. Commits are joined to a session by **time** (its recall span +
+    ``window``), the same out-of-band join Tier-1 footprint attribution uses (so it holds for a
+    brain shared by many agents over HTTP). Sessions with no committed work in window are omitted.
+
+    ``commit_lines`` (sha → ``(introduced, surviving)`` from
+    :meth:`~thalamus.experiential.labeler.GitSurvivalLabeler.commit_line_stats`) is the survival
+    signal: a session's own commits' lines are summed and run through :func:`region_fate`, so a
+    session whose code was rewritten reads NEGATIVE even with no revert. Without it (back-compat)
+    the crude "later commit count" stands in for survival — which, lacking reverts, can only read
+    positive (the famine this parameter fixes).
+
+    ⚠️ The ``commit_lines`` churn path is PARKED (2026-06-15, candidate for removal) — the *outcome*
+    loop the learning track was re-aimed away from (ROADMAP Track L / retained:dc134e4a). The
+    revert/`later` path stays as the back-compat default."""
+    spans = _session_spans(events)
     commits = [
         (event.timestamp, str(event.payload.get("sha", "")))
         for event in trajectory
@@ -163,10 +220,19 @@ def session_fate(
         if not own:
             continue
         later = sum(1 for timestamp, _ in commits if timestamp > cutoff)
-        result[session_id] = assess_fate(
-            FateSignals(reverted=bool(own & reverted), survived_activity=later),
-            survival_threshold=survival_threshold,
-        )
+        reverted_flag = bool(own & reverted)
+        signals = FateSignals(reverted=reverted_flag, survived_activity=later)
+        if commit_lines is not None:
+            introduced = sum(commit_lines[sha][0] for sha in own if sha in commit_lines)
+            surviving = sum(commit_lines[sha][1] for sha in own if sha in commit_lines)
+            if introduced > 0:  # region-survival of the session's OWN work (the real negative)
+                churn, survived = region_fate(
+                    introduced=introduced, surviving=surviving, exercising_commits=later
+                )
+                signals = FateSignals(
+                    reverted=reverted_flag, churn_ratio=churn, survived_activity=survived
+                )
+        result[session_id] = assess_fate(signals, survival_threshold=survival_threshold)
     return result
 
 
@@ -178,6 +244,7 @@ def compute_verdict(
     k: int,
     reverted: frozenset[str] = frozenset(),
     window: timedelta = _DEFAULT_WINDOW,
+    commit_lines: Mapping[str, tuple[int, int]] | None = None,
 ) -> VerdictReport:
     """The pure verdict computation over already-loaded logs (no I/O — unit-testable).
 
@@ -185,10 +252,12 @@ def compute_verdict(
     :func:`session_fate` (survived → success, reverted → failure) — the decided truth signal
     (dreaming.md "Pass: fate-based credibility"). The test-based ``classify_outcome`` is kept only
     as a **fallback** for sessions fate leaves unlabelled, and is usually absent in a workflow
-    without captured test runs. ``monitor_without_fate`` reports the test path alone for comparison,
-    making it visible that the fate signal is what carries the verdict."""
+    without captured test runs. :func:`session_struggle` adds the weakest, last-resort negative
+    (repeated in-session test failures) for sessions still unlabelled — the dead-ends that never
+    reach a commit. ``monitor_without_fate`` reports the test path alone for comparison, making it
+    visible that the fate signal is what carries the verdict."""
     tier1 = session_utility(events, signals, k)
-    fate = session_fate(events, trajectory, reverted, window=window)
+    fate = session_fate(events, trajectory, reverted, window=window, commit_lines=commit_lines)
     fate_tier2: dict[SessionId, bool] = {}
     for session, verdict in fate.items():
         success = fate_success(verdict)
@@ -202,8 +271,13 @@ def compute_verdict(
     for session, success in fate_tier2.items():
         if success is False or session not in tier2:
             tier2[session] = success
+    # Weakest negative, applied LAST: in-session struggle fills only sessions still unlabelled, so
+    # a rocky-but-successful session (terminal-green / survived) keeps its positive (§14.4).
+    struggling = session_struggle(events, trajectory, window=window)
+    for session in struggling:
+        tier2.setdefault(session, False)
     units = join_proxy_truth(tier1, tier2)
-    reverted_sessions = {s for s, verdict in fate.items() if fate_success(verdict) is False}
+    negative_sessions = {session for session, label in tier2.items() if label is False}
     return VerdictReport(
         k=k,
         utility=utility_at_k(events, signals, k),
@@ -211,7 +285,7 @@ def compute_verdict(
         n_tier2_sessions=len(tier2),
         monitor=proxy_truth(units),
         monitor_coverage=len(units) / len(tier1) if tier1 else 0.0,
-        n_reverted_sessions=len(reverted_sessions),
+        n_negative_sessions=len(negative_sessions),
         monitor_without_fate=proxy_truth(join_proxy_truth(tier1, classify_tier2)),
         usage=usage_stability(events, signals),
     )
@@ -245,7 +319,7 @@ def _render(report: VerdictReport) -> str:
         ]
     lines.append(
         f"Tier-2 = structural fate: {report.n_tier2_sessions} session(s) labelled, "
-        f"{report.n_reverted_sessions} reverted-negative "
+        f"{report.n_negative_sessions} fate-negative (reverted or overwritten) "
         f"(classify/test-path alone would join {report.monitor_without_fate.n_units})"
     )
     s = report.usage
@@ -272,8 +346,18 @@ def run_verdict(config: VerdictConfig) -> VerdictReport:
     # derived by `attribute`) and the citation signal (secondary, from record_usage).
     signals = _load(config.usage_log, read_usage_log) + _load(config.attributed_log, read_usage_log)
     trajectory = _load(config.trajectory_log, read_trajectory_log)
+    # Region-survival of each session's own commits — the fix-forward negative (a rewrite, not a
+    # revert). Reads the committed files straight from the trajectory log and asks git how much of
+    # each commit survived at HEAD. I/O-heavy (a blame per file), but verdict is an offline command.
+    commit_files = [
+        (str(event.payload.get("sha", "")), [str(f) for f in event.payload.get("files", ())])
+        for event in trajectory
+        if event.kind is TrajectoryEventKind.COMMIT and event.payload.get("sha")
+    ]
+    commit_lines = GitSurvivalLabeler(config.repo).commit_line_stats(commit_files)
     report = compute_verdict(
-        events, signals, trajectory, k=config.k, reverted=reverted_shas(config.repo)
+        events, signals, trajectory, k=config.k, reverted=reverted_shas(config.repo),
+        commit_lines=commit_lines,
     )
     print(_render(report))
     return report

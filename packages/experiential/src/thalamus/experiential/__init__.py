@@ -21,6 +21,12 @@ from thalamus.experiential.fate import (
     reuse_by_memory,
 )
 from thalamus.experiential.ingest import ingest_episodes
+from thalamus.experiential.labeler import (
+    FateLabels,
+    GitSurvivalLabeler,
+    OutcomeLabeler,
+    region_fate,
+)
 from thalamus.experiential.neo4j_supersession import Neo4jSupersessionIndex
 from thalamus.experiential.outcome import EpisodeOutcome, classify_outcome, is_success
 from thalamus.experiential.segmentation import (
@@ -48,14 +54,17 @@ __all__ = [
     "EpisodeSegmenter",
     "EpisodeSpan",
     "FateContext",
+    "FateLabels",
     "FatePolarity",
     "FateSignals",
     "FateVerdict",
     "FileCheckpoint",
     "GitEpisodeIngestor",
+    "GitSurvivalLabeler",
     "InMemoryCheckpoint",
     "InMemorySupersessionIndex",
     "Neo4jSupersessionIndex",
+    "OutcomeLabeler",
     "OutcomeTier",
     "SessionBoundedSegmenter",
     "SessionStampingSource",
@@ -69,5 +78,6 @@ __all__ = [
     "fate_success",
     "ingest_episodes",
     "is_success",
+    "region_fate",
     "reuse_by_memory",
 ]

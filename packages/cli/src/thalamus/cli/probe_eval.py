@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,7 +26,15 @@ from typing import TYPE_CHECKING
 from thalamus.cli.brain import build_store, close_store
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Retriever, Store
-from thalamus.core.types import Hemisphere, MemoryRef, RepoId, Scope, Supersession, TenantId
+from thalamus.core.types import (
+    Hemisphere,
+    MemoryId,
+    MemoryRef,
+    RepoId,
+    Scope,
+    Supersession,
+    TenantId,
+)
 
 if TYPE_CHECKING:
     from neo4j import Driver
@@ -39,9 +47,10 @@ from thalamus.eval import (
     extract_probes,
     find_transcripts,
 )
-from thalamus.experiential import Neo4jSupersessionIndex
+from thalamus.experiential import Neo4jSupersessionIndex, reuse_by_memory
 from thalamus.gateway import SupersededDemotingRetriever
-from thalamus.retrieval import L0Retriever
+from thalamus.instrumentation import read_event_log, read_usage_log
+from thalamus.retrieval import L0Retriever, UsageWeightedRetriever
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
 
@@ -173,12 +182,12 @@ def _render(report: ProbeEvalReport) -> str:
 
 def _build_brain_on(
     config: ProbeEvalConfig, scope: Scope
-) -> tuple[Retriever, Store, Driver | None]:
-    """Compose the live experiential retriever from durable Brain 1.
+) -> tuple[Retriever, Mapping[MemoryRef, Supersession], Store, Driver | None]:
+    """Compose the durable Brain-1 relevance base + the superseded frontier.
 
-    Returns (retriever, store, driver_or_None) so the caller can close them. The
-    supersession-demoting decorator is applied so the eval reflects the current-truth
-    view, matching what a live recall would surface (§13.18 R1)."""
+    Returns (L0 base, superseded_map, store, driver_or_None) so the caller can compose the
+    ablation variants over the *same* store and close them. The supersession-demoting view is
+    applied by the caller so the eval reflects current truth (§13.18 R1)."""
     encoder: Encoder = (
         BgeEncoder("BAAI/bge-small-en-v1.5")
         if config.encoder == "bge-small"
@@ -198,13 +207,21 @@ def _build_brain_on(
             dim=encoder.dim, neo4j_uri=None, neo4j_user=config.neo4j_user,
             neo4j_password=config.neo4j_password, encoder_id=config.encoder,
         )
-    base = L0Retriever(encoder, store)
-    chain: Retriever = SupersededDemotingRetriever(base, superseded_map)
-    return chain, store, driver
+    return L0Retriever(encoder, store), superseded_map, store, driver
+
+
+def _usage_weights(config: ProbeEvalConfig) -> dict[MemoryId, float]:
+    """Per-memory cross-session usage weight from the durable logs (the L-R1 rung's input)."""
+    logs = config.repo / ".thalamus" / "logs"
+    events = list(read_event_log(logs / "retrieval.jsonl"))
+    signals = list(read_usage_log(logs / "usage.jsonl")) + list(
+        read_usage_log(logs / "usage_attributed.jsonl")
+    )
+    return {mid: float(n) for mid, n in reuse_by_memory(events, signals).items()}
 
 
 def run_probe_eval(config: ProbeEvalConfig) -> ProbeEvalReport:
-    """Live: replay the local transcripts against brain-on vs brain-off."""
+    """Live: replay the local transcripts, ablating brain-off / brain-on / brain-on+usage."""
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     directory = config.transcripts_dir or default_transcripts_dir(config.repo)
     transcripts = find_transcripts(directory)
@@ -216,12 +233,21 @@ def run_probe_eval(config: ProbeEvalConfig) -> ProbeEvalReport:
     if not probes:
         raise ThalamusError(f"no substantive probes extracted from {len(transcripts)} transcripts")
 
-    brain_on, store, driver = _build_brain_on(config, scope)
+    base, superseded_map, store, driver = _build_brain_on(config, scope)
     try:
+        retrievers: dict[str, Retriever] = {
+            "brain-off": NullRetriever(),
+            "brain-on": SupersededDemotingRetriever(base, superseded_map),
+        }
+        # The L-R1 usage rung as an ablation arm: if mean relevance holds vs brain-on, usage
+        # re-ranks within the relevance band without trading it away (the regression guard).
+        usage_weights = _usage_weights(config)
+        if usage_weights:
+            retrievers["brain-on+usage"] = SupersededDemotingRetriever(
+                UsageWeightedRetriever(base, usage_weights), superseded_map
+            )
         report = compute_probe_eval(
-            probes,
-            {"brain-off": NullRetriever(), "brain-on": brain_on},
-            scope=scope, k=config.k, threshold=config.threshold,
+            probes, retrievers, scope=scope, k=config.k, threshold=config.threshold
         )
     finally:
         close_store(store)

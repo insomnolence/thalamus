@@ -217,13 +217,21 @@ def build_fate_context(
     signals: Iterable[UsageSignal],
     *,
     reverted_shas: frozenset[str] = frozenset(),
+    churn_ratio: Mapping[MemoryId, float] | None = None,
+    survived_activity: Mapping[MemoryId, int] | None = None,
 ) -> FateContext:
     """Assemble a :class:`FateContext` from the supersession index + recall/usage logs (+ optional
-    git ``reverted_shas``) — the loaders that fire on our own backlog. Churn (attribution map) and
-    survival are added later; until then those signals stay at their empty defaults, so the
-    credibility view is honest about what it can and cannot yet see."""
+    git ``reverted_shas``) — the loaders that fire on our own backlog.
+
+    ``churn_ratio`` / ``survived_activity`` are the survival-vs-overwrite signals from an
+    :class:`~thalamus.experiential.labeler.OutcomeLabeler` (e.g. ``GitSurvivalLabeler.label(...)``
+    yields a ``FateLabels`` whose fields go straight here). When omitted they stay empty — the
+    credibility view is honest about what it can and cannot yet see — so existing callers are
+    unchanged."""
     return FateContext(
         superseded={ref.memory_id: record for ref, record in superseded.items()},
         reverted_shas=reverted_shas,
         reuse_sessions=reuse_by_memory(events, signals),
+        churn_ratio=churn_ratio if churn_ratio is not None else {},
+        survived_activity=survived_activity if survived_activity is not None else {},
     )

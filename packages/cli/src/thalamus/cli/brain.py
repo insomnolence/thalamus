@@ -19,13 +19,13 @@ from __future__ import annotations
 import importlib.util
 import logging
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from thalamus.cli.project import CorpusConfig
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Retriever, Store, SupersessionIndex
-from thalamus.core.types import Hemisphere, MemoryRecord, Scope
+from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord, Scope
 from thalamus.experiential import InMemorySupersessionIndex
 from thalamus.gateway import (
     DerivedViews,
@@ -35,7 +35,12 @@ from thalamus.gateway import (
     SupersededDemotingRetriever,
 )
 from thalamus.instrumentation import EventSink, LoggingRetriever, UsageSink
-from thalamus.retrieval import HybridRetriever, L0Retriever, LexicalRetriever
+from thalamus.retrieval import (
+    HybridRetriever,
+    L0Retriever,
+    LexicalRetriever,
+    UsageWeightedRetriever,
+)
 from thalamus.store import InMemoryStore, Neo4jStore, connect
 from thalamus.structural import (
     CompositeIngestor,
@@ -224,6 +229,8 @@ def build_two_hemisphere_gateway(
     resolve_docs: bool = True,
     structural_min_relevance: float = 0.0,
     hybrid_retrieval: bool = True,
+    usage_weighting: bool = True,
+    usage_weights: Mapping[MemoryId, float] | None = None,
     max_structural_items: int = 12,
     max_memory_chars: int = 1000,
     event_sink: EventSink | None = None,
@@ -321,6 +328,12 @@ def build_two_hemisphere_gateway(
     if hybrid_retrieval:
         base = HybridRetriever(base, LexicalRetriever(store))
         policy = "L0+lexical"
+    # Relevance-credibility rung: lift memories by behavioral cross-session usage (the "reliably-
+    # useful core"), re-ranking within the relevance pool. Behavioral signal only (the firewall);
+    # off when there's no usage history yet, so a cold brain is unchanged.
+    if usage_weighting and usage_weights:
+        base = UsageWeightedRetriever(base, usage_weights)
+        policy += "+usage"
     retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)
     retriever = SupersededDemotingRetriever(retriever, views=views_ref)
     if event_sink is not None:

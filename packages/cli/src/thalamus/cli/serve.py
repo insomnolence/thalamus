@@ -63,6 +63,7 @@ from thalamus.experiential import (
     GitEpisodeIngestor,
     Neo4jSupersessionIndex,
     SessionStampingSource,
+    reuse_by_memory,
 )
 from thalamus.gateway import Gateway
 from thalamus.gateway.http_security import build_security_middleware
@@ -78,6 +79,7 @@ from thalamus.instrumentation import (
     mint_session_id,
     read_event_log,
     read_trajectory_log,
+    read_usage_log,
 )
 from thalamus.retrieval import render_recent, select_recent
 from thalamus.routing import BgeEncoder, DeterministicEncoder
@@ -412,6 +414,19 @@ def build_serve_gateway(
             scip_index=config.scip_index,
             resolve_calls=config.resolve_calls,
         )
+    # Relevance-credibility (L-R1): weight memories by cross-session behavioral usage — distinct
+    # sessions each was recalled-AND-used in (the "reliably-useful core") — so recall lifts what has
+    # repeatedly proven useful. Computed once from the durable logs at startup (empty → off for a
+    # cold brain). Behavioral signal only (the firewall). Skipped in investigate mode, which must
+    # not let the brain's own usage history bias the read it is being used to inspect.
+    usage_weights: dict[MemoryId, float] = {}
+    if not config.investigate:
+        events = list(read_event_log(logs / "retrieval.jsonl"))
+        signals = list(read_usage_log(logs / "usage.jsonl")) + list(
+            read_usage_log(logs / "usage_attributed.jsonl")
+        )
+        usage_weights = {mid: float(n) for mid, n in reuse_by_memory(events, signals).items()}
+
     gateway = build_two_hemisphere_gateway(
         config.repo,
         store=store,
@@ -435,6 +450,7 @@ def build_serve_gateway(
         resolve_calls=config.resolve_calls,
         structural_min_relevance=config.structural_min_relevance,
         hybrid_retrieval=config.hybrid_retrieval,
+        usage_weights=usage_weights,
         max_structural_items=config.max_structural_items,
         max_memory_chars=config.max_memory_chars,
         # Investigate mode logs nothing — inspecting a brain must not write retrieval/usage events
