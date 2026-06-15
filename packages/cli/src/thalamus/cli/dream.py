@@ -51,6 +51,7 @@ def build_dream_scheduler(
     dream_log: DreamLog | None = None,
     credibility: DreamingPass | None = None,
     structural_rederive: DreamingPass | None = None,
+    usage_refresh: DreamingPass | None = None,
 ) -> Scheduler:
     """The v0 pass set, in dreaming.md DAG order.
 
@@ -69,6 +70,8 @@ def build_dream_scheduler(
     if gateway.graph is not None and gateway.links is not None:
         passes.append(StructuralRefreshPass(gateway.graph, gateway.links))
     passes.append(LinkResolutionPass(gateway.refresh))
+    if usage_refresh is not None:  # refresh the usage-weighted recall rung from accrued usage
+        passes.append(usage_refresh)
     if credibility is not None:
         passes.append(credibility)
     passes.append(BeliefAuditPass())
@@ -214,7 +217,9 @@ def run_dream(config: DreamConfig) -> None:
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
         session=False,
     )
-    gateway, store, _episodes, supersession, rederive = build_serve_gateway(serve_config)
+    gateway, store, _episodes, supersession, rederive, usage_refresh = build_serve_gateway(
+        serve_config
+    )
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     try:
         scheduler = build_dream_scheduler(
@@ -224,6 +229,7 @@ def run_dream(config: DreamConfig) -> None:
                 logs_dir=config.repo, code_repo=config.repo, supersession=supersession, scope=scope
             ),
             structural_rederive=rederive,
+            usage_refresh=usage_refresh,
         )
         context = make_dream_context_factory(
             store=store, supersession=supersession, scope=scope, repo=config.repo

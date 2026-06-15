@@ -31,6 +31,7 @@ from thalamus.dreaming.runtime import MaintenanceTicker
 from thalamus.dreaming.scheduler import Scheduler
 from thalamus.dreaming.structural_rederive import StructuralRederivePass
 from thalamus.dreaming.structural_refresh import StructuralRefreshPass
+from thalamus.dreaming.usage_refresh import UsageRefreshPass
 
 __all__ = [
     "BeliefAuditPass",
@@ -53,6 +54,7 @@ __all__ = [
     "StructuralRederivePass",
     "StructuralRefreshPass",
     "SupersessionProposal",
+    "UsageRefreshPass",
     "deserialize_dream_record",
     "read_dream_log",
     "serialize_dream_record",

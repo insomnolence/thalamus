@@ -50,7 +50,7 @@ from thalamus.eval import (
 from thalamus.experiential import Neo4jSupersessionIndex, reuse_by_memory
 from thalamus.gateway import SupersededDemotingRetriever
 from thalamus.instrumentation import read_event_log, read_usage_log
-from thalamus.retrieval import L0Retriever, UsageWeightedRetriever
+from thalamus.retrieval import L0Retriever, UsageWeightedRetriever, UsageWeightsRef
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
 
@@ -244,7 +244,7 @@ def run_probe_eval(config: ProbeEvalConfig) -> ProbeEvalReport:
         usage_weights = _usage_weights(config)
         if usage_weights:
             retrievers["brain-on+usage"] = SupersededDemotingRetriever(
-                UsageWeightedRetriever(base, usage_weights), superseded_map
+                UsageWeightedRetriever(base, UsageWeightsRef(usage_weights)), superseded_map
             )
         report = compute_probe_eval(
             probes, retrievers, scope=scope, k=config.k, threshold=config.threshold

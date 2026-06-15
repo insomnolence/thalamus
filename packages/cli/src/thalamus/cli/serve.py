@@ -57,6 +57,7 @@ from thalamus.dreaming import (
     PassContext,
     Scheduler,
     StructuralRederivePass,
+    UsageRefreshPass,
 )
 from thalamus.experiential import (
     FileCheckpoint,
@@ -81,7 +82,7 @@ from thalamus.instrumentation import (
     read_trajectory_log,
     read_usage_log,
 )
-from thalamus.retrieval import render_recent, select_recent
+from thalamus.retrieval import UsageWeightsRef, render_recent, select_recent
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import (
@@ -337,7 +338,12 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
 def build_serve_gateway(
     config: ServeConfig, *, store: Store | None = None, encoder: Encoder | None = None
 ) -> tuple[
-    Gateway, Store, list[MemoryRecord], SupersessionIndex | None, StructuralRederivePass | None
+    Gateway,
+    Store,
+    list[MemoryRecord],
+    SupersessionIndex | None,
+    StructuralRederivePass | None,
+    UsageRefreshPass,
 ]:
     """Assemble the two-hemisphere gateway from durable Brain 1 + the current repo.
 
@@ -419,13 +425,19 @@ def build_serve_gateway(
     # repeatedly proven useful. Computed once from the durable logs at startup (empty → off for a
     # cold brain). Behavioral signal only (the firewall). Skipped in investigate mode, which must
     # not let the brain's own usage history bias the read it is being used to inspect.
-    usage_weights: dict[MemoryId, float] = {}
-    if not config.investigate:
+    def _recompute_usage_weights() -> dict[MemoryId, float]:
         events = list(read_event_log(logs / "retrieval.jsonl"))
         signals = list(read_usage_log(logs / "usage.jsonl")) + list(
             read_usage_log(logs / "usage_attributed.jsonl")
         )
-        usage_weights = {mid: float(n) for mid, n in reuse_by_memory(events, signals).items()}
+        return {mid: float(n) for mid, n in reuse_by_memory(events, signals).items()}
+
+    # A refreshable holder so the dreaming UsageRefreshPass can swap in fresh weights mid-serve as
+    # usage accrues (else the rung is frozen at the startup snapshot). Empty in investigate mode.
+    usage_ref = UsageWeightsRef()
+    if not config.investigate:
+        usage_ref.refresh(_recompute_usage_weights())
+    usage_refresh = UsageRefreshPass(_recompute_usage_weights, usage_ref.refresh)
 
     gateway = build_two_hemisphere_gateway(
         config.repo,
@@ -450,7 +462,7 @@ def build_serve_gateway(
         resolve_calls=config.resolve_calls,
         structural_min_relevance=config.structural_min_relevance,
         hybrid_retrieval=config.hybrid_retrieval,
-        usage_weights=usage_weights,
+        usage_weights=usage_ref,
         max_structural_items=config.max_structural_items,
         max_memory_chars=config.max_memory_chars,
         # Investigate mode logs nothing — inspecting a brain must not write retrieval/usage events
@@ -465,7 +477,7 @@ def build_serve_gateway(
         if corpora is not None and graph is not None and manifest is not None
         else None
     )
-    return gateway, store, episodes, supersession, rederive
+    return gateway, store, episodes, supersession, rederive, usage_refresh
 
 
 def _source_newer_than_artifact(root: Path, include: tuple[str, ...], artifact: Path) -> bool:
@@ -691,7 +703,9 @@ def run_serve(config: ServeConfig) -> None:
         if config.encoder == "bge-small"
         else DeterministicEncoder(dim=config.dim)
     )
-    gateway, store, episodes, supersession, rederive = build_serve_gateway(config, encoder=encoder)
+    gateway, store, episodes, supersession, rederive, usage_refresh = build_serve_gateway(
+        config, encoder=encoder
+    )
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     # Brain data home (logs/session/dream) — may differ from the code root (--repo).
     data_dir = config.data_dir or config.repo
@@ -739,6 +753,9 @@ def run_serve(config: ServeConfig) -> None:
                 # changed code becomes recallable without a restart — hash-gated, so a no-change
                 # tick is nearly free. Toggle with --structural-tick.
                 structural_rederive=rederive if config.structural_tick else None,
+                # Refresh the usage-weighted recall rung from accrued usage each cycle, so memories
+                # that keep proving useful rise without a restart (the relevance-credibility loop).
+                usage_refresh=usage_refresh,
             )
             context_factory = make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo

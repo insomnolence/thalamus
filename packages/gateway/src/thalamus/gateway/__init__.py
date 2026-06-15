@@ -8,6 +8,7 @@ MCP transport (``build_server``) is a thin optional adapter requiring the ``mcp`
 from thalamus.gateway.gateway import (
     Gateway,
     StructuralLinkedRetriever,
+    StructuralRelevanceRetriever,
     SupersededDemotingRetriever,
 )
 from thalamus.gateway.payload import ContextPayload, MemoryItem, StructuralItem, SupersededNote
@@ -22,6 +23,7 @@ __all__ = [
     "MemoryItem",
     "StructuralItem",
     "StructuralLinkedRetriever",
+    "StructuralRelevanceRetriever",
     "SupersededDemotingRetriever",
     "SupersededNote",
     "build_server",

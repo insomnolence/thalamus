@@ -100,6 +100,90 @@ class StructuralLinkedRetriever:
         return RetrievalResult(cue=cue, candidates=candidates, shown=candidates[: max(k, 0)])
 
 
+class StructuralRelevanceRetriever:
+    """Lift memories cross-linked to the code the cue is *about* — query-local structural relevance.
+
+    Where :class:`StructuralLinkedRetriever` fires on an explicit ``focus``, this derives the anchor
+    code nodes from the cue's *own* structural retrieval (the nodes it semantically matches), then
+    RRF-boosts experiential candidates cross-linked to those anchors — "surface the *why* behind the
+    code your query touched" (§13.19, the plan-tool fusion, made query-local). The first slice of
+    L-R2 / the relevance-credibility "well-connected to Brain-2" signal.
+
+    Bounded to the inner's candidate pool (it *promotes* a connected memory, never summons an
+    irrelevant one) and gentle (RRF rank fusion, like the usage/hybrid rungs — it doesn't dominate
+    relevance). Firewall-clean: the signal is the deterministic cross-link graph, not the model
+    grading prose. A no-op when there are no structural retrievers / links / anchors, so an
+    experiential-only brain or a query unrelated to code is unchanged.
+
+    v1 boosts existing candidates only (not yet injecting connected memories the relevance pool
+    missed — that is the explicit-focus path's job, and the plan tool's). It runs its own structural
+    retrieval (the gateway runs another for the payload's direct hits — a deliberate v1 cost so the
+    boost stays *in the chain* and is therefore captured in the off-policy log)."""
+
+    def __init__(
+        self,
+        inner: Retriever,
+        links: CrossLinkIndex,
+        structural_retrievers: Sequence[StructuralRetriever],
+        *,
+        max_anchors: int = 5,
+        min_relevance: float = 0.0,
+        rrf_k: int = 60,
+        weight: float = 1.0,
+    ) -> None:
+        self._inner = inner
+        self._links = links
+        self._structural_retrievers = tuple(structural_retrievers)
+        self._max_anchors = max_anchors
+        self._min_relevance = min_relevance
+        self._rrf_k = rrf_k
+        self._weight = weight
+
+    def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
+        base = self._inner.retrieve(cue, k)
+        anchors = self._anchor_nodes(cue)
+        if not anchors:
+            return base
+
+        # Structural-relevance rank: candidates cross-linked to an anchor node, most-linked first.
+        overlaps = [
+            (sum(1 for ref in self._links.nodes_for(c.record.ref) if ref in anchors), c)
+            for c in base.candidates
+        ]
+        linked = sorted(
+            ((n, c) for n, c in overlaps if n > 0), key=lambda t: t[0], reverse=True
+        )
+        if not linked:
+            return base
+        struct_rank = {c.record.ref: rank for rank, (_, c) in enumerate(linked, start=1)}
+
+        fused: list[ScoredMemory] = []
+        for rel_rank, candidate in enumerate(base.candidates, start=1):
+            score = 1.0 / (self._rrf_k + rel_rank)  # relevance leg
+            features = {**candidate.features, "relevance_rank": float(rel_rank)}
+            srank = struct_rank.get(candidate.record.ref)
+            if srank is not None:  # the cue's code overlaps this memory's cross-links
+                score += self._weight * (1.0 / (self._rrf_k + srank))
+                features["structural_relevance_rank"] = float(srank)
+            features["structural_fused"] = score
+            fused.append(
+                ScoredMemory(record=candidate.record, score=candidate.score, features=features)
+            )
+        fused.sort(key=lambda scored: scored.features["structural_fused"], reverse=True)
+        return RetrievalResult(cue=cue, candidates=fused, shown=fused[: max(k, 0)])
+
+    def _anchor_nodes(self, cue: Cue) -> frozenset[StructuralRef]:
+        """The structural nodes the cue is *about* — its top direct structural hits, above floor."""
+        scored_by_ref: dict[StructuralRef, float] = {}
+        for retriever in self._structural_retrievers:
+            for scored in retriever.retrieve(cue, self._max_anchors):
+                if scored.score > self._min_relevance:
+                    ref = scored.node.ref
+                    scored_by_ref[ref] = max(scored_by_ref.get(ref, 0.0), scored.score)
+        top = sorted(scored_by_ref.items(), key=lambda kv: kv[1], reverse=True)[: self._max_anchors]
+        return frozenset(ref for ref, _ in top)
+
+
 class SupersededDemotingRetriever:
     """Demote superseded beliefs below all current ones before the top-k cut (§13.18 R1).
 

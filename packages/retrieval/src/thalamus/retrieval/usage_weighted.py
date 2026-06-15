@@ -26,33 +26,52 @@ from thalamus.core.protocols import Retriever
 from thalamus.core.types import Cue, MemoryId, RetrievalResult, ScoredMemory
 
 
+class UsageWeightsRef:
+    """A single-slot mutable holder for the per-memory usage weights — the dreaming refresh seam,
+    mirroring the gateway's ``DerivedViewsRef``.
+
+    Usage accrues as the brain is used, so in a long-running serve the weights read once at startup
+    go stale. A reader snapshots :attr:`weights` once per retrieval (one atomic attribute read under
+    the GIL) and the maintenance thread :meth:`refresh`-es with one atomic assignment, so a
+    concurrent refresh is observed whole — never as a torn mix — with no lock."""
+
+    def __init__(self, weights: Mapping[MemoryId, float] | None = None) -> None:
+        self.weights: Mapping[MemoryId, float] = weights if weights is not None else {}
+
+    def refresh(self, weights: Mapping[MemoryId, float]) -> None:
+        """Atomically replace the current weights (a single ``STORE_ATTR``)."""
+        self.weights = weights
+
+
 class UsageWeightedRetriever:
     """Re-rank an inner retriever's candidates by RRF-fusing relevance rank with a usage rank."""
 
     def __init__(
         self,
         inner: Retriever,
-        usage: Mapping[MemoryId, float],
+        weights: UsageWeightsRef,
         *,
         rrf_k: int = 60,
         weight: float = 1.0,
     ) -> None:
-        # ``usage``: per-memory usage weight (e.g. distinct sessions recalled-and-used). Only the
-        # *ordering* matters — RRF ranks it — so raw counts are fine, no normalization. ``weight``
-        # tunes how strongly usage re-ranks relative to relevance; ``rrf_k`` (the standard 60) damps
-        # deep ranks so a top-of-list memory dominates but a deeper hit still adds a little.
+        # ``weights``: a refreshable holder of per-memory usage weight (e.g. distinct sessions
+        # recalled-and-used). Only the *ordering* matters — RRF ranks it — so raw counts are fine,
+        # no normalization. ``weight`` tunes how strongly usage re-ranks relative to relevance;
+        # ``rrf_k`` (the standard 60) damps deep ranks so a top-of-list memory dominates but a
+        # deeper hit still adds a little.
         self._inner = inner
-        self._usage = usage
+        self._weights = weights
         self._rrf_k = rrf_k
         self._weight = weight
 
     def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
         candidates = self._inner.retrieve(cue, k).candidates
+        usage = self._weights.weights  # snapshot once (atomic) — a concurrent refresh is whole
 
         # The usage leg: candidates with a positive usage weight, most-used first → a usage rank.
         used = sorted(
-            (c for c in candidates if self._usage.get(c.record.memory_id, 0.0) > 0.0),
-            key=lambda c: self._usage[c.record.memory_id],
+            (c for c in candidates if usage.get(c.record.memory_id, 0.0) > 0.0),
+            key=lambda c: usage[c.record.memory_id],
             reverse=True,
         )
         usage_rank = {c.record.memory_id: rank for rank, c in enumerate(used, start=1)}
@@ -66,7 +85,7 @@ class UsageWeightedRetriever:
             if urank is not None:  # usage leg, only for memories with a behavioral usage record
                 score += self._weight * (1.0 / (self._rrf_k + urank))
                 features["usage_rank"] = float(urank)
-                features["usage_weight"] = self._usage[mid]
+                features["usage_weight"] = usage[mid]
             features["usage_fused"] = score
             # Preserve the native score (the relevance baseline) for honest display + the log.
             fused.append(
