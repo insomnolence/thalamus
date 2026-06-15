@@ -139,15 +139,17 @@ def test_build_corpora_from_configs_mixes_kinds_with_separate_indexes(tmp_path: 
     configs = [
         CorpusConfig(name="py", root=tmp_path / "src", kind="python-ast"),
         CorpusConfig(name="design-docs", root=tmp_path / "docs", kind="docs"),
+        CorpusConfig(name="notes", root=tmp_path / "notes", kind="text"),
     ]
     specs = build_corpora_from_configs(configs, encoder=DeterministicEncoder(dim=32))
-    assert [s.corpus for s in specs] == ["py", "design-docs"]
+    assert [s.corpus for s in specs] == ["py", "design-docs", "notes"]
     assert specs[0].root == tmp_path / "src"
     assert specs[0].index is not specs[1].index  # no-pollution: each corpus its own index
+    assert specs[1].index is not specs[2].index
 
 
 def test_scip_change_files_tracks_source_and_the_artifact(tmp_path: Path) -> None:
-    from thalamus.cli.brain import _scip_change_files
+    from thalamus.cli.producers import _scip_change_files
 
     (tmp_path / "a.ts").write_text("x", encoding="utf-8")
     (tmp_path / "b.py").write_text("x", encoding="utf-8")  # not in the include globs
@@ -186,3 +188,31 @@ def test_gateway_builds_with_a_named_corpus_and_relinks_footprints(tmp_path: Pat
     payload = gateway.recall(prompt="reworked the store add path", scope=SCOPE)
     assert [m.memory_id for m in payload.memories] == [MemoryId("ep1")]
     assert any("store" in item.node_id for item in payload.structural)  # footprint re-linked
+
+
+def test_text_corpus_recall_surfaces_a_chunk_tagged_by_corpus(tmp_path: Path) -> None:
+    """A 'text' [[corpus]] is a first-class Brain-2 substrate: its chunks are directly retrievable
+    and tagged with the corpus name (the direct-retrieval path, no footprint link needed)."""
+    from thalamus.cli.brain import build_corpora_from_configs
+    from thalamus.cli.project import CorpusConfig
+
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "decision.txt").write_text(
+        "We chose the lexical fusion approach for exact identifier recall.\n", encoding="utf-8"
+    )
+    encoder = DeterministicEncoder(dim=64)
+    corpora = build_corpora_from_configs(
+        [CorpusConfig(name="field-notes", root=notes, kind="text")], encoder=encoder
+    )
+    gateway = build_two_hemisphere_gateway(
+        notes, store=InMemoryStore(dim=64), encoder=encoder, scope=SCOPE, episodes=[],
+        corpora=corpora,
+    )
+    payload = gateway.recall(
+        prompt="lexical fusion approach for exact identifier recall", scope=SCOPE
+    )
+    tagged = [item for item in payload.structural if item.corpus == "field-notes"]
+    assert tagged  # text nodes surfaced, tagged by their corpus (not the default "code")
+    # a chunk node is among them (the line-anchored unit, distinct from the whole-file document)
+    assert any(item.node_id.startswith("chunk:field-notes:") for item in tagged)

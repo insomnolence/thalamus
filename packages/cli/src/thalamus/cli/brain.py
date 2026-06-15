@@ -58,7 +58,6 @@ from thalamus.structural import (
     StructuralRetriever,
     code_files,
     footprint_staleness,
-    glob_files,
     incremental_ingest,
     link_by_footprint,
     markdown_files,
@@ -165,21 +164,6 @@ def build_corpora(
     return corpora
 
 
-def _scip_change_files(scip_index: Path, include: tuple[str, ...]) -> Callable[[Path], list[Path]]:
-    """Change-detection enumerator for a SCIP corpus: its source files (the ``include`` globs) PLUS
-    the ``.scip`` artifact itself — so a live re-derive fires on a code edit OR an externally
-    rebuilt index. (The ingestor reads the ``.scip``; this only drives change detection.)"""
-    source = glob_files(*include)
-
-    def files(root: Path) -> list[Path]:
-        out = list(source(root))
-        if scip_index.exists():
-            out.append(scip_index)
-        return out
-
-    return files
-
-
 def build_corpora_from_configs(
     configs: Sequence[CorpusConfig],
     *,
@@ -189,33 +173,28 @@ def build_corpora_from_configs(
 ) -> list[CorpusSpec]:
     """Build Brain-2 corpora from declarative ``[[corpus]]`` configs — the language-agnostic path.
 
-    Each corpus gets its own (no-pollution) index via ``index_factory`` (else in-memory). ``scip``
-    corpora work for ANY SCIP language (TS/Rust/C++/Go/…) with no new code; their change detection
-    hashes the source (``include`` globs) plus the ``.scip``. An empty ``include`` falls back to the
-    kind's default walker for python/docs (Python source / Markdown)."""
+    Each corpus' ``kind`` resolves to a registered :class:`~thalamus.cli.producer_registry.Producer`
+    (``python-ast``/``scip``/``docs``/``text`` built in; more via ``register_producer``) that yields
+    the ingestor + change-detection enumerator; this just pairs that with the corpus' own
+    (no-pollution) index (via ``index_factory``, else in-memory) and root. Adding a corpus kind is a
+    producer registration, not an edit here — the index wiring stays the caller's concern."""
+    # Lazy import for its registration side effect — and to keep the import graph cycle-free
+    # (producers imports back into this module's ingestor factories).
+    import thalamus.cli.producers  # noqa: F401 — registers the built-in producers
+    from thalamus.cli.producer_registry import ProducerContext, get_producer
 
     def make_index(name: str) -> StructuralIndex:
         if index_factory is not None:
             return index_factory(name)
         return InMemoryStructuralIndex(dim=encoder.dim)
 
+    ctx = ProducerContext(resolve_calls=resolve_calls)
     specs: list[CorpusSpec] = []
     for cfg in configs:
-        index = make_index(cfg.name)
-        if cfg.kind == "python-ast":
-            files = glob_files(*cfg.include) if cfg.include else code_files
-            ingestor: Ingestor = _default_ingestor(resolve_calls)
-        elif cfg.kind == "scip":
-            if cfg.scip_index is None:  # defensive — parse_corpora already enforces this
-                raise ThalamusError(f"corpus {cfg.name!r}: kind='scip' requires a scip_index")
-            files = _scip_change_files(cfg.scip_index, cfg.include)
-            ingestor = _scip_ingestor(cfg.scip_index, root_package=cfg.root_package)
-        elif cfg.kind == "docs":
-            files = glob_files(*cfg.include) if cfg.include else markdown_files
-            ingestor = DocIngestor(id_namespace=cfg.name)
-        else:  # defensive — parse_corpora already enforces the kind set
-            raise ThalamusError(f"corpus {cfg.name!r}: unknown kind {cfg.kind!r}")
-        specs.append(CorpusSpec(ingestor, index, files, cfg.name, root=cfg.root))
+        built = get_producer(cfg.kind).build(cfg, ctx=ctx)
+        specs.append(
+            CorpusSpec(built.ingestor, make_index(cfg.name), built.files, cfg.name, root=cfg.root)
+        )
     return specs
 
 

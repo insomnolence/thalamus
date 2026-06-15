@@ -12,11 +12,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from thalamus.core.protocols import Encoder
 from thalamus.core.types import RepoId, Scope, StructuralRef, TenantId, Vector
 from thalamus.routing import DeterministicEncoder
 from thalamus.structural import (
     CorpusSpec,
     DocIngestor,
+    IncrementalResult,
     InMemoryFileManifest,
     InMemoryStructuralGraph,
     InMemoryStructuralIndex,
@@ -66,7 +68,7 @@ def test_no_change_build_skips_parsing_entirely(tmp_path: Path) -> None:
     ingestor = _CountingIngestor()
     enc = _CountingEncoder()
 
-    def build() -> object:
+    def build() -> IncrementalResult:
         return incremental_ingest(
             repo, SCOPE,
             corpora=[CorpusSpec(ingestor, index, python_files, "code")],  # type: ignore[arg-type]
@@ -92,7 +94,13 @@ def _fresh() -> tuple[InMemoryStructuralGraph, InMemoryStructuralIndex, InMemory
     return InMemoryStructuralGraph(SCOPE), InMemoryStructuralIndex(dim=32), InMemoryFileManifest()
 
 
-def _build(repo: Path, graph, index, manifest, encoder) -> object:
+def _build(
+    repo: Path,
+    graph: InMemoryStructuralGraph,
+    index: InMemoryStructuralIndex,
+    manifest: InMemoryFileManifest,
+    encoder: Encoder,
+) -> IncrementalResult:
     return incremental_ingest(
         repo, SCOPE,
         corpora=[CorpusSpec(PythonAstIngestor(), index, python_files, "code")],
@@ -164,6 +172,40 @@ def test_only_changed_files_are_re_embedded(tmp_path: Path) -> None:
     assert 0 < enc.encoded - baseline < baseline
 
 
+def test_text_corpus_re_embeds_only_changed_files_and_drops_vanished(tmp_path: Path) -> None:
+    # The text producer's corpus participates in incremental ingestion like any other: editing one
+    # .txt re-embeds only its chunks; deleting a .txt drops its nodes from the graph.
+    from thalamus.structural import TextIngestor, text_files
+
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "a.txt").write_text("alpha note about retrieval\n", encoding="utf-8")
+    (notes / "b.txt").write_text("beta note about ingestion\n", encoding="utf-8")
+    graph, index, manifest = _fresh()
+    enc = _CountingEncoder()
+    corpora = [CorpusSpec(TextIngestor(), index, text_files, "notes", root=notes)]
+
+    def build() -> IncrementalResult:
+        return incremental_ingest(
+            notes, SCOPE, corpora=corpora, graph=graph, manifest=manifest, encoder=enc
+        )
+
+    build()
+    baseline = enc.encoded
+    assert baseline > 0
+    assert graph.get(StructuralRef(SCOPE, "document:a.txt")) is not None
+
+    (notes / "a.txt").write_text("alpha note about retrieval, revised\n", encoding="utf-8")
+    stats = build().stats
+    assert 0 < enc.encoded - baseline < baseline  # only a.txt's nodes re-embedded
+    assert stats.embedded == enc.encoded - baseline
+
+    (notes / "b.txt").unlink()
+    build()
+    # the vanished file's nodes are dropped from the graph
+    assert graph.get(StructuralRef(SCOPE, "document:b.txt")) is None
+
+
 def test_corpus_root_override_ingests_from_outside_the_repo(tmp_path: Path) -> None:
     # A docs corpus can target its own root (outside the code repo) and is change-detected there.
     repo = tmp_path / "repo"
@@ -180,7 +222,7 @@ def test_corpus_root_override_ingests_from_outside_the_repo(tmp_path: Path) -> N
         CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs", root=docs),
     ]
 
-    def build() -> object:
+    def build() -> IncrementalResult:
         return incremental_ingest(
             repo, SCOPE, corpora=corpora, graph=graph, manifest=manifest, encoder=enc
         )

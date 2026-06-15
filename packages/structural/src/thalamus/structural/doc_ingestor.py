@@ -19,7 +19,7 @@ from pathlib import Path
 
 from thalamus.core.types import Scope
 from thalamus.structural.schema import IngestResult, SourceAnchor, StructuralEdge, StructuralNode
-from thalamus.structural.sources import IGNORE_DIRS, markdown_files
+from thalamus.structural.sources import IGNORE_DIRS, _rel, markdown_files
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +50,6 @@ class DocIngestor:
             self._ingest_file(path, root, scope, nodes, edges)
         return IngestResult(nodes=nodes, edges=edges)
 
-    @staticmethod
-    def _rel(path: Path, root: Path) -> str:
-        if root.is_file():
-            return path.name
-        try:
-            return path.resolve().relative_to(root.resolve()).as_posix()
-        except ValueError:
-            return path.name
-
     def _ingest_file(
         self,
         path: Path,
@@ -73,7 +64,7 @@ class DocIngestor:
             logger.warning("skipping %s: %s", path, exc)
             return
 
-        rel = self._rel(path, root)
+        rel = _rel(path, root)
         doc_id = f"document:{self._id_prefix}{rel}"
         intro = "\n".join(lines).strip()[: self._max_section_chars]
         nodes.append(

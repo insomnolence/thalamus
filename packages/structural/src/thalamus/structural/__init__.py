@@ -53,7 +53,14 @@ from thalamus.structural.sources import (
     glob_files,
     markdown_files,
     python_files,
+    text_files,
     typescript_files,
+)
+from thalamus.structural.text_ingestor import (
+    DEFAULT_CHUNK_CHARS,
+    DEFAULT_OVERLAP_CHARS,
+    TextIngestor,
+    chunk_lines,
 )
 
 __all__ = [
@@ -61,6 +68,8 @@ __all__ = [
     "CompositeIngestor",
     "CorpusSpec",
     "CrossLinkIndex",
+    "DEFAULT_CHUNK_CHARS",
+    "DEFAULT_OVERLAP_CHARS",
     "Direction",
     "DocIngestor",
     "FileManifest",
@@ -89,7 +98,9 @@ __all__ = [
     "StructuralIndex",
     "StructuralNode",
     "StructuralRetriever",
+    "TextIngestor",
     "UsageAttributor",
+    "chunk_lines",
     "code_files",
     "glob_files",
     "footprint_staleness",
@@ -99,5 +110,6 @@ __all__ = [
     "module_index",
     "node_text",
     "python_files",
+    "text_files",
     "typescript_files",
 ]

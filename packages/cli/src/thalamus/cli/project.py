@@ -35,12 +35,20 @@ lets the live re-derive pass rebuild that corpus' index when its source changes:
     name = "design-docs"
     root = "docs"
     kind = "docs"                       # Markdown; 'python-ast' for in-process Python parsing
+
+    [[corpus]]
+    name = "field-notes"
+    root = "notes"
+    kind = "text"                       # generic headingless plain text, chunked
+    include = ["*.txt"]
+    options.chunk_chars = 400           # per-producer params (forward-compatible)
 """
 
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -126,24 +134,40 @@ def _resolve(base: Path, value: Any) -> Path:
 
 # ── Declarative Brain-2 corpora ──────────────────────────────────────────────────────────────
 # Beyond the flat code_root/language/scip_index/doc_roots keys (one code corpus + docs), a project
-# may declare an explicit set of corpora — any mix of languages or docs — as [[corpus]] tables, so
-# Brain 2 is customised per project without bespoke code. Any language with a SCIP indexer
-# (TS/Rust/C++/Go/…) is a 'scip' corpus; Python is 'python-ast'; Markdown is 'docs'.
+# may declare an explicit set of corpora — any mix of languages, docs, or arbitrary text — as
+# [[corpus]] tables, so Brain 2 is customised per project without bespoke code. The valid ``kind``
+# set is the registered producers' (``python-ast``/``scip``/``docs``/``text`` built in); adding a
+# kind is a ``register_producer`` call, not an edit here. ``CORPUS_KINDS`` derives from that
+# registry (see the module ``__getattr__`` below — it is lazy to keep the import graph cycle-free).
 
-CORPUS_KINDS = frozenset({"python-ast", "scip", "docs"})
+
+def __getattr__(name: str) -> frozenset[str]:
+    """Lazy ``CORPUS_KINDS`` — the registered producer kinds.
+
+    Computed on access (not at module load) because resolving it imports ``producers``, which
+    imports ``brain``, which imports *this* module — eager evaluation would be a cycle. PEP 562
+    module-level ``__getattr__`` defers it to first use, after the import graph has settled."""
+    if name == "CORPUS_KINDS":
+        import thalamus.cli.producers  # noqa: F401 — registers the built-in producers
+        from thalamus.cli.producer_registry import producer_kinds
+
+        return producer_kinds()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @dataclass(frozen=True, slots=True)
 class CorpusConfig:
     """One Brain-2 corpus declared in a ``thalamus.toml`` ``[[corpus]]`` table.
 
-    ``kind`` is ``python-ast`` (in-process AST + jedi), ``scip`` (consume a prebuilt ``.scip`` —
-    any SCIP language), or ``docs`` (Markdown). ``root`` is the dir to ingest. ``scip_index`` (for
-    ``scip``) is the artifact. ``include`` are filename globs naming the corpus' source files for
-    change detection (e.g. ``["*.rs"]``); empty falls back to the kind's default walker.
+    ``kind`` selects a registered producer: ``python-ast`` (in-process AST + jedi), ``scip``
+    (consume a prebuilt ``.scip`` — any SCIP language), ``docs`` (Markdown), or ``text`` (generic
+    headingless plain text). ``root`` is the dir to ingest. ``scip_index`` (for ``scip``) is the
+    artifact. ``include`` are filename globs naming the corpus' source files for change detection
+    (e.g. ``["*.rs"]``, ``["*.txt"]``); empty falls back to the kind's default walker.
     ``regen_command`` (optional) is the shell command that rebuilds the artifact (e.g.
     ``scip-rust-analyzer …``), run by the re-derive pass when the source changes. ``root_package``
-    optionally prefixes module ids."""
+    optionally prefixes module ids. ``options`` are forward-compatible per-producer params (values
+    coerced to ``str``) — e.g. ``chunk_chars`` for the text producer."""
 
     name: str
     root: Path
@@ -152,45 +176,59 @@ class CorpusConfig:
     include: tuple[str, ...] = ()
     regen_command: str | None = None
     root_package: str | None = None
+    options: Mapping[str, str] = field(default_factory=dict)
 
 
 def parse_corpora(raw: dict[str, Any], base: Path) -> list[CorpusConfig]:
     """Parse the ``[[corpus]]`` array-of-tables into validated configs (empty when absent).
 
-    Paths (``root``/``scip_index``) resolve relative to the config file's directory. Raises a
-    clean :class:`ThalamusError` on a malformed entry (unknown kind, missing root, scip without
-    an index) rather than failing deep in the build."""
+    Paths (``root``/``scip_index``) resolve relative to the config file's directory. Structural
+    pre-checks (table shape, ``root`` required, ``regen_command`` needs ``include`` — a serve-layer
+    freshness rule) run here; the ``kind`` and any kind-specific config are then validated by the
+    registered producer (``get_producer(kind).validate(cfg)``), so onboarding a new kind needs no
+    edit here. Raises a clean :class:`ThalamusError` on a malformed entry rather than failing deep
+    in the build."""
+    # Lazy import: the registry/producers depend (transitively) on this module, so importing them
+    # at call time — not module load — keeps the import graph cycle-free. Importing ``producers``
+    # registers the built-in kinds so ``get_producer`` can resolve them.
+    import thalamus.cli.producers  # noqa: F401 — registers the built-in producers
+    from thalamus.cli.producer_registry import get_producer
+
     corpora: list[CorpusConfig] = []
     for i, entry in enumerate(raw.get("corpus", [])):
         if not isinstance(entry, dict):
             raise ThalamusError(f"[[corpus]] entry {i} must be a table")
         label = str(entry.get("name", i))
         kind = str(entry.get("kind", "")).strip()
-        if kind not in CORPUS_KINDS:
-            raise ThalamusError(
-                f"[[corpus]] '{label}': kind must be one of {sorted(CORPUS_KINDS)}, got {kind!r}"
-            )
         if entry.get("root") is None:
             raise ThalamusError(f"[[corpus]] '{label}': 'root' is required")
-        scip = entry.get("scip_index")
-        if kind == "scip" and scip is None:
-            raise ThalamusError(f"[[corpus]] '{label}': kind='scip' requires 'scip_index'")
         regen = entry.get("regen_command")
         if regen and not entry.get("include"):
             raise ThalamusError(
                 f"[[corpus]] '{label}': 'regen_command' needs 'include' globs so the re-derive "
                 "pass can tell when the source changed and the artifact must be rebuilt"
             )
+        scip = entry.get("scip_index")
         pkg = entry.get("root_package")
-        corpora.append(
-            CorpusConfig(
-                name=str(entry.get("name") or entry["root"]),
-                root=_resolve(base, entry["root"]),
-                kind=kind,
-                scip_index=_resolve(base, scip) if scip is not None else None,
-                include=tuple(str(pat) for pat in entry.get("include", ())),
-                regen_command=str(regen) if regen else None,
-                root_package=str(pkg) if pkg else None,
-            )
+        cfg = CorpusConfig(
+            name=str(entry.get("name") or entry["root"]),
+            root=_resolve(base, entry["root"]),
+            kind=kind,
+            scip_index=_resolve(base, scip) if scip is not None else None,
+            include=tuple(str(pat) for pat in entry.get("include", ())),
+            regen_command=str(regen) if regen else None,
+            root_package=str(pkg) if pkg else None,
+            options=_parse_options(label, entry.get("options", {})),
         )
+        # Producer owns kind validity (unknown kind → known-kinds list) + kind-specific config
+        # (e.g. scip needs an index, text's chunk options parse + range-check).
+        get_producer(kind).validate(cfg)
+        corpora.append(cfg)
     return corpora
+
+
+def _parse_options(label: str, raw: Any) -> dict[str, str]:
+    """Coerce an ``options`` table to ``{str: str}`` (TOML ints/bools → str) for the producer."""
+    if not isinstance(raw, dict):
+        raise ThalamusError(f"[[corpus]] '{label}': 'options' must be a table")
+    return {str(key): str(value) for key, value in raw.items()}

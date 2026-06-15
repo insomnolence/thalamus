@@ -27,6 +27,20 @@ def _is_test_filename(name: str) -> bool:
     return name == "conftest.py" or name.startswith("test_") or name.endswith("_test.py")
 
 
+def _rel(path: Path, root: Path) -> str:
+    """A node's stable relative-id segment: ``path`` under ``root`` (bare name for a file root).
+
+    Shared by the document/text ingestors so their node ids are computed identically — a
+    POSIX-style relative path, falling back to the bare filename when ``path`` is outside
+    ``root`` or ``root`` is itself a single file."""
+    if root.is_file():
+        return path.name
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
 def _walk(root: Path, accept: Callable[[str], bool], ignore_dirs: Iterable[str]) -> list[Path]:
     ignore = frozenset(ignore_dirs)
     files: list[Path] = []
@@ -67,6 +81,23 @@ def markdown_files(root: Path, ignore_dirs: Iterable[str] = IGNORE_DIRS) -> list
     if root.is_file():
         return [root] if root.suffix.lower() in suffixes else []
     return _walk(root, lambda name: name.lower().endswith(suffixes), ignore_dirs)
+
+
+def text_files(
+    root: Path,
+    ignore_dirs: Iterable[str] = IGNORE_DIRS,
+    *,
+    suffixes: tuple[str, ...] = (".txt",),
+) -> list[Path]:
+    """Plain-text files (``.txt`` by default) under ``root`` — the generic text corpus.
+
+    The headingless counterpart of :func:`markdown_files`: it drives the generic
+    :class:`~thalamus.structural.text_ingestor.TextIngestor`. ``suffixes`` widens the set
+    (e.g. ``(".txt", ".log")``) without a new walker."""
+    lowered = tuple(s.lower() for s in suffixes)
+    if root.is_file():
+        return [root] if root.suffix.lower() in lowered else []
+    return _walk(root, lambda name: name.lower().endswith(lowered), ignore_dirs)
 
 
 def _is_typescript_source(name: str) -> bool:

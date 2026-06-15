@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import pytest
 from thalamus.cli.project import find_project_config, load_project_config
 from thalamus.cli.serve import add_serve_arguments, serve_config
 
@@ -55,7 +56,7 @@ def test_unknown_keys_ignored(tmp_path: Path) -> None:
     assert arg_defaults == {"repo_id": "x"}  # forward-compatible: unknown key dropped
 
 
-def test_find_prefers_explicit_then_cwd(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+def test_find_prefers_explicit_then_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     explicit = tmp_path / "custom.toml"
     explicit.write_text("repo_id='x'\n", encoding="utf-8")
     assert find_project_config(explicit) == explicit
@@ -139,10 +140,9 @@ def _parse(tmp_path: Path, body: str) -> None:
 
 
 def test_corpus_validation_errors(tmp_path: Path) -> None:
-    import pytest
     from thalamus.core.exceptions import ThalamusError
 
-    with pytest.raises(ThalamusError, match="kind must be one of"):
+    with pytest.raises(ThalamusError, match="unknown corpus kind 'rust'; known kinds:"):
         _parse(tmp_path, '[[corpus]]\nname="x"\nroot="."\nkind="rust"\n')
     with pytest.raises(ThalamusError, match="'root' is required"):
         _parse(tmp_path, '[[corpus]]\nname="x"\nkind="docs"\n')
@@ -154,3 +154,27 @@ def test_corpus_validation_errors(tmp_path: Path) -> None:
             '[[corpus]]\nname="x"\nroot="."\nkind="scip"\nscip_index="x.scip"\n'
             'regen_command="build"\n',
         )
+    # text producer parses + range-checks its options at config-load (not deep in a build).
+    with pytest.raises(ThalamusError, match="option 'chunk_chars' must be an integer"):
+        _parse(
+            tmp_path,
+            '[[corpus]]\nname="x"\nroot="."\nkind="text"\n'
+            '[corpus.options]\nchunk_chars="big"\n',
+        )
+
+
+def test_parse_text_corpus_with_options(tmp_path: Path) -> None:
+    path = tmp_path / "thalamus.toml"
+    path.write_text(
+        '[[corpus]]\nname="notes"\nroot="notes"\nkind="text"\ninclude=["*.txt"]\n'
+        "[corpus.options]\nchunk_chars=400\noverlap_chars=50\n",
+        encoding="utf-8",
+    )
+    _, _, corpora = load_project_config(path)
+    assert len(corpora) == 1
+    notes = corpora[0]
+    assert notes.kind == "text"
+    assert notes.root == (tmp_path / "notes").resolve()
+    assert notes.include == ("*.txt",)
+    # TOML ints are coerced to str for the producer
+    assert notes.options == {"chunk_chars": "400", "overlap_chars": "50"}
