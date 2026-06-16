@@ -1,0 +1,422 @@
+"""The plan / impact tool — a blast-radius brief for a change (C-3).
+
+Given a *target* (a symbol name or NL description of where a change will land), the
+:class:`Planner` resolves it to a Brain-2 code node, computes a bounded blast radius
+(what calls it = "what breaks", what it uses, what contains it), gathers the *why* the
+brain has recorded about everything in scope (cross-hemisphere links → decisions /
+constraints / gotchas), and assembles one structured :class:`PlanBrief` — so the
+actuator walks into the task already holding the whole-system picture (§16, planning.md).
+
+**Deterministic core, by design (§14.2).** Resolution (semantic match), radius (graph
+traversal), and gather (cross-link join + store reads) are fully deterministic — the brief
+reproduces from the same graph state. No LLM synthesis here; a natural-language summary is a
+*later, removable* layer on top of this structured payload, deliberately deferred until the
+core is measured (see the refined design — git-derived blast-radius recall as the eval).
+
+**Coverage honesty is the load-bearing property.** Memory coverage over code is sparse, so a
+brief that renders an empty section is only safe if it distinguishes "the brain *knows* there
+is nothing here" from "the brain has *no data* here" — otherwise it makes the actuator bolder
+exactly where we are blind. Every brief therefore carries a :class:`CoverageReport` and
+per-node link counts; absence is always reported as *unverified*.
+
+**Bounded, not exhaustive.** Reverse reachability over a real call graph is enormous, so the
+radius is a budgeted, edge-typed frontier, and a high-fan-out *hub* node (shared
+infrastructure) trips a circuit-breaker: the brief refuses to enumerate hundreds of call-sites
+and instead flags "broad blast radius — change with a compat strategy", which is the more
+useful thing to tell the actuator.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+
+from thalamus.core.protocols import Store
+from thalamus.core.types import Cue, MemoryId, Scope, ScoredMemory, StructuralRef
+from thalamus.gateway.payload import MemoryItem, StructuralItem
+from thalamus.gateway.views import DerivedViewsRef
+from thalamus.structural import (
+    CoChangeIndex,
+    CrossLinkIndex,
+    StructuralGraph,
+    StructuralNode,
+    StructuralRetriever,
+    ranked_hits,
+)
+
+# Memory kinds that count as a load-bearing *constraint* (vs. general decision/context).
+_CONSTRAINT_KINDS = frozenset({"constraint", "gotcha"})
+
+
+@dataclass(frozen=True, slots=True)
+class RadiusNode:
+    """One code node in the blast radius, tagged by how it relates to the integration point."""
+
+    item: StructuralItem
+    relation: str  # "caller" (what breaks) | "callee" (what it uses) | "container"
+    distance: int  # hops from the integration point (1 = direct)
+    linked_memory_count: int  # cross-links attached here — the per-node coverage signal
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageReport:
+    """How much of the in-scope code the brain actually has recorded knowledge about.
+
+    The honesty field: ``nodes_without_context`` is *unverified absence* — the brain may
+    simply hold no memory for those nodes, not that they are known to be constraint-free.
+    """
+
+    radius_nodes: int  # nodes in scope (integration point + blast radius)
+    nodes_with_context: int  # how many carry >= 1 cross-linked memory
+
+    @property
+    def nodes_without_context(self) -> int:
+        return max(self.radius_nodes - self.nodes_with_context, 0)
+
+
+@dataclass(frozen=True, slots=True)
+class PlanBrief:
+    """The assembled planning brief for a target — a structured, deterministic payload."""
+
+    target: str
+    integration_point: StructuralItem | None  # None when the target did not resolve
+    resolution_relevance: float | None = None
+    resolution_ambiguous: bool = False  # a runner-up resolved nearly as well
+    alternatives: tuple[StructuralItem, ...] = ()  # other plausible integration points
+    high_fanout: bool = False  # the hub circuit-breaker tripped
+    fanout_callers: int = 0  # direct caller count when high_fanout
+    blast_radius: tuple[RadiusNode, ...] = ()
+    constraints: tuple[MemoryItem, ...] = ()  # constraint / gotcha memories in scope
+    context: tuple[MemoryItem, ...] = ()  # decision / investigation / episode memories in scope
+    coverage: CoverageReport = field(default_factory=lambda: CoverageReport(0, 0))
+    radius_omitted: int = 0  # radius nodes dropped past the node budget
+    memories_omitted: int = 0  # memories dropped past the memory budget
+
+    def render(self) -> str:
+        """Render the brief as a clean text block for the actuator — coverage honesty included."""
+        lines = [f"# Plan brief: {self.target}"]
+
+        if self.integration_point is None:
+            lines += ["", f'Could not resolve "{self.target}" to a known code node.']
+            lines.append("(No blast radius — the target is not in Brain 2, or below the floor.)")
+            return "\n".join(lines) + "\n"
+
+        ip = self.integration_point
+        loc = f" — {ip.location}" if ip.location else ""
+        rel = f" [relevance {self.resolution_relevance:.2f}]" if self.resolution_relevance else ""
+        lines += ["", "## Integration point", f"- ({ip.kind}) {ip.label}{loc}{rel}"]
+        if self.resolution_ambiguous and self.alternatives:
+            alts = ", ".join(f"{a.label}" for a in self.alternatives)
+            lines.append(f"  ⚠ ambiguous target — also plausible: {alts}")
+
+        lines += ["", "## Blast radius — what depends on this"]
+        if self.high_fanout:
+            lines.append(
+                f"  ⚠ shared infrastructure — {self.fanout_callers} direct callers. The blast "
+                "radius is broad and not enumerated; change behind a compatible interface or with "
+                "a deprecation/migration strategy."
+            )
+        if self.blast_radius:
+            for relation, heading in (
+                ("caller", "callers (what breaks if you change it)"),
+                ("callee", "uses (what it calls)"),
+                ("co-change", "frequently changed alongside (historical co-change)"),
+                ("container", "container"),
+            ):
+                group = [rn for rn in self.blast_radius if rn.relation == relation]
+                if not group:
+                    continue
+                lines.append(f"- {heading}:")
+                for rn in group:
+                    notes = (
+                        f"{rn.linked_memory_count} note(s)"
+                        if rn.linked_memory_count
+                        else "no recorded context"
+                    )
+                    loc = f" — {rn.item.location}" if rn.item.location else ""
+                    lines.append(f"  - ({rn.item.kind}) {rn.item.label}{loc}  [{notes}]")
+        elif not self.high_fanout:
+            lines.append("  (no direct callers/callees recorded in Brain 2)")
+        if self.radius_omitted:
+            lines.append(f"  - ... {self.radius_omitted} further node(s) omitted past the budget")
+
+        self._render_memories(lines, "Known constraints & gotchas", self.constraints)
+        self._render_memories(lines, "Decisions & context", self.context)
+
+        cov = self.coverage
+        lines += ["", "## Coverage"]
+        if cov.radius_nodes:
+            lines.append(
+                f"{cov.nodes_with_context} of {cov.radius_nodes} in-scope node(s) have recorded "
+                f"context; {cov.nodes_without_context} have NONE — absence there is *unverified* "
+                "(the brain may simply hold no memory for that code)."
+            )
+        if self.memories_omitted:
+            lines.append(f"({self.memories_omitted} further memory(ies) omitted past the budget.)")
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _render_memories(lines: list[str], heading: str, items: Sequence[MemoryItem]) -> None:
+        if not items:
+            return
+        lines += ["", f"## {heading} ({len(items)})"]
+        for item in items:
+            superseded = " [superseded]" if item.superseded else ""
+            lines.append(f"- ({item.kind}){superseded} {item.content}")
+            if item.why:
+                lines.append(f"  why: {item.why}")
+            if item.superseded is not None:
+                note = item.superseded
+                lines.append(f"  ⊘ superseded by {note.superseded_by} on {note.at}: {note.reason}")
+            if item.stale_references:
+                gone = ", ".join(item.stale_references)
+                lines.append(f"  ⚠ may be stale — references no longer in the codebase: {gone}")
+
+
+@dataclass(frozen=True, slots=True)
+class PlannerConfig:
+    """Tunable bounds for the planner — all swappable, none load-bearing for correctness."""
+
+    max_resolution_hits: int = 8  # k passed to structural retrieval for target resolution
+    min_relevance: float = 0.0  # floor for a resolution hit (encoder-agnostic noise floor)
+    ambiguity_ratio: float = 0.95  # runner-up >= ratio * top score ⇒ flag ambiguous
+    hops: int = 2  # blast-radius depth bound for caller reachability
+    fanout_threshold: int = 25  # direct-caller degree above which the hub breaker trips
+    node_budget: int = 40  # max blast-radius nodes in the brief
+    memory_budget: int = 30  # max memories gathered into the brief
+    max_memory_chars: int = 1000  # per-memory content/why truncation
+    cochange_min_support: int = 2  # min historical co-changes to count as coupled (drops one-offs)
+    cochange_max_nodes: int = 15  # max co-change nodes added to the radius
+
+
+class Planner:
+    """Assembles a :class:`PlanBrief` for a target by resolving it in Brain 2, computing a
+    bounded blast radius over the structural graph, and gathering the cross-linked *why*.
+
+    A composed peer of :class:`~thalamus.gateway.gateway.Gateway` (not a method on it): recall
+    is cue→payload along the retriever chain; planning is target→node→radius→brief, a different
+    operation over the same Brain-2 collaborators. Read-only against the brain (it logs no
+    Tier-1 usage), so it is safe to expose even in investigate/read-only mode.
+    """
+
+    def __init__(
+        self,
+        *,
+        graph: StructuralGraph,
+        links: CrossLinkIndex,
+        store: Store,
+        structural_retrievers: Sequence[StructuralRetriever],
+        views: DerivedViewsRef,
+        cochange: CoChangeIndex | None = None,
+        config: PlannerConfig | None = None,
+    ) -> None:
+        self._graph = graph
+        self._links = links
+        self._store = store
+        self._structural_retrievers = tuple(structural_retrievers)
+        self._views = views
+        # Optional logical-coupling layer (§14, removable): when present, symbols that historically
+        # change together are folded into the blast radius alongside call-graph reachability.
+        self._cochange = cochange
+        self._config = config if config is not None else PlannerConfig()
+
+    def plan(self, *, target: str, scope: Scope, hops: int | None = None) -> PlanBrief:
+        cfg = self._config
+        depth = cfg.hops if hops is None else max(hops, 1)
+        cue = Cue(text=target, scope=scope)
+
+        # 1 — Resolve the target to a Brain-2 node (semantic; exact-identifier preference TODO).
+        hits = ranked_hits(
+            cue,
+            self._structural_retrievers,
+            k=cfg.max_resolution_hits,
+            min_relevance=cfg.min_relevance,
+        )
+        if not hits:
+            return PlanBrief(target=target, integration_point=None)
+        top_corpus, top = hits[0]
+        integration = StructuralItem.from_scored_node(top, corpus=top_corpus)
+        ambiguous = len(hits) > 1 and hits[1][1].score >= top.score * cfg.ambiguity_ratio
+        alternatives = tuple(
+            StructuralItem.from_scored_node(s, corpus=c) for c, s in hits[1:4]
+        ) if ambiguous else ()
+
+        # 2 — Blast radius from the resolved node (deterministic graph traversal, edge-typed).
+        ref = top.node.ref
+        radius, callers, high_fanout, radius_omitted = self._compute_radius(ref, depth)
+
+        # 3 — Gather the why: cross-linked memories for the integration point + every radius node.
+        scope_refs = [ref, *(rn.item_ref for rn in radius)]
+        constraints, context, with_context, mem_omitted = self._gather(scope_refs)
+
+        return PlanBrief(
+            target=target,
+            integration_point=integration,
+            resolution_relevance=top.score,
+            resolution_ambiguous=ambiguous,
+            alternatives=alternatives,
+            high_fanout=high_fanout,
+            fanout_callers=len(callers),
+            blast_radius=tuple(rn.node for rn in radius),
+            constraints=constraints,
+            context=context,
+            coverage=CoverageReport(radius_nodes=len(scope_refs), nodes_with_context=with_context),
+            radius_omitted=radius_omitted,
+            memories_omitted=mem_omitted,
+        )
+
+    def blast_radius_refs(
+        self, ref: StructuralRef, *, hops: int | None = None
+    ) -> frozenset[StructuralRef]:
+        """The blast-radius node refs around a *known* node — the deterministic traversal alone.
+
+        Bypasses target resolution and gather (those are the semantic / experiential legs); this
+        is the verifiable core the impact eval measures (does a historically-coupled node fall in
+        the radius?). Honours the fan-out breaker, so it reflects the tool's real behaviour: a hub
+        target enumerates no callers, by design."""
+        depth = self._config.hops if hops is None else max(hops, 1)
+        entries, _callers, _high_fanout, _omitted = self._compute_radius(ref, depth)
+        return frozenset(entry.item_ref for entry in entries)
+
+    def is_high_fanout(self, ref: StructuralRef) -> bool:
+        """Whether ``ref``'s direct-caller degree trips the hub circuit-breaker."""
+        callers = self._graph.neighbors(ref, edge_types=("calls",), direction="in")
+        return len(callers) > self._config.fanout_threshold
+
+    def _compute_radius(
+        self, ref: StructuralRef, depth: int
+    ) -> tuple[list[_RadiusEntry], list[StructuralNode], bool, int]:
+        """Direct callers + the budgeted edge-typed frontier + the fan-out verdict — shared by
+        :meth:`plan` and :meth:`blast_radius_refs` so both traverse identically."""
+        callers = self._graph.neighbors(ref, edge_types=("calls",), direction="in")
+        high_fanout = len(callers) > self._config.fanout_threshold
+        entries, omitted = self._blast_radius(ref, depth, callers, high_fanout)
+        return entries, callers, high_fanout, omitted
+
+    def _blast_radius(
+        self,
+        ref: StructuralRef,
+        depth: int,
+        callers: Sequence[StructuralNode],
+        high_fanout: bool,
+    ) -> tuple[list[_RadiusEntry], int]:
+        """The budgeted, edge-typed frontier around ``ref``, in priority order.
+
+        Priority: direct callers (what breaks) → direct callees (what it uses) → container →
+        deeper callers. The hub breaker suppresses caller enumeration entirely (the broad-radius
+        flag is more useful than hundreds of call-sites). ``contains`` never propagates the
+        radius (a parent module tells you nothing about what breaks)."""
+        cfg = self._config
+        callees = self._graph.neighbors(ref, edge_types=("calls",), direction="out")
+        container = self._graph.neighbors(ref, edge_types=("contains",), direction="in")
+
+        entries: list[_RadiusEntry] = []
+        seen = {ref.node_id}
+
+        def add(nodes: Sequence[StructuralNode], relation: str, distance: int) -> None:
+            for node in nodes:
+                if node.node_id in seen:
+                    continue
+                seen.add(node.node_id)
+                item = StructuralItem.from_node(node)
+                count = len(self._links.memories_for(node.ref))
+                entries.append(
+                    _RadiusEntry(
+                        node=RadiusNode(
+                            item=item,
+                            relation=relation,
+                            distance=distance,
+                            linked_memory_count=count,
+                        ),
+                        item_ref=node.ref,
+                    )
+                )
+
+        if not high_fanout:
+            add(callers, "caller", 1)
+        add(callees, "callee", 1)
+        add(container, "container", 1)
+        # Co-change ranks above deeper transitive callers: the eval showed logical coupling
+        # predicts impact better than 2-hop call reachability. Independent of the call breaker.
+        self._add_cochange(ref, seen, entries, add)
+        if not high_fanout and depth >= 2:
+            deeper = self._graph.k_hop(ref, depth, edge_types=("calls",), direction="in")
+            add(deeper, "caller", 2)
+
+        if len(entries) <= cfg.node_budget:
+            return entries, 0
+        return entries[: cfg.node_budget], len(entries) - cfg.node_budget
+
+    def _add_cochange(
+        self,
+        ref: StructuralRef,
+        seen: set[str],
+        entries: list[_RadiusEntry],
+        add: Callable[[Sequence[StructuralNode], str, int], None],
+    ) -> None:
+        """Fold in symbols that historically co-changed with ``ref`` (above the support floor).
+
+        A no-op without a co-change index (the removable-layer contract). Partners gone from the
+        current graph are skipped (stale); counts are sorted descending, so we stop at the floor."""
+        if self._cochange is None:
+            return
+        cfg = self._config
+        added = 0
+        for partner, count in self._cochange.cochanged(ref):
+            if count < cfg.cochange_min_support or added >= cfg.cochange_max_nodes:
+                break
+            if partner.node_id in seen:
+                continue
+            node = self._graph.get(partner)
+            if node is None:
+                continue
+            add([node], "co-change", 1)
+            added += 1
+
+    def _gather(
+        self, scope_refs: Sequence[StructuralRef]
+    ) -> tuple[tuple[MemoryItem, ...], tuple[MemoryItem, ...], int, int]:
+        """Collect cross-linked memories for the in-scope nodes, deduped, partitioned, budgeted.
+
+        Returns ``(constraints, context, nodes_with_context, memories_omitted)``. A node counts
+        toward coverage if it has >= 1 cross-link, independent of the memory budget — coverage
+        reflects what the brain *holds*, not what fit in the brief."""
+        cfg = self._config
+        views = self._views.views
+        seen_mem: set[MemoryId] = set()
+        constraints: list[MemoryItem] = []
+        context: list[MemoryItem] = []
+        with_context = 0
+        omitted = 0
+
+        for ref in scope_refs:
+            memory_refs = self._links.memories_for(ref)
+            if memory_refs:
+                with_context += 1
+            for memory_ref in memory_refs:
+                if memory_ref.memory_id in seen_mem:
+                    continue
+                seen_mem.add(memory_ref.memory_id)
+                record = self._store.get(memory_ref)
+                if record is None:
+                    continue
+                if len(constraints) + len(context) >= cfg.memory_budget:
+                    omitted += 1
+                    continue
+                item = MemoryItem.from_scored(
+                    ScoredMemory(record=record, score=0.0),
+                    max_content_chars=cfg.max_memory_chars,
+                    stale_references=views.stale_references.get(memory_ref, ()),
+                    superseded=views.superseded.get(memory_ref),
+                )
+                (constraints if record.kind in _CONSTRAINT_KINDS else context).append(item)
+
+        return tuple(constraints), tuple(context), with_context, omitted
+
+
+@dataclass(frozen=True, slots=True)
+class _RadiusEntry:
+    """Internal: a built :class:`RadiusNode` paired with its ref (for the gather step)."""
+
+    node: RadiusNode
+    item_ref: StructuralRef

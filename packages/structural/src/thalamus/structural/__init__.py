@@ -6,11 +6,22 @@
 memories to structural nodes (§13.19). See ``deep-dives/structural-hemisphere.md``.
 """
 
+from thalamus.structural.anchoring import (
+    anchor_nodes,
+    linked_nodes_for,
+    ranked_hits,
+    resolve_and_expand,
+)
 from thalamus.structural.attribution import (
     AttributedUse,
     FootprintAttributor,
     ShownMemory,
     UsageAttributor,
+)
+from thalamus.structural.cochange import (
+    CoChangeIndex,
+    FileCoChangeIndex,
+    InMemoryCoChangeIndex,
 )
 from thalamus.structural.composite import CompositeIngestor
 from thalamus.structural.cross_link import CrossLinkIndex, InMemoryCrossLinkIndex
@@ -65,6 +76,7 @@ from thalamus.structural.text_ingestor import (
 
 __all__ = [
     "AttributedUse",
+    "CoChangeIndex",
     "CompositeIngestor",
     "CorpusSpec",
     "CrossLinkIndex",
@@ -72,12 +84,14 @@ __all__ = [
     "DEFAULT_OVERLAP_CHARS",
     "Direction",
     "DocIngestor",
+    "FileCoChangeIndex",
     "FileManifest",
     "FootprintAttributor",
     "IncrementalResult",
     "InMemoryFileManifest",
     "IngestResult",
     "IngestStats",
+    "InMemoryCoChangeIndex",
     "InMemoryCrossLinkIndex",
     "InMemoryStructuralGraph",
     "InMemoryStructuralIndex",
@@ -100,16 +114,20 @@ __all__ = [
     "StructuralRetriever",
     "TextIngestor",
     "UsageAttributor",
+    "anchor_nodes",
     "chunk_lines",
     "code_files",
     "glob_files",
     "footprint_staleness",
     "incremental_ingest",
     "link_by_footprint",
+    "linked_nodes_for",
     "markdown_files",
     "module_index",
     "node_text",
     "python_files",
+    "ranked_hits",
+    "resolve_and_expand",
     "text_files",
     "typescript_files",
 ]

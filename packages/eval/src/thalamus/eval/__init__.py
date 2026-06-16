@@ -18,6 +18,14 @@ an actuator are wired in.
 
 from thalamus.eval.benchmark import BenchmarkCase, load_cases
 from thalamus.eval.harness import EvalReport, NullRetriever, compare, evaluate
+from thalamus.eval.impact import (
+    BlastRadiusOracle,
+    ImpactPair,
+    ImpactReport,
+    evaluate_impact,
+    map_changes_to_refs,
+    parse_changed_lines,
+)
 from thalamus.eval.metrics import hit_at_k, precision_at_k, recall_at_k, reciprocal_rank
 from thalamus.eval.probe import (
     ProbeOutcome,
@@ -43,7 +51,10 @@ from thalamus.eval.utility import UtilityReport, utility_at_k
 
 __all__ = [
     "BenchmarkCase",
+    "BlastRadiusOracle",
     "EvalReport",
+    "ImpactPair",
+    "ImpactReport",
     "NullRetriever",
     "ProbeOutcome",
     "ProbeReport",
@@ -55,12 +66,15 @@ __all__ = [
     "compare_probes",
     "default_transcripts_dir",
     "evaluate",
+    "evaluate_impact",
     "evaluate_probes",
     "extract_probes",
     "find_transcripts",
     "hit_at_k",
     "join_proxy_truth",
     "load_cases",
+    "map_changes_to_refs",
+    "parse_changed_lines",
     "precision_at_k",
     "proxy_truth",
     "recall_at_k",

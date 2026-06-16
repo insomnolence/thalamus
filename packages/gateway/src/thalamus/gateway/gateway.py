@@ -31,8 +31,10 @@ from thalamus.structural import (
     CrossLinkIndex,
     ScoredNode,
     StructuralGraph,
-    StructuralNode,
     StructuralRetriever,
+    anchor_nodes,
+    linked_nodes_for,
+    ranked_hits,
 )
 
 # Bounds for the call-graph payload section — kept selective (the §5.6 packaging discipline):
@@ -141,7 +143,12 @@ class StructuralRelevanceRetriever:
 
     def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
         base = self._inner.retrieve(cue, k)
-        anchors = self._anchor_nodes(cue)
+        anchors = anchor_nodes(
+            cue,
+            self._structural_retrievers,
+            max_anchors=self._max_anchors,
+            min_relevance=self._min_relevance,
+        )
         if not anchors:
             return base
 
@@ -171,17 +178,6 @@ class StructuralRelevanceRetriever:
             )
         fused.sort(key=lambda scored: scored.features["structural_fused"], reverse=True)
         return RetrievalResult(cue=cue, candidates=fused, shown=fused[: max(k, 0)])
-
-    def _anchor_nodes(self, cue: Cue) -> frozenset[StructuralRef]:
-        """The structural nodes the cue is *about* — its top direct structural hits, above floor."""
-        scored_by_ref: dict[StructuralRef, float] = {}
-        for retriever in self._structural_retrievers:
-            for scored in retriever.retrieve(cue, self._max_anchors):
-                if scored.score > self._min_relevance:
-                    ref = scored.node.ref
-                    scored_by_ref[ref] = max(scored_by_ref.get(ref, 0.0), scored.score)
-        top = sorted(scored_by_ref.items(), key=lambda kv: kv[1], reverse=True)[: self._max_anchors]
-        return frozenset(ref for ref, _ in top)
 
 
 class SupersededDemotingRetriever:
@@ -343,13 +339,12 @@ class Gateway:
     def _direct_hits(self, cue: Cue) -> list[tuple[str, ScoredNode]]:
         """Direct structural hits above the relevance floor, as ``(corpus, hit)`` ranked across
         corpora — each corpus searches its own index (no pollution), then merged by relevance."""
-        hits: list[tuple[str, ScoredNode]] = []
-        for retriever in self._structural_retrievers:
-            for scored in retriever.retrieve(cue, self._max_structural_items):
-                if scored.score > self._structural_min_relevance:
-                    hits.append((retriever.corpus, scored))
-        hits.sort(key=lambda item: item[1].score, reverse=True)
-        return hits
+        return ranked_hits(
+            cue,
+            self._structural_retrievers,
+            k=self._max_structural_items,
+            min_relevance=self._structural_min_relevance,
+        )
 
     def _call_relations(self, direct: Sequence[ScoredNode]) -> list[CallRelation]:
         """Callers/callees of the cue's top direct code hits — the call graph, surfaced.
@@ -383,23 +378,10 @@ class Gateway:
         graph, links = self._graph, self._links
         if graph is None or links is None:
             return []
-        seen: set[str] = set()
-        items: list[StructuralItem] = []
-        for memory in memories:
-            for node_ref in links.nodes_for(memory):
-                for node in self._resolve(graph, node_ref):
-                    if node.node_id not in seen:
-                        seen.add(node.node_id)
-                        items.append(StructuralItem.from_node(node))
-        return items
-
-    def _resolve(self, graph: StructuralGraph, ref: StructuralRef) -> list[StructuralNode]:
-        node = graph.get(ref)
-        if node is None:
-            # Stale link: the anchored node is gone from the current graph — the
-            # §13.18-D2 staleness signal. Skipped for now; flagged/surfaced later.
-            return []
-        return [node, *graph.k_hop(ref, self._structural_k_hop)]
+        return [
+            StructuralItem.from_node(node)
+            for node in linked_nodes_for(memories, graph, links, k_hop=self._structural_k_hop)
+        ]
 
     def record_outcome(self, payload: ContextPayload, output: str) -> list[UsageSignal]:
         """Attribute Tier-1 usage: which surfaced memories the actuator's ``output`` used.

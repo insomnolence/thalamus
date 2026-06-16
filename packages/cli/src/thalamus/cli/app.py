@@ -25,6 +25,11 @@ from thalamus.cli.backup import (
 from thalamus.cli.dogfood import add_sync_arguments, run_sync, sync_config
 from thalamus.cli.dream import add_dream_arguments, dream_config, run_dream
 from thalamus.cli.health import add_health_arguments, health_config, run_health
+from thalamus.cli.impact_eval import (
+    add_impact_eval_arguments,
+    impact_eval_config,
+    run_impact_eval,
+)
 from thalamus.cli.probe_eval import add_probe_eval_arguments, probe_eval_config, run_probe_eval
 from thalamus.cli.project import find_project_config, load_project_config
 from thalamus.cli.remember import add_remember_arguments, remember_config, run_remember
@@ -99,6 +104,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "probe-eval", help="L1 verdict: replay transcript questions against the brain"
     )
     add_probe_eval_arguments(parsers["probe-eval"])
+    parsers["impact-eval"] = sub.add_parser(
+        "impact-eval", help="git-derived blast-radius recall for the plan tool"
+    )
+    add_impact_eval_arguments(parsers["impact-eval"])
     parsers["dream"] = sub.add_parser(
         "dream", help="run one dreaming cycle (refresh views + audit beliefs)"
     )
@@ -141,6 +150,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_restore(restore_config(args))
     elif args.command == "probe-eval":
         run_probe_eval(probe_eval_config(args))
+    elif args.command == "impact-eval":
+        run_impact_eval(impact_eval_config(args))
     elif args.command == "dream":
         run_dream(dream_config(args))
     return 0
