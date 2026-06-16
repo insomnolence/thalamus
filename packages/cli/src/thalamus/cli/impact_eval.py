@@ -323,7 +323,7 @@ def run_impact_eval(cfg: ImpactEvalConfig) -> ImpactReport:
         cfg.repo, test_shas, index, ref_path, globs, cfg.max_symbols_per_commit
     )
     cochange = (
-        build_file_cochange(cfg.repo, graph, scope, train_shas, code_language=cfg.code_language)
+        build_file_cochange(cfg.repo, graph, scope, train_shas)
         if cfg.cochange_mode == "file"
         else _cochange_from(cfg.repo, train_shas, index, globs, cfg.max_symbols_per_commit)
     )

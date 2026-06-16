@@ -23,13 +23,16 @@ from thalamus.core.types import StructuralRef
 
 @runtime_checkable
 class CoChangeIndex(Protocol):
-    """Symbol → the symbols it has historically co-changed with, by descending count."""
+    """Symbol → the symbols it has historically co-changed with, by descending *coupling score*."""
 
-    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, int]]: ...
+    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, float]]: ...
 
 
 class InMemoryCoChangeIndex:
-    """Accumulates symmetric pairwise co-change counts from commits (each = a set of symbols)."""
+    """Accumulates symmetric pairwise co-change counts from commits (each = a set of symbols).
+
+    The symbol-level scaffold (drift-starved on a single HEAD index — see :class:`FileCoChangeIndex`
+    for the variant that works). Scores partners by raw co-occurrence count."""
 
     def __init__(self) -> None:
         self._counts: dict[StructuralRef, dict[StructuralRef, int]] = {}
@@ -49,11 +52,12 @@ class InMemoryCoChangeIndex:
                 self._bump(a, b)
                 self._bump(b, a)
 
-    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, int]]:
+    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, float]]:
         partners = self._counts.get(ref)
         if not partners:
             return []
-        return sorted(partners.items(), key=lambda kv: kv[1], reverse=True)
+        scored = [(other, float(count)) for other, count in partners.items()]
+        return sorted(scored, key=lambda kv: kv[1], reverse=True)
 
 
 class FileCoChangeIndex:
@@ -66,6 +70,13 @@ class FileCoChangeIndex:
     :class:`CoChangeIndex` query by expanding a symbol → its file → co-changed files → the symbols
     that live in them. The planner consumes it through the same seam, unchanged.
 
+    **Scored by lift, not raw count.** Raw co-occurrence over-credits *hub/sweep* files (a file
+    touched in a large fraction of commits "co-changes" with everything). ``lift = P(both) /
+    (P(home)·P(partner))`` divides out the partner's base frequency, so a partner that changes
+    everywhere scores ~1 (chance) and real coupling scores high. A ``min_cooccur`` support gate
+    drops one-off coincidences, and ``max_file_frequency`` hard-excludes files appearing in more
+    than that fraction of commits (sweeps — formatting passes, big renames) as partners.
+
     ``ref_file``/``file_refs`` are the symbol↔file membership (from the current graph's anchors),
     injected once; ``add_commit`` takes a commit's changed *file paths* (drift-immune)."""
 
@@ -73,10 +84,17 @@ class FileCoChangeIndex:
         self,
         ref_file: Mapping[StructuralRef, str],
         file_refs: Mapping[str, Sequence[StructuralRef]],
+        *,
+        min_cooccur: int = 2,
+        max_file_frequency: float = 0.10,
     ) -> None:
         self._ref_file = dict(ref_file)
         self._file_refs = {path: list(refs) for path, refs in file_refs.items()}
         self._file_partners: dict[str, dict[str, int]] = {}
+        self._file_commits: dict[str, int] = {}  # commits each file appeared in (the base rate)
+        self._commits = 0
+        self._min_cooccur = min_cooccur
+        self._max_file_frequency = max_file_frequency
 
     def __len__(self) -> int:
         return len(self._file_partners)
@@ -86,29 +104,40 @@ class FileCoChangeIndex:
         row[b] = row.get(b, 0) + 1
 
     def add_commit(self, files: Iterable[str]) -> None:
-        """Record one commit's co-change: every distinct pair of changed files +1 (both ways)."""
+        """Record one commit: per-file base rates + every distinct pair of changed files (both)."""
         unique = list(dict.fromkeys(files))
+        if not unique:
+            return
+        self._commits += 1
+        for path in unique:
+            self._file_commits[path] = self._file_commits.get(path, 0) + 1
         for i, a in enumerate(unique):
             for b in unique[i + 1 :]:
                 self._bump(a, b)
                 self._bump(b, a)
 
-    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, int]]:
-        """Symbols in files that co-changed with ``ref``'s file, scored by the file-pair count."""
+    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, float]]:
+        """Symbols in files coupled to ``ref``'s file, scored by lift (hub files filtered out)."""
         home = self._ref_file.get(ref)
         if home is None:
             return []
         partners = self._file_partners.get(home)
-        if not partners:
+        home_commits = self._file_commits.get(home, 0)
+        if not partners or home_commits == 0 or self._commits == 0:
             return []
-        best: dict[StructuralRef, int] = {}
-        for partner_file, count in partners.items():
+        freq_cap = self._max_file_frequency * self._commits
+        best: dict[StructuralRef, float] = {}
+        for partner_file, cooccur in partners.items():
+            partner_commits = self._file_commits.get(partner_file, 0)
+            if cooccur < self._min_cooccur or partner_commits == 0 or partner_commits > freq_cap:
+                continue  # one-off, or a sweep/hub file that co-changes with everything
+            lift = cooccur * self._commits / (home_commits * partner_commits)
             for symbol in self._file_refs.get(partner_file, ()):
                 if symbol == ref:
                     continue
                 prior = best.get(symbol)
-                if prior is None or count > prior:
-                    best[symbol] = count
+                if prior is None or lift > prior:
+                    best[symbol] = lift
         return sorted(best.items(), key=lambda kv: kv[1], reverse=True)
 
 
@@ -127,6 +156,6 @@ class CoChangeRef:
         """Atomically replace the current index (one ``STORE_ATTR``)."""
         self._index = index
 
-    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, int]]:
+    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, float]]:
         index = self._index  # snapshot once: consistent across this call
         return index.cochanged(ref) if index is not None else []

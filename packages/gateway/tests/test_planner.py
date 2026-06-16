@@ -88,13 +88,29 @@ HELPER = _node("mod:helper")
 MODULE = _node("module:mod", kind="module", label="mod")
 
 SIBLING = _node("mod:sibling")  # no call/contains edge to foo — only reachable via co-change
-_NODES = [FOO, BAR, BAZ, HELPER, MODULE, SIBLING]
+IFACE = _node("mod:IStore", kind="interface", label="mod.IStore")
+IMPL = _node("mod:PostgresStore", kind="class", label="mod.PostgresStore")  # implements IStore
+DOC = _node("docsec:store-design", kind="section", label="Store design")  # a docs-corpus hit
+_NODES = [FOO, BAR, BAZ, HELPER, MODULE, SIBLING, IFACE, IMPL]
 _EDGES = [
     StructuralEdge("mod:bar", "mod:foo", "calls"),
     StructuralEdge("mod:baz", "mod:foo", "calls"),
     StructuralEdge("mod:foo", "mod:helper", "calls"),
     StructuralEdge("module:mod", "mod:foo", "contains"),
+    StructuralEdge("mod:PostgresStore", "mod:IStore", "implements"),  # impl realizes the interface
 ]
+
+
+class _DocRetr:
+    """A docs-corpus structural-retriever stub."""
+
+    corpus = "docs (project)"
+
+    def __init__(self, hits: Sequence[tuple[StructuralNode, float]]) -> None:
+        self._hits = hits
+
+    def retrieve(self, cue: object, k: int) -> list[ScoredNode]:
+        return [ScoredNode(node=n, score=s) for n, s in self._hits][:k]
 
 
 def _ref(node: StructuralNode) -> StructuralRef:
@@ -107,11 +123,12 @@ def _mref(mid: str) -> MemoryRef:
 
 def _build(
     *,
-    hits: Sequence[tuple[StructuralNode, float]],
+    hits: Sequence[tuple[StructuralNode, float]] = (),
     links: Sequence[tuple[str, StructuralNode]] = (),
     records: Sequence[MemoryRecord] = (),
     config: PlannerConfig | None = None,
     cochange: CoChangeIndex | None = None,
+    retrievers: Sequence[object] | None = None,
 ) -> Planner:
     graph = InMemoryStructuralGraph(SCOPE)
     graph.add(IngestResult(nodes=_NODES, edges=_EDGES))
@@ -122,7 +139,7 @@ def _build(
         graph=graph,
         links=link_index,
         store=_Store(records),
-        structural_retrievers=[_Retr(hits)],
+        structural_retrievers=list(retrievers) if retrievers is not None else [_Retr(hits)],
         views=DerivedViewsRef(),
         cochange=cochange,
         config=config,
@@ -232,6 +249,56 @@ def test_ambiguous_resolution_is_flagged_with_alternatives() -> None:
     assert brief.resolution_ambiguous is True
     assert any(a.node_id == "mod:bar" for a in brief.alternatives)
     assert "ambiguous" in brief.render()
+
+
+def test_interface_target_surfaces_implementors_via_subtype() -> None:
+    """For an interface (no callers), the implementors are the real 'what breaks'."""
+    planner = _build(hits=[(IFACE, 0.9)])
+    brief = planner.plan(target="IStore", scope=SCOPE)
+    rels = {(rn.item.node_id, rn.relation) for rn in brief.blast_radius}
+    assert ("mod:PostgresStore", "subtype") in rels
+
+
+def test_resolution_prefers_code_over_a_higher_scoring_doc_hit() -> None:
+    # no identifier token in the target → the semantic path runs; code beats the higher-scored doc
+    planner = _build(retrievers=[_Retr([(IFACE, 0.5)]), _DocRetr([(DOC, 0.95)])])
+    brief = planner.plan(target="store design overview", scope=SCOPE)
+    assert brief.integration_point is not None
+    assert brief.integration_point.node_id == "mod:IStore"  # code wins over the higher-scored doc
+
+
+def test_lexical_resolve_finds_a_named_symbol_not_in_the_semantic_pool() -> None:
+    """The Call-1 fix: the target names IStore, but retrieval only surfaced foo — full-graph exact
+    name lookup anchors to IStore anyway (semantic prose can't bury a literally-named symbol)."""
+    planner = _build(retrievers=[_Retr([(FOO, 0.9)])])  # IStore is NOT in the retrieved hits
+    brief = planner.plan(target="the IStore provider registry seam", scope=SCOPE)
+    assert brief.integration_point is not None
+    assert brief.integration_point.node_id == "mod:IStore"
+    assert brief.resolution_relevance == 1.0  # exact-name match
+
+
+def test_lexical_resolve_prefers_a_type_over_a_callable_for_an_ambiguous_name() -> None:
+    # two symbols named "DataStore": a class and a function → the class (type) wins
+    cls = _node("mod:DataStore", kind="class", label="mod.DataStore")
+    fn = _node("pkg:DataStore", kind="function", label="pkg.DataStore")
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(IngestResult(nodes=[*_NODES, cls, fn], edges=_EDGES))
+    planner = Planner(
+        graph=graph, links=InMemoryCrossLinkIndex(), store=_Store(()),
+        structural_retrievers=[_Retr([(FOO, 0.9)])], views=DerivedViewsRef(),
+    )
+    brief = planner.plan(target="the DataStore abstraction", scope=SCOPE)
+    assert brief.integration_point is not None
+    assert brief.integration_point.node_id == "mod:DataStore"  # the class, not the function
+
+
+def test_structured_why_renders_as_text_not_repr() -> None:
+    from thalamus.gateway.payload import _render_why
+
+    assert _render_why([{"kind": "goal", "text": "ship the feature"}]) == "ship the feature"
+    assert _render_why([{"text": "a"}, {"text": "b"}]) == "a; b"
+    assert _render_why("plain string") == "plain string"
+    assert _render_why(None) is None
 
 
 def test_blast_radius_refs_from_a_known_node_matches_the_graph() -> None:

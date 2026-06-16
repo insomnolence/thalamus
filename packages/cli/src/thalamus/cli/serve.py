@@ -761,7 +761,6 @@ def run_serve(config: ServeConfig) -> None:
                 code_graph,
                 scope,
                 recent_commit_shas(config.repo, config.plan_cochange_commits),
-                code_language=config.code_language,
             )
 
         cochange_ref = CoChangeRef(_recompute_cochange())  # seed at startup

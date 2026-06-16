@@ -49,23 +49,43 @@ _FILE_REFS = {"foo.py": [FOO], "bar.py": [BAR1, BAR2]}
 
 
 def test_file_cochange_expands_to_symbols_in_co_changed_files() -> None:
-    idx = FileCoChangeIndex(ref_file=_REF_FILE, file_refs=_FILE_REFS)
+    idx = FileCoChangeIndex(_REF_FILE, _FILE_REFS, min_cooccur=1, max_file_frequency=1.0)
     idx.add_commit(["foo.py", "bar.py"])  # the two files changed together
 
-    # foo co-changes with bar.py → both symbols that live in bar.py surface
-    assert set(idx.cochanged(FOO)) == {(BAR1, 1), (BAR2, 1)}
-    # symmetric: bar1's file co-changed with foo.py → foo surfaces
-    assert idx.cochanged(BAR1) == [(FOO, 1)]
+    # foo co-changes with bar.py → both symbols that live in bar.py surface (scored by lift)
+    assert {r for r, _ in idx.cochanged(FOO)} == {BAR1, BAR2}
+    assert idx.cochanged(BAR1)[0][0] == FOO  # symmetric
+
+
+def test_file_cochange_min_cooccur_drops_one_offs() -> None:
+    idx = FileCoChangeIndex(_REF_FILE, _FILE_REFS, min_cooccur=2, max_file_frequency=1.0)
+    idx.add_commit(["foo.py", "bar.py"])  # co-changed only once < min_cooccur 2
+    assert idx.cochanged(FOO) == []
+
+
+def test_file_cochange_lift_excludes_hub_files() -> None:
+    """A sweep/hub file that changes in (almost) every commit is filtered out as a partner."""
+    a, b, hub = _ref("A"), _ref("B"), _ref("H")
+    ref_file = {a: "a.ts", b: "b.ts", hub: "hub.ts"}
+    file_refs = {"a.ts": [a], "b.ts": [b], "hub.ts": [hub]}
+    idx = FileCoChangeIndex(ref_file, file_refs, min_cooccur=2, max_file_frequency=0.9)
+    idx.add_commit(["a.ts", "b.ts", "hub.ts"])  # a–b real coupling
+    idx.add_commit(["a.ts", "b.ts", "hub.ts"])
+    idx.add_commit(["hub.ts", "x.ts"])  # hub changes everywhere (3/3 commits → a sweep file)
+
+    partners = dict(idx.cochanged(a))
+    assert b in partners  # tightly-coupled, low base-rate partner survives
+    assert hub not in partners  # hub excluded (base rate above the frequency cap)
 
 
 def test_file_cochange_is_empty_without_a_co_changed_file() -> None:
-    idx = FileCoChangeIndex(ref_file=_REF_FILE, file_refs=_FILE_REFS)
+    idx = FileCoChangeIndex(_REF_FILE, _FILE_REFS)
     idx.add_commit(["foo.py"])  # single file → no file pair
     assert idx.cochanged(FOO) == []
 
 
 def test_file_cochange_ignores_a_symbol_with_no_known_file() -> None:
-    idx = FileCoChangeIndex(ref_file=_REF_FILE, file_refs=_FILE_REFS)
+    idx = FileCoChangeIndex(_REF_FILE, _FILE_REFS, min_cooccur=1)
     idx.add_commit(["foo.py", "bar.py"])
     assert idx.cochanged(_ref("orphan")) == []
 

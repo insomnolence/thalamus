@@ -8,7 +8,7 @@ grow (gotchas, constraints) as Brain 2 gains resolved call/reference edges.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from thalamus.core.types import EventId, MemoryId, ScoredMemory, Supersession
@@ -49,9 +49,8 @@ class MemoryItem:
         stale_references: Sequence[str] = (),
         superseded: Supersession | None = None,
     ) -> MemoryItem:
-        why = scored.record.metadata.get("why")
         content = scored.record.content
-        rationale = str(why) if why is not None else None
+        rationale = _render_why(scored.record.metadata.get("why"))
         note: SupersededNote | None = None
         if superseded is not None:
             reason = superseded.reason
@@ -81,6 +80,28 @@ class MemoryItem:
     def retained(self) -> bool:
         """Whether this is explicitly retained knowledge rather than a derived episode."""
         return self.source == "curated"
+
+
+def _render_why(why: object) -> str | None:
+    """Render a memory's ``why`` to clean text. Curated memories store a string; episodes store a
+    structured value (e.g. ``[{'text': …, 'kind': 'goal'}]``) — extract the text rather than dumping
+    the Python repr into the payload."""
+    if why is None:
+        return None
+    if isinstance(why, str):
+        return why or None
+    if isinstance(why, Mapping):
+        text = why.get("text")
+        return str(text) if text else None
+    if isinstance(why, (list, tuple)):
+        parts: list[str] = []
+        for item in why:
+            if isinstance(item, Mapping) and item.get("text"):
+                parts.append(str(item["text"]))
+            elif isinstance(item, str) and item:
+                parts.append(item)
+        return "; ".join(parts) or None
+    return str(why) or None
 
 
 def _truncate(value: str, limit: int) -> str:

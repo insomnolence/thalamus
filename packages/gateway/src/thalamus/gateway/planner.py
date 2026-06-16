@@ -28,6 +28,7 @@ useful thing to tell the actuator.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -46,6 +47,32 @@ from thalamus.structural import (
 
 # Memory kinds that count as a load-bearing *constraint* (vs. general decision/context).
 _CONSTRAINT_KINDS = frozenset({"constraint", "gotcha"})
+
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
+# Symbol kinds the full-graph exact-name lookup considers; types rank ahead of callables when a
+# token matches several, since a descriptive target usually names the type it's about.
+_CODE_KINDS = ("interface", "class", "enum", "function", "method")
+_KIND_RANK = {kind: rank for rank, kind in enumerate(_CODE_KINDS)}
+
+
+def _identifier_tokens(text: str) -> list[str]:
+    """Code-identifier-looking tokens in a target (CamelCase / snake_case), in first-seen order —
+    the prose words a descriptive target wraps a symbol in ("...where IntegrationService dispatches
+    ...") are dropped, so an exact symbol-name match can outrank a semantic (doc) hit."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in _IDENTIFIER.findall(text):
+        lowered = token.lower()
+        identifier_like = any(c.isupper() for c in token[1:]) or "_" in token
+        if len(token) >= 3 and lowered not in seen and identifier_like:
+            seen.add(lowered)
+            out.append(lowered)
+    return out
+
+
+def _simple_name(label: str) -> str:
+    """The last dotted segment of a node label — its bare symbol name."""
+    return label.rsplit(".", 1)[-1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +146,7 @@ class PlanBrief:
         if self.blast_radius:
             for relation, heading in (
                 ("caller", "callers (what breaks if you change it)"),
+                ("subtype", "implementors / subtypes (what breaks if you change the contract)"),
                 ("callee", "uses (what it calls)"),
                 ("co-change", "frequently changed alongside (historical co-change)"),
                 ("container", "container"),
@@ -185,7 +213,7 @@ class PlannerConfig:
     node_budget: int = 40  # max blast-radius nodes in the brief
     memory_budget: int = 30  # max memories gathered into the brief
     max_memory_chars: int = 1000  # per-memory content/why truncation
-    cochange_min_support: int = 2  # min historical co-changes to count as coupled (drops one-offs)
+    cochange_min_support: float = 2.0  # min coupling score (count symbol-level; lift file-level)
     cochange_max_nodes: int = 15  # max co-change nodes added to the radius
 
 
@@ -225,24 +253,13 @@ class Planner:
         depth = cfg.hops if hops is None else max(hops, 1)
         cue = Cue(text=target, scope=scope)
 
-        # 1 — Resolve the target to a Brain-2 node (semantic; exact-identifier preference TODO).
-        hits = ranked_hits(
-            cue,
-            self._structural_retrievers,
-            k=cfg.max_resolution_hits,
-            min_relevance=cfg.min_relevance,
-        )
-        if not hits:
+        # 1 — Resolve the target to a Brain-2 node (code-preferring, exact-identifier-aware).
+        res = self._resolve(cue)
+        if res is None:
             return PlanBrief(target=target, integration_point=None)
-        top_corpus, top = hits[0]
-        integration = StructuralItem.from_scored_node(top, corpus=top_corpus)
-        ambiguous = len(hits) > 1 and hits[1][1].score >= top.score * cfg.ambiguity_ratio
-        alternatives = tuple(
-            StructuralItem.from_scored_node(s, corpus=c) for c, s in hits[1:4]
-        ) if ambiguous else ()
 
         # 2 — Blast radius from the resolved node (deterministic graph traversal, edge-typed).
-        ref = top.node.ref
+        ref = res.ref
         radius, callers, high_fanout, radius_omitted = self._compute_radius(ref, depth)
 
         # 3 — Gather the why: cross-linked memories for the integration point + every radius node.
@@ -251,10 +268,10 @@ class Planner:
 
         return PlanBrief(
             target=target,
-            integration_point=integration,
-            resolution_relevance=top.score,
-            resolution_ambiguous=ambiguous,
-            alternatives=alternatives,
+            integration_point=res.item,
+            resolution_relevance=res.relevance,
+            resolution_ambiguous=res.ambiguous,
+            alternatives=res.alternatives,
             high_fanout=high_fanout,
             fanout_callers=len(callers),
             blast_radius=tuple(rn.node for rn in radius),
@@ -264,6 +281,72 @@ class Planner:
             radius_omitted=radius_omitted,
             memories_omitted=mem_omitted,
         )
+
+    def _resolve(self, cue: Cue) -> _Resolution | None:
+        """Resolve a target to a Brain-2 node: an exact symbol name wins, else semantic (code).
+
+        The dogfood showed two failure modes: a descriptive target resolving to a doc *section*
+        (prose matches doc bodies), and one whose named symbol ("IntegrationService") was *not even
+        in* the semantic top-k because surrounding prose ("registry/registered/seam") pulled other
+        symbols in. So we try a full-graph exact-name lookup FIRST (a code symbol literally named by
+        a token in the target), then fall back to semantic retrieval keeping code over docs."""
+        lexical = self._lexical_resolve(cue)
+        if lexical is not None:
+            return lexical
+
+        cfg = self._config
+        hits = ranked_hits(
+            cue,
+            self._structural_retrievers,
+            k=cfg.max_resolution_hits,
+            min_relevance=cfg.min_relevance,
+        )
+        if not hits:
+            return None
+        pool = [(c, s) for c, s in hits if not c.lower().startswith("docs")] or hits
+        top_corpus, top = pool[0]
+        ambiguous = len(pool) > 1 and pool[1][1].score >= top.score * cfg.ambiguity_ratio
+        alternatives = (
+            tuple(StructuralItem.from_scored_node(s, corpus=c) for c, s in pool[1:4])
+            if ambiguous
+            else ()
+        )
+        return _Resolution(
+            item=StructuralItem.from_scored_node(top, corpus=top_corpus),
+            ref=top.node.ref,
+            relevance=top.score,
+            ambiguous=ambiguous,
+            alternatives=alternatives,
+        )
+
+    def _lexical_resolve(self, cue: Cue) -> _Resolution | None:
+        """Exact symbol-name resolution over the whole graph (not just the semantic top-k).
+
+        For each code-identifier token in the target (first-seen order), find code symbols whose
+        bare name matches exactly; the first token with matches wins, preferring a type over a
+        callable and then the shortest qualified id. Returns ``None`` when the target carries no
+        identifier token or none matches — the semantic path then handles it."""
+        tokens = _identifier_tokens(cue.text)
+        if not tokens:
+            return None
+        by_name: dict[str, list[StructuralNode]] = {}
+        for kind in _CODE_KINDS:
+            for node in self._graph.nodes_of_kind(cue.scope, kind):
+                by_name.setdefault(_simple_name(node.label).lower(), []).append(node)
+        for token in tokens:
+            matches = by_name.get(token)
+            if not matches:
+                continue
+            ranked = sorted(matches, key=lambda n: (_KIND_RANK.get(n.kind, 99), len(n.node_id)))
+            chosen = ranked[0]
+            return _Resolution(
+                item=StructuralItem.from_node(chosen),
+                ref=chosen.ref,
+                relevance=1.0,  # exact name match — maximal confidence
+                ambiguous=len(ranked) > 1,
+                alternatives=tuple(StructuralItem.from_node(n) for n in ranked[1:4]),
+            )
+        return None
 
     def blast_radius_refs(
         self, ref: StructuralRef, *, hops: int | None = None
@@ -302,12 +385,16 @@ class Planner:
     ) -> tuple[list[_RadiusEntry], int]:
         """The budgeted, edge-typed frontier around ``ref``, in priority order.
 
-        Priority: direct callers (what breaks) → direct callees (what it uses) → container →
-        deeper callers. The hub breaker suppresses caller enumeration entirely (the broad-radius
-        flag is more useful than hundreds of call-sites). ``contains`` never propagates the
-        radius (a parent module tells you nothing about what breaks)."""
+        Priority: direct callers (what breaks) → subtypes (implementors/subclasses — the "what
+        breaks" for an interface/base class) → direct callees (what it uses) → container → deeper
+        callers. The hub breaker suppresses caller enumeration entirely (the broad-radius flag is
+        more useful than hundreds of call-sites). ``contains`` never propagates the radius (a parent
+        module tells you nothing about what breaks)."""
         cfg = self._config
         callees = self._graph.neighbors(ref, edge_types=("calls",), direction="out")
+        # Reverse implements/inherits: who realizes this interface / extends this class. For a type
+        # definition (no callers), these implementors/subclasses ARE the blast radius.
+        subtypes = self._graph.neighbors(ref, edge_types=("implements", "inherits"), direction="in")
         container = self._graph.neighbors(ref, edge_types=("contains",), direction="in")
 
         entries: list[_RadiusEntry] = []
@@ -334,6 +421,7 @@ class Planner:
 
         if not high_fanout:
             add(callers, "caller", 1)
+        add(subtypes, "subtype", 1)
         add(callees, "callee", 1)
         add(container, "container", 1)
         # Co-change ranks above deeper transitive callers: the eval showed logical coupling
@@ -354,16 +442,16 @@ class Planner:
         entries: list[_RadiusEntry],
         add: Callable[[Sequence[StructuralNode], str, int], None],
     ) -> None:
-        """Fold in symbols that historically co-changed with ``ref`` (above the support floor).
+        """Fold in symbols that historically co-changed with ``ref`` (above the coupling floor).
 
         A no-op without a co-change index (the removable-layer contract). Partners gone from the
-        current graph are skipped (stale); counts are sorted descending, so we stop at the floor."""
+        current graph are skipped (stale); scores are sorted descending, so we stop at the floor."""
         if self._cochange is None:
             return
         cfg = self._config
         added = 0
-        for partner, count in self._cochange.cochanged(ref):
-            if count < cfg.cochange_min_support or added >= cfg.cochange_max_nodes:
+        for partner, score in self._cochange.cochanged(ref):
+            if score < cfg.cochange_min_support or added >= cfg.cochange_max_nodes:
                 break
             if partner.node_id in seen:
                 continue
@@ -420,3 +508,14 @@ class _RadiusEntry:
 
     node: RadiusNode
     item_ref: StructuralRef
+
+
+@dataclass(frozen=True, slots=True)
+class _Resolution:
+    """Internal: the outcome of resolving a target to a Brain-2 node."""
+
+    item: StructuralItem
+    ref: StructuralRef
+    relevance: float
+    ambiguous: bool
+    alternatives: tuple[StructuralItem, ...]

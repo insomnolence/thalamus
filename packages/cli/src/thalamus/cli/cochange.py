@@ -54,9 +54,10 @@ def recent_commit_shas(repo: Path, n: int) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()] if out else []
 
 
-def changed_files(repo: Path, sha: str, globs: Sequence[str]) -> list[str]:
-    """The code files a commit changed — paths only (drift-immune; no anchor mapping)."""
-    out = git_output(repo, "show", "--name-only", "--format=", sha, "--", *globs)
+def changed_files(repo: Path, sha: str, globs: Sequence[str] = ()) -> list[str]:
+    """The files a commit changed — paths only (drift-immune). No ``globs`` = all paths."""
+    pathspec = ("--", *globs) if globs else ()
+    out = git_output(repo, "show", "--name-only", "--format=", sha, *pathspec)
     return [line.strip() for line in out.splitlines() if line.strip()] if out else []
 
 
@@ -81,18 +82,19 @@ def build_file_cochange(
     graph: StructuralGraph,
     scope: Scope,
     shas: Sequence[str],
-    *,
-    code_language: str,
 ) -> FileCoChangeIndex:
     """Accumulate file co-change over ``shas`` into a :class:`FileCoChangeIndex`.
 
-    Symbol↔file membership comes from the current graph; each commit contributes its changed
-    file paths (a commit touching <2 code files yields no pair and is skipped)."""
+    **Language-agnostic by construction:** each commit's changed files are filtered to those that
+    carry a code symbol in the current graph (the ``file_refs`` keys), so co-change tracks exactly
+    the code files Brain 2 knows — no language glob. (Keying globs off the flat ``code_language``
+    was a real bug: a declarative ``[[corpus]]`` serve leaves it at the ``"python"`` default, which
+    matches zero files in a TypeScript repo → an empty index.) Symbol↔file membership comes from the
+    graph anchors; a commit touching <2 known code files yields no pair and is skipped."""
     ref_file, file_refs = symbol_file_maps(graph, scope, repo)
     index = FileCoChangeIndex(ref_file=ref_file, file_refs=file_refs)
-    globs = code_globs(code_language)
     for sha in shas:
-        files = changed_files(repo, sha, globs)
+        files = [path for path in changed_files(repo, sha) if path in file_refs]
         if len(files) >= 2:
             index.add_commit(files)
     return index
