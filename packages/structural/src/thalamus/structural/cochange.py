@@ -110,3 +110,23 @@ class FileCoChangeIndex:
                 if prior is None or count > prior:
                     best[symbol] = count
         return sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+
+
+class CoChangeRef:
+    """A single-slot holder that *is* a :class:`CoChangeIndex`: the live planner reads it, and a
+    dreaming pass swaps a freshly-built index in mid-serve without a restart.
+
+    Mirrors :class:`~thalamus.gateway.views.DerivedViewsRef` / ``UsageWeightsRef``: the swap is a
+    single attribute store (atomic under the GIL), and :meth:`cochanged` snapshots the current
+    index once per call into a local, so a concurrent refresh is observed whole, never torn."""
+
+    def __init__(self, index: CoChangeIndex | None = None) -> None:
+        self._index = index
+
+    def refresh(self, index: CoChangeIndex) -> None:
+        """Atomically replace the current index (one ``STORE_ATTR``)."""
+        self._index = index
+
+    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, int]]:
+        index = self._index  # snapshot once: consistent across this call
+        return index.cochanged(ref) if index is not None else []

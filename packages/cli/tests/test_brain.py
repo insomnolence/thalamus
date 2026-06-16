@@ -90,6 +90,37 @@ def test_recall_fuses_episode_with_touched_code(tmp_path: Path) -> None:
     assert any("Store" in item.label for item in payload.structural)
 
 
+def test_build_planner_yields_a_planner_over_the_gateways_brain2(tmp_path: Path) -> None:
+    from thalamus.cli.brain import build_planner
+    from thalamus.gateway import PlanBrief
+
+    repo = tmp_path / "repo"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "store.py").write_text(
+        "def helper():\n    return 1\n\n\ndef save():\n    return helper()\n", encoding="utf-8"
+    )
+    encoder = DeterministicEncoder(dim=64)
+    store = InMemoryStore(dim=64)
+    gateway = build_two_hemisphere_gateway(
+        repo, store=store, encoder=encoder, scope=SCOPE, episodes=[]
+    )
+
+    planner = build_planner(gateway, store)
+    assert planner is not None
+    # end-to-end through the real graph: resolve → radius → gather → brief (no error)
+    assert isinstance(planner.plan(target="save", scope=SCOPE), PlanBrief)
+
+
+def test_build_planner_is_none_for_an_experiential_only_brain() -> None:
+    from thalamus.cli.brain import build_planner
+    from thalamus.gateway import Gateway
+    from thalamus.retrieval import L0Retriever
+
+    store = InMemoryStore(dim=32)
+    gateway = Gateway(L0Retriever(DeterministicEncoder(dim=32), store))  # no Brain 2
+    assert build_planner(gateway, store) is None
+
+
 def test_irrelevant_query_yields_no_structural_noise(tmp_path: Path) -> None:
     # Direct structural retrieval is wired in, but an irrelevant query (zero similarity to
     # the lone node) is held out by the relevance floor — recall stays selective, not flooded.

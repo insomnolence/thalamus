@@ -52,6 +52,7 @@ def build_dream_scheduler(
     credibility: DreamingPass | None = None,
     structural_rederive: DreamingPass | None = None,
     usage_refresh: DreamingPass | None = None,
+    cochange_refresh: DreamingPass | None = None,
 ) -> Scheduler:
     """The v0 pass set, in dreaming.md DAG order.
 
@@ -72,6 +73,8 @@ def build_dream_scheduler(
     passes.append(LinkResolutionPass(gateway.refresh))
     if usage_refresh is not None:  # refresh the usage-weighted recall rung from accrued usage
         passes.append(usage_refresh)
+    if cochange_refresh is not None:  # refresh the plan tool's file co-change index from new code
+        passes.append(cochange_refresh)
     if credibility is not None:
         passes.append(credibility)
     passes.append(BeliefAuditPass())

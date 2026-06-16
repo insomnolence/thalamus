@@ -20,6 +20,7 @@ from thalamus.structural.attribution import (
 )
 from thalamus.structural.cochange import (
     CoChangeIndex,
+    CoChangeRef,
     FileCoChangeIndex,
     InMemoryCoChangeIndex,
 )
@@ -77,6 +78,7 @@ from thalamus.structural.text_ingestor import (
 __all__ = [
     "AttributedUse",
     "CoChangeIndex",
+    "CoChangeRef",
     "CompositeIngestor",
     "CorpusSpec",
     "CrossLinkIndex",

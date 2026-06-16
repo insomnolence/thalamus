@@ -326,6 +326,16 @@ class Gateway:
         """The cross-hemisphere link index this gateway queries, or None if unused."""
         return self._links
 
+    @property
+    def structural_retrievers(self) -> tuple[StructuralRetriever, ...]:
+        """The per-corpus structural retrievers (Brain 2), shared with a composed planner."""
+        return self._structural_retrievers
+
+    @property
+    def views(self) -> DerivedViewsRef:
+        """The refreshable derived-views holder (superseded + stale), shared with a planner."""
+        return self._views
+
     def refresh(self, views: DerivedViews) -> None:
         """Swap in freshly-recomputed derived views (the dreaming refresh seam).
 

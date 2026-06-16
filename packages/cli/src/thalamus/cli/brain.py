@@ -31,6 +31,8 @@ from thalamus.gateway import (
     DerivedViews,
     DerivedViewsRef,
     Gateway,
+    Planner,
+    PlannerConfig,
     StructuralLinkedRetriever,
     StructuralRelevanceRetriever,
     SupersededDemotingRetriever,
@@ -45,6 +47,7 @@ from thalamus.retrieval import (
 )
 from thalamus.store import InMemoryStore, Neo4jStore, connect
 from thalamus.structural import (
+    CoChangeIndex,
     CompositeIngestor,
     CorpusSpec,
     CrossLinkIndex,
@@ -382,6 +385,32 @@ def build_code_graph(
     graph: StructuralGraph = InMemoryStructuralGraph(scope)
     graph.add(result)
     return graph, list(result.nodes)
+
+
+def build_planner(
+    gateway: Gateway,
+    store: Store,
+    *,
+    cochange: CoChangeIndex | None = None,
+    config: PlannerConfig | None = None,
+) -> Planner | None:
+    """A :class:`Planner` over the same Brain-2 collaborators the gateway already holds.
+
+    Returns ``None`` for an experiential-only brain (no graph / links / structural retrievers →
+    no blast radius to compute). ``cochange`` is the optional logical-coupling layer; left ``None``
+    here (call-graph radius), it folds in once a live co-change index is built."""
+    graph, links = gateway.graph, gateway.links
+    if graph is None or links is None or not gateway.structural_retrievers:
+        return None
+    return Planner(
+        graph=graph,
+        links=links,
+        store=store,
+        structural_retrievers=gateway.structural_retrievers,
+        views=gateway.views,
+        cochange=cochange,
+        config=config,
+    )
 
 
 def build_store(

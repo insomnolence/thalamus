@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from thalamus.core.types import RepoId, Scope, StructuralRef, TenantId
-from thalamus.structural import FileCoChangeIndex, InMemoryCoChangeIndex
+from thalamus.structural import CoChangeRef, FileCoChangeIndex, InMemoryCoChangeIndex
 
 S = Scope(TenantId("t"), RepoId("r"))
 
@@ -68,3 +68,14 @@ def test_file_cochange_ignores_a_symbol_with_no_known_file() -> None:
     idx = FileCoChangeIndex(ref_file=_REF_FILE, file_refs=_FILE_REFS)
     idx.add_commit(["foo.py", "bar.py"])
     assert idx.cochanged(_ref("orphan")) == []
+
+
+def test_cochange_ref_is_empty_until_refreshed_then_delegates() -> None:
+    ref = CoChangeRef()
+    a, b = _ref("a"), _ref("b")
+    assert ref.cochanged(a) == []  # empty holder is a safe no-op
+
+    inner = InMemoryCoChangeIndex()
+    inner.add_commit([a, b])
+    ref.refresh(inner)
+    assert ref.cochanged(a) == [(b, 1)]  # now delegates to the swapped-in index

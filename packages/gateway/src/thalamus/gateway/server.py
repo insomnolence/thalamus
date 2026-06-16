@@ -34,6 +34,11 @@ type ShownResolver = Callable[[EventId], Sequence[tuple[MemoryId, str]] | None]
 # query behind the ``recent`` tool, distinct from relevance-ranked ``recall``.
 type RecentReader = Callable[[int, str | None], str]
 
+# Render a blast-radius brief for a target (symbol/description), depth-bounded — the backend
+# behind the ``plan`` tool. Read-only against the brain (no Tier-1 signal), so it stays enabled
+# even in investigate mode.
+type PlanReader = Callable[[str, int], str]
+
 
 def resolve_session_id(
     explicit: str | None, connection_session: str | None, default: SessionId | None
@@ -71,6 +76,7 @@ def build_server(
     resolve_shown: ShownResolver | None = None,
     per_connection_sessions: bool = False,
     recent_reader: RecentReader | None = None,
+    plan_reader: PlanReader | None = None,
     read_only: bool = False,
 ) -> FastMCP:
     """Build a FastMCP server exposing the gateway's ``recall`` tool.
@@ -159,6 +165,17 @@ def build_server(
             from the relevance-ranked ``recall`` (use ``recall`` to find what's *relevant* to a
             topic; use this to see what's *recent*)."""
             return recent_reader(limit, kind)
+
+    if plan_reader is not None:
+
+        @server.tool
+        async def plan(target: str, hops: int = 2) -> str:
+            """Blast-radius brief BEFORE changing shared/central code. Resolve TARGET (a symbol
+            name or short description) to the code it names, compute what depends on it ("what
+            breaks"), and gather the decisions/constraints/gotchas the brain has recorded about
+            everything in scope — one fused brief that flags where its coverage is blind. Use it
+            to see the cross-cutting impact a local edit view misses; `hops` bounds the radius."""
+            return plan_reader(target, hops)
 
     if remember_writer is not None and not read_only:
 

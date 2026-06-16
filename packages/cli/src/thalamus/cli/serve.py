@@ -26,10 +26,12 @@ from pathlib import Path
 from thalamus.cli.brain import (
     build_corpora,
     build_corpora_from_configs,
+    build_planner,
     build_store,
     build_two_hemisphere_gateway,
     close_store,
 )
+from thalamus.cli.cochange import build_file_cochange, recent_commit_shas
 from thalamus.cli.dream import (
     build_credibility_pass,
     build_dream_scheduler,
@@ -52,6 +54,7 @@ from thalamus.core.types import (
     TenantId,
 )
 from thalamus.dreaming import (
+    CoChangeRefreshPass,
     JsonlDreamLog,
     MaintenanceTicker,
     PassContext,
@@ -66,9 +69,9 @@ from thalamus.experiential import (
     SessionStampingSource,
     reuse_by_memory,
 )
-from thalamus.gateway import Gateway
+from thalamus.gateway import Gateway, Planner
 from thalamus.gateway.http_security import build_security_middleware
-from thalamus.gateway.server import RecentReader, RememberWriter, ShownResolver
+from thalamus.gateway.server import PlanReader, RecentReader, RememberWriter, ShownResolver
 from thalamus.instrumentation import (
     FileSessionContextStore,
     GitObserver,
@@ -86,6 +89,8 @@ from thalamus.retrieval import UsageWeightsRef, render_recent, select_recent
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import (
+    CoChangeIndex,
+    CoChangeRef,
     CorpusSpec,
     CrossLinkIndex,
     FileManifest,
@@ -145,6 +150,10 @@ class ServeConfig:
     # "typescript") consuming a prebuilt --scip-index. Defaulted so existing callers are unaffected.
     code_language: str = "python"
     scip_index: Path | None = None
+    # The plan tool's logical-coupling layer: build a file co-change index from this many recent
+    # commits at startup and fold it into the blast radius (validated to lift cross-file recall).
+    # 0 disables it (call-graph radius only). A larger window = more signal but slower startup.
+    plan_cochange_commits: int = 500
     # Extra doc roots ingested as their own labeled corpora (e.g. a design-docs dir outside the
     # code root). Empty = the single default docs corpus over --repo.
     doc_roots: tuple[Path, ...] = ()
@@ -177,6 +186,11 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--k", type=int, default=5, help="memories per recall")
     parser.add_argument("--k-hop", type=int, default=1, help="structural hops to expand")
+    parser.add_argument(
+        "--plan-cochange-commits", type=int, default=500,
+        help="recent commits to build the plan tool's file co-change index from at startup "
+        "(0 disables; larger = more coupling signal but slower startup)",
+    )
     parser.add_argument(
         "--code-language", choices=("python", "typescript"), default="python",
         help="Brain-2 code corpus language. 'python' uses the AST + jedi ingestors; "
@@ -302,6 +316,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         k_hop=int(args.k_hop),
         code_language=code_language,
         scip_index=scip_index,
+        plan_cochange_commits=int(args.plan_cochange_commits),
         doc_roots=tuple(Path(d).resolve() for d in (args.doc_roots or ())),
         investigate=bool(args.investigate),
         data_dir=Path(args.data_dir).resolve() if args.data_dir else None,
@@ -639,6 +654,16 @@ def build_recent_reader(store: Store, scope: Scope) -> RecentReader:
     return read
 
 
+def build_plan_reader(planner: Planner, scope: Scope) -> PlanReader:
+    """The backend for the ``plan`` tool: resolve a target, compute its blast radius, gather the
+    why, and render the brief. Read-only against the brain."""
+
+    def read(target: str, hops: int) -> str:
+        return planner.plan(target=target, scope=scope, hops=hops).render()
+
+    return read
+
+
 def _is_git_repo(path: Path) -> bool:
     """True if ``path`` is a git working tree we can poll for commits."""
     return (path / ".git").exists()
@@ -721,6 +746,27 @@ def run_serve(config: ServeConfig) -> None:
             SessionContext(session_id=default_session_id, started_at=datetime.now(UTC))
         )
 
+    # The plan tool's file co-change layer: symbols whose files historically change together, fused
+    # into the blast radius (validated to lift cross-file recall). Held in a CoChangeRef so a
+    # dreaming pass can swap a freshly-mined index in without a restart; seeded once at startup so
+    # the tool has coupling immediately. Skipped without a graph (experiential-only) or when off.
+    cochange_ref: CoChangeRef | None = None
+    cochange_refresh: CoChangeRefreshPass | None = None
+    if config.plan_cochange_commits > 0 and gateway.graph is not None:
+        code_graph = gateway.graph
+
+        def _recompute_cochange() -> CoChangeIndex:
+            return build_file_cochange(
+                config.repo,
+                code_graph,
+                scope,
+                recent_commit_shas(config.repo, config.plan_cochange_commits),
+                code_language=config.code_language,
+            )
+
+        cochange_ref = CoChangeRef(_recompute_cochange())  # seed at startup
+        cochange_refresh = CoChangeRefreshPass(_recompute_cochange, cochange_ref.refresh)
+
     # One background daemon thread runs the serve's upkeep off the FastMCP event loop: a periodic
     # wake perceives (capture new commits → episodes) then consolidates (dreaming refreshes the
     # gateway's derived views), and a write-trigger consolidates only. Dreaming needs a durable
@@ -756,6 +802,9 @@ def run_serve(config: ServeConfig) -> None:
                 # Refresh the usage-weighted recall rung from accrued usage each cycle, so memories
                 # that keep proving useful rise without a restart (the relevance-credibility loop).
                 usage_refresh=usage_refresh,
+                # Refresh the plan tool's file co-change index from new commits each cycle, so fresh
+                # coupling reaches the blast radius without a restart (mirrors structural-rederive).
+                cochange_refresh=cochange_refresh,
             )
             context_factory = make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo
@@ -767,6 +816,7 @@ def run_serve(config: ServeConfig) -> None:
             interval_seconds=max(config.dream_tick_minutes, 0.0) * 60.0,
         )
 
+    planner = build_planner(gateway, store, cochange=cochange_ref)
     server = build_server(
         gateway,
         scope,
@@ -790,6 +840,9 @@ def run_serve(config: ServeConfig) -> None:
         # (one client) keeps the process session, which the out-of-band Tier-2 join relies on.
         per_connection_sessions=(config.transport == "http"),
         recent_reader=build_recent_reader(store, scope),
+        # The plan/impact tool — a blast-radius brief over Brain 2 (None for an experiential-only
+        # brain). Its radius fuses call-graph reachability with the live, dream-refreshed co-change.
+        plan_reader=build_plan_reader(planner, scope) if planner is not None else None,
     )
     try:
         session_note = (

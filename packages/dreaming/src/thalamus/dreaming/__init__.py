@@ -16,6 +16,7 @@ from thalamus.dreaming.base import (
     PassStatus,
 )
 from thalamus.dreaming.belief_audit import BeliefAuditPass, SupersessionProposal
+from thalamus.dreaming.cochange_refresh import CoChangeRefreshPass
 from thalamus.dreaming.credibility import CredibilityAssessor, CredibilityPass
 from thalamus.dreaming.link_resolution import LinkResolutionPass
 from thalamus.dreaming.log import (
@@ -35,6 +36,7 @@ from thalamus.dreaming.usage_refresh import UsageRefreshPass
 
 __all__ = [
     "BeliefAuditPass",
+    "CoChangeRefreshPass",
     "CredibilityAssessor",
     "CredibilityPass",
     "CycleReport",

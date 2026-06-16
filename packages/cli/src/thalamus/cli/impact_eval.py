@@ -18,11 +18,11 @@ commits to keep the mapping tight.
 from __future__ import annotations
 
 import argparse
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from thalamus.cli.brain import build_code_graph
+from thalamus.cli.cochange import build_file_cochange, code_globs, git_output, rel_path
 from thalamus.core.types import RepoId, Scope, StructuralRef, TenantId
 from thalamus.eval.impact import (
     ImpactPair,
@@ -36,7 +36,6 @@ from thalamus.gateway.views import DerivedViewsRef
 from thalamus.store import InMemoryStore
 from thalamus.structural import (
     CoChangeIndex,
-    FileCoChangeIndex,
     InMemoryCoChangeIndex,
     InMemoryCrossLinkIndex,
     StructuralGraph,
@@ -45,11 +44,6 @@ from thalamus.structural import (
 _SYMBOL_KINDS = ("function", "method", "class", "interface", "enum")  # last two: TS types
 # Subjects that signal a repair — the strongest "this code needed fixing" git signal.
 _FIX_TERMS = ("fix", "bug", "revert", "regression", "broke", "oops", "hotfix", "incorrect")
-
-
-def _code_globs(code_language: str) -> tuple[str, ...]:
-    """Git pathspecs for the language's source files (TS includes .tsx)."""
-    return ("*.ts", "*.tsx") if code_language == "typescript" else ("*.py",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,26 +126,6 @@ def impact_eval_config(args: argparse.Namespace) -> ImpactEvalConfig:
     )
 
 
-def _git(repo: Path, *args: str) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(repo), *args],
-            capture_output=True, text=True, errors="replace", check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-    return result.stdout
-
-
-def _rel(path: str, repo: Path) -> str:
-    """A repo-relative posix path, to match git diff paths against graph anchors."""
-    p = Path(path)
-    try:
-        return p.resolve().relative_to(repo.resolve()).as_posix()
-    except ValueError:
-        return p.as_posix()
-
-
 def _symbol_index(
     graph: StructuralGraph, scope: Scope, repo: Path
 ) -> tuple[dict[str, list[tuple[int, int, StructuralRef]]], dict[StructuralRef, str]]:
@@ -162,7 +136,7 @@ def _symbol_index(
         for node in graph.nodes_of_kind(scope, kind):
             if node.anchor is None:
                 continue
-            path = _rel(node.anchor.path, repo)
+            path = rel_path(node.anchor.path, repo)
             entry = (node.anchor.line_start, node.anchor.line_end, node.ref)
             index.setdefault(path, []).append(entry)
             ref_path[node.ref] = path
@@ -176,7 +150,7 @@ def _is_fix(subject: str) -> bool:
 
 def _commit_log(repo: Path, n: int) -> list[tuple[str, str]]:
     """Up to ``n`` commits, newest first, as ``(sha, subject)`` pairs."""
-    out = _git(repo, "log", "--no-merges", "--format=%H%x1f%s", f"-n{n}")
+    out = git_output(repo, "log", "--no-merges", "--format=%H%x1f%s", f"-n{n}")
     if not out:
         return []
     rows: list[tuple[str, str]] = []
@@ -196,7 +170,7 @@ def _touched_symbols(
 ) -> list[StructuralRef] | None:
     """Symbols a commit changed, mapped via anchors. ``None`` if not a usable coupling commit
     (fewer than 2 symbols, or a sprawling refactor over ``max_symbols``)."""
-    diff = _git(repo, "show", "--unified=0", "--format=", sha, "--", *globs)
+    diff = git_output(repo, "show", "--unified=0", "--format=", sha, "--", *globs)
     if not diff:
         return None
     touched = map_changes_to_refs(parse_changed_lines(diff), index)
@@ -247,31 +221,6 @@ def _cochange_from(
         touched = _touched_symbols(repo, sha, index, globs, max_symbols)
         if touched is not None:
             cochange.add_commit(touched)
-    return cochange
-
-
-def _changed_files(repo: Path, sha: str, globs: tuple[str, ...]) -> list[str]:
-    """The code files a commit changed — paths only (drift-immune; no anchor mapping)."""
-    out = _git(repo, "show", "--name-only", "--format=", sha, "--", *globs)
-    return [line.strip() for line in out.splitlines() if line.strip()] if out else []
-
-
-def _file_cochange_from(
-    repo: Path,
-    shas: list[str],
-    index: dict[str, list[tuple[int, int, StructuralRef]]],
-    ref_path: dict[StructuralRef, str],
-    globs: tuple[str, ...],
-) -> FileCoChangeIndex:
-    """File-level co-change from training commits (drift-immune — the proven variant)."""
-    file_refs: dict[str, list[StructuralRef]] = {}
-    for path, entries in index.items():
-        file_refs[path] = [ref for _, _, ref in entries]
-    cochange = FileCoChangeIndex(ref_file=ref_path, file_refs=file_refs)
-    for sha in shas:
-        files = _changed_files(repo, sha, globs)
-        if len(files) >= 2:
-            cochange.add_commit(files)
     return cochange
 
 
@@ -354,7 +303,7 @@ def run_impact_eval(cfg: ImpactEvalConfig) -> ImpactReport:
         code_language=cfg.code_language, scip_index=cfg.scip_index,
     )
     index, ref_path = _symbol_index(graph, scope, cfg.repo)
-    globs = _code_globs(cfg.code_language)
+    globs = code_globs(cfg.code_language)
 
     if cfg.cochange_commits <= 0:  # call-only mode
         shas = [sha for sha, subj in _commit_log(cfg.repo, cfg.max_commits) if _is_fix(subj)]
@@ -374,7 +323,7 @@ def run_impact_eval(cfg: ImpactEvalConfig) -> ImpactReport:
         cfg.repo, test_shas, index, ref_path, globs, cfg.max_symbols_per_commit
     )
     cochange = (
-        _file_cochange_from(cfg.repo, train_shas, index, ref_path, globs)
+        build_file_cochange(cfg.repo, graph, scope, train_shas, code_language=cfg.code_language)
         if cfg.cochange_mode == "file"
         else _cochange_from(cfg.repo, train_shas, index, globs, cfg.max_symbols_per_commit)
     )

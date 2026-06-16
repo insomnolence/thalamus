@@ -164,6 +164,41 @@ async def test_recent_tool_lists_newest_first() -> None:
         assert text.index("new") < text.index("old")  # newest first
 
 
+async def test_plan_tool_lists_and_calls_its_reader() -> None:
+    from fastmcp import Client
+
+    seen: list[tuple[str, int]] = []
+
+    def reader(target: str, hops: int) -> str:
+        seen.append((target, hops))
+        return f"# Plan brief: {target}"
+
+    server = build_server(_gateway(), SCOPE, plan_reader=reader)
+    async with Client(server) as client:
+        assert "plan" in {t.name for t in await client.list_tools()}
+        result = await client.call_tool("plan", {"target": "frobnicate", "hops": 3})
+        text = result.data if isinstance(result.data, str) else result.content[0].text
+    assert "frobnicate" in text
+    assert seen == [("frobnicate", 3)]
+
+
+async def test_plan_tool_absent_without_a_reader() -> None:
+    from fastmcp import Client
+
+    server = build_server(_gateway(), SCOPE)
+    async with Client(server) as client:
+        assert "plan" not in {t.name for t in await client.list_tools()}
+
+
+async def test_plan_tool_stays_in_read_only_mode() -> None:
+    """Plan is read-only against the brain (no Tier-1 signal), so investigate mode keeps it."""
+    from fastmcp import Client
+
+    server = build_server(_gateway(), SCOPE, plan_reader=lambda t, h: "brief", read_only=True)
+    async with Client(server) as client:
+        assert "plan" in {t.name for t in await client.list_tools()}
+
+
 async def test_remember_tool_is_exposed_only_with_writer_and_calls_it() -> None:
     from fastmcp import Client
 
