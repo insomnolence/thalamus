@@ -118,6 +118,29 @@ def _node_location(node: StructuralNode) -> str | None:
     return f"{anchor.path}:{anchor.line_start}-{anchor.line_end}"
 
 
+# Which Brain-2 corpus a node belongs to, derived from its open-vocab kind — so a node surfaced
+# via a cross-link / graph edge (where the originating retriever's corpus tag isn't at hand) is
+# still grouped into the right payload section. Code kinds collapse to "code"; the non-code
+# ingestors' kinds map to their corpus name. Unknown kinds fall back to "code" (the common case).
+_CORPUS_BY_KIND = {
+    "module": "code",
+    "interface": "code",
+    "class": "code",
+    "enum": "code",
+    "function": "code",
+    "method": "code",
+    "document": "docs",
+    "section": "docs",
+    "finding": "findings",
+    "chunk": "text",
+}
+
+
+def corpus_for_kind(kind: str) -> str:
+    """The Brain-2 corpus a node ``kind`` belongs to (for grouping the payload section)."""
+    return _CORPUS_BY_KIND.get(kind, "code")
+
+
 @dataclass(frozen=True, slots=True)
 class StructuralItem:
     """A structural node in the payload — via a cross-hemisphere link (§13.19) or, when
@@ -131,13 +154,15 @@ class StructuralItem:
     corpus: str = "code"  # which Brain-2 corpus (code / docs / …) — groups the payload section
 
     @classmethod
-    def from_node(cls, node: StructuralNode, *, corpus: str = "code") -> StructuralItem:
+    def from_node(cls, node: StructuralNode, *, corpus: str | None = None) -> StructuralItem:
+        # Derive the corpus from the node's kind when not given (a cross-linked/edge-surfaced node
+        # carries no originating retriever, so "code" is no longer a safe default — C-2).
         return cls(
             node_id=node.node_id,
             kind=node.kind,
             label=node.label,
             location=_node_location(node),
-            corpus=corpus,
+            corpus=corpus if corpus is not None else corpus_for_kind(node.kind),
         )
 
     @classmethod

@@ -28,14 +28,19 @@ from thalamus.gateway.payload import CallRelation, ContextPayload, MemoryItem, S
 from thalamus.gateway.views import DerivedViews, DerivedViewsRef
 from thalamus.instrumentation import UsageSignal, UsageSink, attribute_overlap
 from thalamus.structural import (
+    ANNOTATES,
     CrossLinkIndex,
     ScoredNode,
     StructuralGraph,
+    StructuralNode,
     StructuralRetriever,
     anchor_nodes,
     linked_nodes_for,
     ranked_hits,
 )
+
+# Cap on annotator (finding/doc) nodes fused per recall — selective, like the call-graph section.
+_MAX_ANNOTATIONS = 12
 
 # Bounds for the call-graph payload section — kept selective (the §5.6 packaging discipline):
 # only the cue's top few code hits, each with a capped caller/callee list.
@@ -303,6 +308,13 @@ class Gateway:
             if scored.node.node_id not in exclude:
                 exclude.add(scored.node.node_id)
                 structural.append(StructuralItem.from_scored_node(scored, corpus=corpus))
+        # Non-code nodes anchored to the surfaced code (findings/docs that *annotate* it, C-2):
+        # "what the brain already knows about this code", fused in via the deterministic
+        # ``annotates`` edge — the same way the cross-link surfaces the *why*.
+        for node in self._annotations_for(cue.scope, [item.node_id for item in structural]):
+            if node.node_id not in exclude:
+                exclude.add(node.node_id)
+                structural.append(StructuralItem.from_node(node))
         return ContextPayload(
             cue_text=prompt,
             memories=memories,
@@ -383,6 +395,27 @@ class Gateway:
             if len(relations) >= _MAX_CALL_RELATIONS:
                 break
         return relations
+
+    def _annotations_for(self, scope: Scope, node_ids: Sequence[str]) -> list[StructuralNode]:
+        """Non-code nodes that ``annotates`` any of the surfaced code nodes (C-2).
+
+        Follows incoming ``annotates`` edges (finding/doc → code) on the same graph recall already
+        traverses — so a finding about ``db.py:42`` surfaces whenever ``db.py`` (or its enclosing
+        symbol) does. Deduped, capped, order-stable. A no-op when there is no graph."""
+        graph = self._graph
+        if graph is None:
+            return []
+        out: list[StructuralNode] = []
+        seen: set[str] = set()
+        for node_id in node_ids:
+            ref = StructuralRef(scope, node_id)
+            for annotator in graph.neighbors(ref, edge_types=(ANNOTATES,), direction="in"):
+                if annotator.node_id not in seen:
+                    seen.add(annotator.node_id)
+                    out.append(annotator)
+                    if len(out) >= _MAX_ANNOTATIONS:
+                        return out
+        return out
 
     def _structural_for(self, memories: Sequence[MemoryRef]) -> list[StructuralItem]:
         graph, links = self._graph, self._links

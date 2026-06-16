@@ -20,7 +20,9 @@ from thalamus.structural import (
     InMemoryCrossLinkIndex,
     InMemoryStructuralGraph,
     PythonAstIngestor,
+    link_anchored_nodes,
 )
+from thalamus.structural.schema import IngestResult, SourceAnchor, StructuralNode
 
 SCOPE = Scope(tenant_id=TenantId("acme"), repo_id=RepoId("widgets"))
 NOW = datetime(2026, 5, 25, tzinfo=UTC)
@@ -72,6 +74,53 @@ def test_recall_surfaces_linked_code(tmp_path: Path) -> None:
     assert "## Related code" in text
     assert "SqliteStore" in text
     assert "additional related item(s) omitted" in text
+
+
+def test_recall_surfaces_finding_annotating_linked_code(tmp_path: Path) -> None:
+    # C-2: a finding anchored to the code a recalled memory is about fuses into the payload.
+    encoder = DeterministicEncoder(dim=128)
+    store = InMemoryStore(dim=128)
+    _add(encoder, store, "m_login", "reworked the login flow")
+
+    src = tmp_path / "auth.py"
+    src.write_text("def login():\n    return 1\n", encoding="utf-8")
+    code_nodes = list(PythonAstIngestor().ingest_path(src, SCOPE).nodes)
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(PythonAstIngestor().ingest_path(src, SCOPE))
+
+    # A finding about auth.py:1 (inside login), anchored to its own findings file but carrying the
+    # real source location in metadata — link_anchored_nodes resolves it to function:auth.login.
+    finding = StructuralNode(
+        node_id="finding:auth.py:1:deadbeef",
+        kind="finding",
+        label="SQLI (high) auth.py:1 — tainted input",
+        scope=SCOPE,
+        anchor=SourceAnchor(path=str(tmp_path / "scan.json"), line_start=1, line_end=1),
+        metadata={"source_path": "auth.py", "source_line": 1, "text": "tainted input at login"},
+    )
+    graph.add(IngestResult(nodes=[finding], edges=[]))  # the finding node lives in the graph too
+    created = link_anchored_nodes([finding], code_nodes, graph, SCOPE, repo_root=tmp_path)
+    assert created == 1
+
+    links = InMemoryCrossLinkIndex()
+    record = store.scan(SCOPE)[0]
+    links.link(record.ref, StructuralRef(SCOPE, "function:auth.login"))
+
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW),
+        k=3,
+        graph=graph,
+        links=links,
+        structural_k_hop=0,
+        max_structural_items=5,
+    )
+    payload = gateway.recall(prompt="why did login change", scope=SCOPE)
+
+    items = {item.node_id: item for item in payload.structural}
+    assert "function:auth.login" in items  # the cross-linked code
+    assert "finding:auth.py:1:deadbeef" in items  # the finding fused in via the annotates edge
+    assert items["finding:auth.py:1:deadbeef"].corpus == "findings"  # corpus generalized off "code"
+    assert "## Related findings" in payload.render()
 
 
 def test_no_structural_without_graph() -> None:

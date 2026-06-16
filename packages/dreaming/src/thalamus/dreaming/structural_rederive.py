@@ -28,7 +28,17 @@ from pathlib import Path
 
 from thalamus.core.protocols import Encoder
 from thalamus.dreaming.base import PassContext, PassKind, PassOutcome
-from thalamus.structural import CorpusSpec, FileManifest, StructuralGraph, incremental_ingest
+from thalamus.structural import (
+    CorpusSpec,
+    FileManifest,
+    StructuralGraph,
+    incremental_ingest,
+    link_anchored_nodes,
+)
+
+# Code-corpus node kinds annotations resolve against; non-code kinds that may annotate code (C-2).
+_CODE_KINDS = ("module", "interface", "class", "enum", "function", "method")
+_ANNOTATOR_KINDS = ("finding", "document", "section", "chunk")
 
 
 class StructuralRederivePass:
@@ -69,16 +79,36 @@ class StructuralRederivePass:
         )
         if not result.rebuilt:
             return PassOutcome.skipped("no source changes")
+        # C-2: re-anchor non-code nodes (findings/docs) to the code they annotate, since a rebuild
+        # may have added/moved either side. Idempotent — the graph dedups identical ``annotates``
+        # edges, so re-running over a settled graph is a no-op.
+        annotations = self._reanchor(ctx)
         stats = result.stats
         return PassOutcome(
             summary=(
                 f"re-derived Brain 2: {stats.changed} changed / {stats.vanished} vanished file(s), "
-                f"{stats.embedded} node(s) re-embedded, {stats.removed} dropped"
+                f"{stats.embedded} node(s) re-embedded, {stats.removed} dropped, "
+                f"{annotations} annotation edge(s)"
             ),
             details={
                 "changed": stats.changed,
                 "vanished": stats.vanished,
                 "embedded": stats.embedded,
                 "removed": stats.removed,
+                "annotations": annotations,
             },
+        )
+
+    def _reanchor(self, ctx: PassContext) -> int:
+        """Re-create the ``annotates`` edges (non-code → code) over the current graph."""
+        if ctx.repo_root is None:
+            return 0
+        code_nodes = [
+            node for kind in _CODE_KINDS for node in self._graph.nodes_of_kind(ctx.scope, kind)
+        ]
+        annotators = [
+            node for kind in _ANNOTATOR_KINDS for node in self._graph.nodes_of_kind(ctx.scope, kind)
+        ]
+        return link_anchored_nodes(
+            annotators, code_nodes, self._graph, ctx.scope, repo_root=Path(ctx.repo_root)
         )

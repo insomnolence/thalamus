@@ -29,13 +29,23 @@ useful thing to tell the actuator.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from thalamus.core.protocols import Store
-from thalamus.core.types import Cue, MemoryId, Scope, ScoredMemory, StructuralRef
+from thalamus.core.types import (
+    Cue,
+    MemoryId,
+    MemoryRecord,
+    MemoryRef,
+    Scope,
+    ScoredMemory,
+    StructuralRef,
+    Supersession,
+)
 from thalamus.gateway.payload import MemoryItem, StructuralItem
-from thalamus.gateway.views import DerivedViewsRef
+from thalamus.gateway.views import DerivedViews, DerivedViewsRef
 from thalamus.structural import (
     CoChangeIndex,
     CrossLinkIndex,
@@ -47,6 +57,14 @@ from thalamus.structural import (
 
 # Memory kinds that count as a load-bearing *constraint* (vs. general decision/context).
 _CONSTRAINT_KINDS = frozenset({"constraint", "gotcha"})
+
+# Cross-link proximity tiers for a gathered memory, smaller = closer to the change (§C-3a). A memory
+# is tagged by the *closest* in-scope node it links to: the integration point itself outranks a
+# blast-radius node, which outranks a memory only reachable via the module rollup (a file-scoped
+# note attributed to the symbol, the coarsest signal). The score maps these to a descending weight.
+_PROX_INTEGRATION_POINT = 0  # linked directly to the resolved target
+_PROX_RADIUS_NODE = 1  # linked to a node in the blast radius
+_PROX_MODULE_ROLLUP = 2  # linked only to a containing module (file-granular rollup)
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
 # Symbol kinds the full-graph exact-name lookup considers; types rank ahead of callables when a
@@ -73,6 +91,27 @@ def _identifier_tokens(text: str) -> list[str]:
 def _simple_name(label: str) -> str:
     """The last dotted segment of a node label — its bare symbol name."""
     return label.rsplit(".", 1)[-1]
+
+
+def _importance(record: MemoryRecord) -> float:
+    """The operator-set importance from ``metadata`` (``remember``'s default is ``1.0``), coerced
+    defensively — a non-numeric or absent value contributes the neutral ``1.0`` rather than raising
+    or zeroing a memory that simply predates the field."""
+    raw = record.metadata.get("importance", 1.0)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _recency_fraction(created_at: datetime, newest: float | None, oldest: float | None) -> float:
+    """Normalise ``created_at`` to ``[0, 1]`` across the gathered set: newest → 1, oldest → 0.
+
+    Returns 0 when the window is degenerate (empty set, or all memories share a timestamp) so
+    recency neither rewards nor breaks ties spuriously when there is nothing to order by."""
+    if newest is None or oldest is None or newest <= oldest:
+        return 0.0
+    return (created_at.timestamp() - oldest) / (newest - oldest)
 
 
 # Walking ``contains`` up from a symbol to its module: a small bound guards against a cyclic or
@@ -252,6 +291,15 @@ class PlannerConfig:
     cochange_max_nodes: int = 15  # max co-change nodes added to the radius
     cochange_max_per_file: int = 3  # cap symbols taken from any one co-changed file (anti-flood)
     cochange_skip_tests: bool = True  # drop test-mirror coupling (a symbol's own test is noise)
+
+    # --- gather relevance ranking (C-3a) — deterministic, behavioural signals only (§14.2
+    # firewall: never the model grading memory prose). Higher score survives the memory_budget;
+    # constraints are ranked and preserved ahead of context (see _rank_for_budget). All weights
+    # are tunable; set any to 0.0 to ablate that signal and measure against the others.
+    gather_weight_proximity: float = 1.0  # per proximity tier closer to the integration point
+    gather_weight_recency: float = 1.0  # newest in-scope memory gets the full weight, oldest 0
+    gather_weight_importance: float = 0.5  # scales metadata["importance"] (remember default 1.0)
+    gather_supersession_penalty: float = 5.0  # demotion applied to a superseded belief (sinks it)
 
 
 class Planner:
@@ -537,54 +585,51 @@ class Planner:
     def _gather(
         self, scope_refs: Sequence[StructuralRef]
     ) -> tuple[tuple[MemoryItem, ...], tuple[MemoryItem, ...], CoverageReport, int]:
-        """Collect cross-linked memories for the in-scope nodes, deduped, partitioned, budgeted.
+        """Collect cross-linked memories for the in-scope nodes, deduped, ranked, partitioned, cut.
 
         Returns ``(constraints, context, coverage, memories_omitted)``. Links are module-granular
         (see :meth:`_containing_module`), so we harvest from each in-scope symbol's **direct** links
         *and* its **containing module's** links — without the rollup the gather is blind to
-        file-scoped decisions/gotchas even when the brain holds them. Coverage is reported at both
-        granularities: ``nodes_with_context`` counts symbols with a direct (symbol-level) link
-        (sparse until finer linking lands), and ``files_with_context`` counts in-scope files
-        (modules) carrying notes — the granularity at which the brain actually records today. A file
-        counts toward coverage independent of the memory budget — coverage reflects what the brain
-        *holds*, not what fit in the brief."""
-        cfg = self._config
-        views = self._views.views
-        seen_mem: set[MemoryId] = set()
-        constraints: list[MemoryItem] = []
-        context: list[MemoryItem] = []
-        with_context = 0
-        omitted = 0
+        file-scoped decisions/gotchas even when the brain holds them.
 
-        # Distinct containing modules of the in-scope symbols (links live here), preserving order.
+        **Ranking before the budget cut (C-3a).** On a real target the gather over-fills the
+        ``memory_budget`` and previously trimmed in *traversal order* (first-encountered survives,
+        not most-relevant). Now every candidate is collected first, scored by deterministic /
+        behavioural signals only (proximity to the integration point, recency, importance, a
+        supersession demotion — see :meth:`_score_memory`; **never** the model grading the memory's
+        prose, the §14.2 firewall), then the highest-scored survive the cut. Constraints/gotchas are
+        load-bearing ("what you must not break") and are preserved ahead of generic context under a
+        tight budget (see :meth:`_rank_for_budget`).
+
+        Coverage is reported at both granularities: ``nodes_with_context`` counts symbols with a
+        direct (symbol-level) link (sparse until finer linking lands), and ``files_with_context``
+        counts in-scope files (modules) carrying notes — the granularity at which the brain actually
+        records today. **Coverage is computed before the budget cut and is independent of it** —
+        it reflects what the brain *holds*, not what fit in the brief (the load-bearing honesty
+        invariant): the budget changes which memories render, never the coverage counts."""
+        views = self._views.views
+
+        # The closest in-scope node each ref represents, by harvest order: the integration point
+        # (scope_refs[0]) first, then the other radius nodes, then the module rollups last. The
+        # first source a memory is seen through is its tier — closer wins under the budget.
+        sources: list[tuple[StructuralRef, int]] = []
+        with_context = 0
         modules: dict[str, StructuralRef] = {}
-        for ref in scope_refs:
+        for index, ref in enumerate(scope_refs):
+            tier = _PROX_INTEGRATION_POINT if index == 0 else _PROX_RADIUS_NODE
+            sources.append((ref, tier))
             if self._links.memories_for(ref):
                 with_context += 1  # a direct, symbol-level link
             module = self._containing_module(ref)
             if module is not None:
                 modules.setdefault(module.node_id, module)
         files_with_context = sum(1 for m in modules.values() if self._links.memories_for(m))
+        sources.extend((m, _PROX_MODULE_ROLLUP) for m in modules.values())
 
-        # Harvest: direct symbol links first (most precise), then the module-rollup links.
-        for ref in (*scope_refs, *modules.values()):
-            for memory_ref in self._links.memories_for(ref):
-                if memory_ref.memory_id in seen_mem:
-                    continue
-                seen_mem.add(memory_ref.memory_id)
-                record = self._store.get(memory_ref)
-                if record is None:
-                    continue
-                if len(constraints) + len(context) >= cfg.memory_budget:
-                    omitted += 1
-                    continue
-                item = MemoryItem.from_scored(
-                    ScoredMemory(record=record, score=0.0),
-                    max_content_chars=cfg.max_memory_chars,
-                    stale_references=views.stale_references.get(memory_ref, ()),
-                    superseded=views.superseded.get(memory_ref),
-                )
-                (constraints if record.kind in _CONSTRAINT_KINDS else context).append(item)
+        # Collect ALL candidates first (deduped, closest-tier wins), then rank — so the budget cut
+        # keeps the most relevant set rather than whatever traversal reached first.
+        candidates = self._collect_candidates(sources)
+        constraints, context, omitted = self._rank_for_budget(candidates, views)
 
         coverage = CoverageReport(
             radius_nodes=len(scope_refs),
@@ -592,7 +637,134 @@ class Planner:
             files_in_scope=len(modules),
             files_with_context=files_with_context,
         )
-        return tuple(constraints), tuple(context), coverage, omitted
+        return constraints, context, coverage, omitted
+
+    def _collect_candidates(
+        self, sources: Sequence[tuple[StructuralRef, int]]
+    ) -> list[_GatheredMemory]:
+        """Dedup the cross-linked memories across the in-scope sources, keeping the closest tier.
+
+        ``sources`` is ordered closest-first (integration point → radius → module rollup), so the
+        first time a memory is seen records its best (smallest) proximity tier; later, farther
+        sightings are skipped. Records missing from the store are dropped (a dangling link)."""
+        seen: dict[MemoryId, _GatheredMemory] = {}
+        for ref, tier in sources:
+            for memory_ref in self._links.memories_for(ref):
+                if memory_ref.memory_id in seen:
+                    continue  # already captured at an equal-or-closer tier (sources are sorted)
+                record = self._store.get(memory_ref)
+                if record is None:
+                    continue
+                seen[memory_ref.memory_id] = _GatheredMemory(record=record, proximity=tier)
+        return list(seen.values())
+
+    def _rank_for_budget(
+        self,
+        candidates: Sequence[_GatheredMemory],
+        views: DerivedViews,
+    ) -> tuple[tuple[MemoryItem, ...], tuple[MemoryItem, ...], int]:
+        """Score, sort, partition, and apply ``memory_budget`` — constraints preserved over context.
+
+        Policy: constraints/gotchas are the load-bearing "what you must not break", so when the
+        budget is tight they take the budget first (highest-scored constraints), and context fills
+        only what remains. Within each partition the order is by descending relevance score, so the
+        rendered brief leads with the most relevant constraint and the most relevant decision. The
+        score is :meth:`_score_memory` — deterministic, behavioural signals only."""
+        cfg = self._config
+        superseded_map = views.superseded
+        newest, oldest = self._recency_bounds(candidates)
+        scored = sorted(
+            (
+                (self._score_memory(c, superseded_map, newest, oldest), c)
+                for c in candidates
+            ),
+            key=lambda pair: pair[0],
+            reverse=True,
+        )
+
+        constraints_ranked = [c for _, c in scored if c.record.kind in _CONSTRAINT_KINDS]
+        context_ranked = [c for _, c in scored if c.record.kind not in _CONSTRAINT_KINDS]
+
+        # Constraints first under a tight budget; context fills the remainder.
+        budget = cfg.memory_budget
+        kept_constraints = constraints_ranked[:budget]
+        remaining = max(budget - len(kept_constraints), 0)
+        kept_context = context_ranked[:remaining]
+        omitted = (
+            len(constraints_ranked) - len(kept_constraints)
+            + len(context_ranked) - len(kept_context)
+        )
+
+        def render(c: _GatheredMemory) -> MemoryItem:
+            ref = c.record.ref
+            return MemoryItem.from_scored(
+                ScoredMemory(record=c.record, score=0.0),
+                max_content_chars=cfg.max_memory_chars,
+                stale_references=views.stale_references.get(ref, ()),
+                superseded=superseded_map.get(ref),
+            )
+
+        return (
+            tuple(render(c) for c in kept_constraints),
+            tuple(render(c) for c in kept_context),
+            omitted,
+        )
+
+    def _score_memory(
+        self,
+        candidate: _GatheredMemory,
+        superseded_map: Mapping[MemoryRef, Supersession],
+        newest: float | None,
+        oldest: float | None,
+    ) -> float:
+        """A gathered memory's relevance score — higher survives the budget cut.
+
+        Deterministic, behavioural signals only (§14.2 firewall — never the model grading the
+        memory's prose):
+
+        - **proximity**: tiers closer to the integration point score higher
+          (``_PROX_INTEGRATION_POINT`` > radius node > module rollup).
+        - **recency**: newer memories score higher, normalised to ``[0, 1]`` across the gathered
+          set (a single memory, or all-same-timestamp, contributes 0 — no spurious tie-break).
+        - **importance**: the operator-set ``metadata["importance"]`` (the ``remember`` default is
+          ``1.0``), scaled by its weight.
+        - **supersession**: a replaced belief is demoted by a flat penalty so it sinks below current
+          beliefs (it is still surfaced — annotated — but ranks last under a tight budget).
+        """
+        cfg = self._config
+        # 2 for the integration point, 1 for a radius node, 0 for a module-rollup-only memory.
+        prox_tiers = _PROX_MODULE_ROLLUP - candidate.proximity
+        score = cfg.gather_weight_proximity * prox_tiers
+        score += cfg.gather_weight_recency * _recency_fraction(
+            candidate.record.created_at, newest, oldest
+        )
+        score += cfg.gather_weight_importance * _importance(candidate.record)
+        if candidate.record.ref in superseded_map:
+            score -= cfg.gather_supersession_penalty
+        return score
+
+    @staticmethod
+    def _recency_bounds(
+        candidates: Sequence[_GatheredMemory],
+    ) -> tuple[float | None, float | None]:
+        """The newest/oldest ``created_at`` (as POSIX seconds) across the gathered set, or
+        ``(None, None)`` when empty — the normalisation window for the recency signal."""
+        stamps = [c.record.created_at.timestamp() for c in candidates]
+        if not stamps:
+            return None, None
+        return max(stamps), min(stamps)
+
+
+@dataclass(frozen=True, slots=True)
+class _GatheredMemory:
+    """Internal: a deduped cross-linked memory paired with its closest in-scope proximity tier.
+
+    ``proximity`` is one of the ``_PROX_*`` tiers — the smallest (closest to the integration point)
+    among the in-scope nodes this memory links to — and feeds the relevance score that orders the
+    gather before the ``memory_budget`` cut (C-3a)."""
+
+    record: MemoryRecord
+    proximity: int
 
 
 @dataclass(frozen=True, slots=True)

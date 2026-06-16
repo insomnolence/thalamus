@@ -39,9 +39,11 @@ from thalamus.gateway import (
 )
 from thalamus.instrumentation import EventSink, LoggingRetriever, UsageSink
 from thalamus.retrieval import (
+    CentralityWeightsRef,
     HybridRetriever,
     L0Retriever,
     LexicalRetriever,
+    StructuralCentralityRetriever,
     UsageWeightedRetriever,
     UsageWeightsRef,
 )
@@ -69,12 +71,18 @@ from thalamus.structural import (
     code_files,
     footprint_staleness,
     incremental_ingest,
+    link_anchored_nodes,
     link_by_footprint,
     markdown_files,
     typescript_files,
 )
 
 logger = logging.getLogger(__name__)
+
+# Code-corpus node kinds episode footprints link against (module = coarse fallback; rest = symbols).
+_LINK_CODE_KINDS = ("module", "interface", "class", "enum", "function", "method")
+# Non-code node kinds that may annotate code (the C-2 ``annotates``-edge sources).
+_ANNOTATOR_KINDS = ("finding", "document", "section", "chunk")
 
 
 def _default_ingestor(resolve_calls: bool) -> Ingestor:
@@ -236,6 +244,8 @@ def build_two_hemisphere_gateway(
     hybrid_retrieval: bool = True,
     usage_weighting: bool = True,
     usage_weights: UsageWeightsRef | None = None,
+    structural_centrality: bool = True,
+    centrality_weights: CentralityWeightsRef | None = None,
     structural_relevance: bool = True,
     max_structural_items: int = 12,
     max_memory_chars: int = 1000,
@@ -277,22 +287,35 @@ def build_two_hemisphere_gateway(
     ingest = incremental_ingest(
         repo, scope, corpora=corpora, graph=graph, manifest=manifest, encoder=encoder
     )
-    # Module nodes to link episode footprints against: the fresh parse if Brain 2 was rebuilt (from
-    # ALL corpora — corpus names are arbitrary under [[corpus]], and link_by_footprint's
-    # module_index filters to modules, so doc nodes are ignored), else the persisted graph (a
-    # no-change build skips parsing, but episodes may be new).
-    code_modules = (
+    # Code nodes to link episode footprints against: the fresh parse if Brain 2 was rebuilt (from
+    # ALL corpora — corpus names are arbitrary under [[corpus]], and link_by_footprint's resolver
+    # filters to code kinds, so doc/finding nodes are ignored), else the persisted graph (a
+    # no-change build skips parsing, but episodes may be new). Modules *and* symbols are passed so a
+    # line-aware footprint links to the smallest enclosing symbol (C-7); a file-only footprint
+    # (today's only shape) falls back to the module.
+    code_nodes = (
         [node for result in ingest.results.values() for node in result.nodes]
         if ingest.rebuilt
-        else graph.nodes_of_kind(scope, "module")
+        else [node for kind in _LINK_CODE_KINDS for node in graph.nodes_of_kind(scope, kind)]
     )
 
     links = links if links is not None else InMemoryCrossLinkIndex()
     footprints = [
         (episode.ref, tuple(episode.metadata.get("footprint", ()))) for episode in episodes
     ]
-    # Footprints link to code modules only (episodes touch source files).
-    link_by_footprint(footprints, code_modules, links, repo_root=repo)
+    # Footprints link to code nodes only (episodes touch source files).
+    link_by_footprint(footprints, code_nodes, links, repo_root=repo)
+
+    # C-2: anchor non-code nodes (findings/docs/text) to the code they annotate, as ``annotates``
+    # graph edges, so a finding about ``foo.py:42`` fuses into recall whenever ``foo.py`` surfaces.
+    # Read both sides from the live graph (covers the no-rebuild path too); idempotent on re-run.
+    graph_code_nodes = [
+        node for kind in _LINK_CODE_KINDS for node in graph.nodes_of_kind(scope, kind)
+    ]
+    annotators = [
+        node for kind in _ANNOTATOR_KINDS for node in graph.nodes_of_kind(scope, kind)
+    ]
+    link_anchored_nodes(annotators, graph_code_nodes, graph, scope, repo_root=repo)
 
     # §13.18-D2: flag curated memories whose footprint files are gone from disk (stale beliefs
     # about code that no longer exists). Episodes are immutable history, so only curated memories
@@ -341,8 +364,17 @@ def build_two_hemisphere_gateway(
     if usage_weighting and usage_weights is not None:
         base = UsageWeightedRetriever(base, usage_weights)
         policy += "+usage"
-    # Structural-relevance rung (L-R2): lift memories cross-linked to the code the cue is *about*
-    # (from the cue's own structural retrieval) — query-local, bounded to the relevance pool,
+    # Structural-centrality rung (L-R2, global): lift memories by how connected they are to Brain 2
+    # (summed degree of the code nodes they cross-link to) — the query-independent "well-connected
+    # to the code graph" relevance-credibility signal, the sibling of the usage rung. Re-ranks in
+    # the relevance pool; firewall-clean (graph topology only, never the memory's prose). Reads a
+    # refreshable holder (empty → identity for a cold/linkless brain; a dreaming pass swaps in fresh
+    # weights as Brain 2 + links re-derive mid-serve).
+    if structural_centrality and centrality_weights is not None:
+        base = StructuralCentralityRetriever(base, centrality_weights)
+        policy += "+central"
+    # Structural-relevance rung (L-R2, query-local): lift memories cross-linked to the code the cue
+    # is *about* (from the cue's own structural retrieval) — bounded to the relevance pool,
     # firewall-clean (the cross-link graph, not prose). No-op without structural retrievers/links.
     if structural_relevance and links is not None and structural_retrievers:
         base = StructuralRelevanceRetriever(base, links, structural_retrievers)

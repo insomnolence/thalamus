@@ -7,7 +7,7 @@ honesty (unverified absence), and the high-fan-out circuit-breaker.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 from thalamus.core.types import (
@@ -18,10 +18,11 @@ from thalamus.core.types import (
     RepoId,
     Scope,
     StructuralRef,
+    Supersession,
     TenantId,
 )
 from thalamus.gateway import Planner, PlannerConfig
-from thalamus.gateway.views import DerivedViewsRef
+from thalamus.gateway.views import DerivedViews, DerivedViewsRef
 from thalamus.structural import (
     CoChangeIndex,
     InMemoryCoChangeIndex,
@@ -424,3 +425,158 @@ def test_render_surfaces_coverage_and_constraints() -> None:
     assert "Known constraints & gotchas" in rendered
     assert "foo mutates shared state" in rendered
     assert "unverified" in rendered  # the coverage-honesty line
+
+
+# --- C-3a: relevance ranking before the memory_budget cut -----------------------------------------
+
+
+def _dated_record(
+    mid: str, kind: str, content: str, *, at: datetime, importance: float = 1.0
+) -> MemoryRecord:
+    return MemoryRecord(
+        MemoryId(mid),
+        Hemisphere.EXPERIENTIAL,
+        kind,
+        content,
+        SCOPE,
+        at,
+        metadata={"why": f"why-{mid}", "source": "curated", "importance": importance},
+    )
+
+
+def _build_with_views(
+    *,
+    links: Sequence[tuple[str, StructuralNode]],
+    records: Sequence[MemoryRecord],
+    superseded: Mapping[MemoryRef, Supersession] | None = None,
+    config: PlannerConfig | None = None,
+    hits: Sequence[tuple[StructuralNode, float]] = ((FOO, 0.9),),
+) -> Planner:
+    """Like ``_build`` but with an injectable ``superseded`` view (the gather demotes those)."""
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(IngestResult(nodes=_NODES, edges=_EDGES))
+    link_index = InMemoryCrossLinkIndex()
+    for mid, node in links:
+        link_index.link(_mref(mid), _ref(node))
+    views = DerivedViewsRef(DerivedViews(superseded=dict(superseded or {})))
+    return Planner(
+        graph=graph,
+        links=link_index,
+        store=_Store(records),
+        structural_retrievers=[_Retr(hits)],
+        views=views,
+        config=config,
+    )
+
+
+def test_gather_ranks_superseded_memory_last_under_budget() -> None:
+    """A superseded belief is demoted below current ones — under a 1-memory budget it is the one
+    omitted, even though it would be reached first in traversal order."""
+    older = NOW.replace(year=2025)
+    records = [
+        _dated_record("m-stale", "decision", "the OLD plan", at=NOW),  # newer, but superseded
+        _dated_record("m-current", "decision", "the current plan", at=older),
+    ]
+    superseded = {
+        _mref("m-stale"): Supersession(MemoryId("m-current"), "replaced by the new plan", at=NOW)
+    }
+    planner = _build_with_views(
+        links=[("m-stale", FOO), ("m-current", FOO)],
+        records=records,
+        superseded=superseded,
+        config=PlannerConfig(memory_budget=1),
+    )
+    brief = planner.plan(target="foo", scope=SCOPE)
+    kept = [m.memory_id for m in (*brief.constraints, *brief.context)]
+    assert kept == [MemoryId("m-current")]  # the current belief survived, not the superseded one
+    assert brief.memories_omitted == 1
+
+
+def test_gather_prefers_more_recent_memory_under_budget() -> None:
+    """With supersession/importance/proximity held equal, the newer memory survives a tight cut."""
+    older = NOW.replace(year=2024)
+    records = [
+        _dated_record("m-old", "decision", "older decision", at=older),
+        _dated_record("m-new", "decision", "newer decision", at=NOW),
+    ]
+    planner = _build_with_views(
+        links=[("m-old", FOO), ("m-new", FOO)],
+        records=records,
+        config=PlannerConfig(memory_budget=1),
+    )
+    brief = planner.plan(target="foo", scope=SCOPE)
+    kept = [m.memory_id for m in (*brief.constraints, *brief.context)]
+    assert kept == [MemoryId("m-new")]
+    assert brief.memories_omitted == 1
+
+
+def test_gather_prefers_integration_point_memory_over_radius_node_memory() -> None:
+    """Cross-link proximity: a memory on the integration point outranks one on a radius node when
+    recency/importance are equal — so it survives a 1-memory budget."""
+    records = [
+        _dated_record("m-ip", "decision", "about foo itself", at=NOW),
+        _dated_record("m-radius", "decision", "about a caller", at=NOW),
+    ]
+    planner = _build_with_views(
+        links=[("m-ip", FOO), ("m-radius", BAR)],  # BAR is a caller of FOO (a radius node)
+        records=records,
+        config=PlannerConfig(memory_budget=1),
+    )
+    brief = planner.plan(target="foo", scope=SCOPE)
+    kept = [m.memory_id for m in (*brief.constraints, *brief.context)]
+    assert kept == [MemoryId("m-ip")]
+
+
+def test_gather_higher_importance_survives_a_tight_budget() -> None:
+    """The operator-set importance lifts a memory above an equally-recent, equally-proximate one."""
+    records = [
+        _dated_record("m-low", "decision", "minor note", at=NOW, importance=1.0),
+        _dated_record("m-high", "decision", "load-bearing decision", at=NOW, importance=3.0),
+    ]
+    planner = _build_with_views(
+        links=[("m-low", FOO), ("m-high", FOO)],
+        records=records,
+        config=PlannerConfig(memory_budget=1),
+    )
+    brief = planner.plan(target="foo", scope=SCOPE)
+    kept = [m.memory_id for m in (*brief.constraints, *brief.context)]
+    assert kept == [MemoryId("m-high")]
+
+
+def test_gather_preserves_constraints_over_context_under_budget() -> None:
+    """Policy: constraints/gotchas are load-bearing and take the budget ahead of generic context,
+    even when a context memory is newer/more proximate."""
+    old = NOW.replace(year=2024)
+    records = [
+        _dated_record("m-ctx", "decision", "a recent decision on foo", at=NOW),
+        _dated_record("m-gotcha", "gotcha", "an older gotcha on a caller", at=old),
+    ]
+    planner = _build_with_views(
+        links=[("m-ctx", FOO), ("m-gotcha", BAR)],
+        records=records,
+        config=PlannerConfig(memory_budget=1),
+    )
+    brief = planner.plan(target="foo", scope=SCOPE)
+    assert {m.memory_id for m in brief.constraints} == {MemoryId("m-gotcha")}
+    assert brief.context == ()  # context yielded the single budget slot to the constraint
+    assert brief.memories_omitted == 1
+
+
+def test_gather_ranking_leaves_coverage_independent_of_the_budget() -> None:
+    """The honesty invariant: a tight memory_budget trims rendered memories but never the coverage
+    counts — coverage reflects what the brain holds, not what fit."""
+    records = [
+        _dated_record("m1", "decision", "on foo", at=NOW),
+        _dated_record("m2", "decision", "on bar", at=NOW),
+    ]
+    tight = _build_with_views(
+        links=[("m1", FOO), ("m2", BAR)], records=records, config=PlannerConfig(memory_budget=1)
+    )
+    roomy = _build_with_views(
+        links=[("m1", FOO), ("m2", BAR)], records=records, config=PlannerConfig(memory_budget=30)
+    )
+    cov_tight = tight.plan(target="foo", scope=SCOPE).coverage
+    cov_roomy = roomy.plan(target="foo", scope=SCOPE).coverage
+    assert cov_tight.nodes_with_context == cov_roomy.nodes_with_context
+    assert cov_tight.files_with_context == cov_roomy.files_with_context
+    assert cov_tight.radius_nodes == cov_roomy.radius_nodes

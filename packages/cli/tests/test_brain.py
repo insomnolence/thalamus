@@ -163,6 +163,70 @@ def test_focus_path_recovers_linked_memory_over_semantic_distractor(tmp_path: Pa
     assert payload.memories[0].memory_id == MemoryId("linked")
 
 
+def test_centrality_rung_lifts_a_memory_linked_to_a_hub_module(tmp_path: Path) -> None:
+    """L-R2 end-to-end: a memory cross-linked to a CENTRAL (high-degree) code node outranks an
+    equally-relevant memory linked to an isolated leaf — the "well-connected to Brain 2" signal,
+    measured through the real build → graph → links → centrality → recall chain.
+
+    Both episodes share identical content (so relevance ties), so any reordering is the centrality
+    rung's doing, not relevance. Firewall: the weights come only from graph degree + cross-links.
+    """
+    from thalamus.cli.brain import build_two_hemisphere_gateway
+    from thalamus.retrieval import CentralityWeightsRef
+    from thalamus.structural import memory_centrality
+
+    repo = tmp_path / "repo"
+    pkg = repo / "pkg"
+    pkg.mkdir(parents=True)
+    # `hub` is imported and called by three other modules → high graph degree (a central node).
+    (pkg / "hub.py").write_text("def core():\n    return 1\n", encoding="utf-8")
+    for name in ("a", "b", "c"):
+        (pkg / f"{name}.py").write_text(
+            f"from pkg.hub import core\n\n\ndef use_{name}():\n    return core()\n",
+            encoding="utf-8",
+        )
+    # `leaf` is imported by nothing and imports nothing → degree 0 (isolated).
+    (pkg / "leaf.py").write_text("def alone():\n    return 1\n", encoding="utf-8")
+
+    encoder = DeterministicEncoder(dim=64)
+    store = InMemoryStore(dim=64)
+    shared = "we changed the request handling here"  # identical content → relevance is a tie
+    hub_mem = MemoryRecord(
+        MemoryId("hub-mem"), Hemisphere.EXPERIENTIAL, "episode", shared, SCOPE, NOW,
+        metadata={"footprint": ["pkg/hub.py"]},
+    )
+    leaf_mem = MemoryRecord(
+        MemoryId("leaf-mem"), Hemisphere.EXPERIENTIAL, "episode", shared, SCOPE, NOW,
+        metadata={"footprint": ["pkg/leaf.py"]},
+    )
+    for record in (hub_mem, leaf_mem):
+        store.add(record, encoder.encode([record.content])[0])
+    episodes = [hub_mem, leaf_mem]
+
+    centrality = CentralityWeightsRef()
+    gateway = build_two_hemisphere_gateway(
+        repo, store=store, encoder=encoder, scope=SCOPE, episodes=episodes, k=2,
+        centrality_weights=centrality,
+    )
+    # Seed centrality from the freshly-built graph + links (what serve does post-build).
+    assert gateway.graph is not None and gateway.links is not None
+    weights = memory_centrality(
+        [m.ref for m in episodes], gateway.graph, gateway.links
+    )
+    # The hub-linked memory must carry strictly more centrality than the leaf-linked one.
+    assert weights[hub_mem.ref] > weights[leaf_mem.ref]
+    centrality.refresh(weights)
+
+    payload = gateway.recall(prompt=shared, scope=SCOPE)
+    order = [m.memory_id for m in payload.memories]
+    assert order[0] == MemoryId("hub-mem")  # the well-connected memory is surfaced first
+
+    # Ablation: with the layer off (weight 0 via empty ref), the centrality boost vanishes.
+    centrality.refresh({})
+    ablated = gateway.recall(prompt=shared, scope=SCOPE)
+    assert {m.memory_id for m in ablated.memories} == {MemoryId("hub-mem"), MemoryId("leaf-mem")}
+
+
 def test_build_corpora_from_configs_mixes_kinds_with_separate_indexes(tmp_path: Path) -> None:
     from thalamus.cli.brain import build_corpora_from_configs
     from thalamus.cli.project import CorpusConfig

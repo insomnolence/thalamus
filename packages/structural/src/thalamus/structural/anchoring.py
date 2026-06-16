@@ -86,6 +86,49 @@ def resolve_and_expand(
     return [node, *graph.k_hop(ref, k_hop)]
 
 
+def node_degree(graph: StructuralGraph, ref: StructuralRef) -> int:
+    """The undirected degree of a node — its count of distinct graph neighbours (both directions).
+
+    A purely topological measure of how *central* a code node is: a hub many things call / depend on
+    has a high degree; a leaf has a low one. Deterministic over the current graph; a stale ref (node
+    gone) has degree 0 (no neighbours). Used by :func:`memory_centrality` — the firewall (§14.2/3)
+    holds because the signal is graph structure, never any node/memory text or embedding."""
+    return len(graph.neighbors(ref, direction="both"))
+
+
+def memory_centrality(
+    memories: Iterable[MemoryRef],
+    graph: StructuralGraph,
+    links: CrossLinkIndex,
+) -> dict[MemoryRef, float]:
+    """Per-memory **structural centrality**: how connected each memory is to the code graph (L-R2).
+
+    A memory's weight = ``sum over its cross-linked nodes of (1 + degree(node))``. The ``1`` rewards
+    *breadth* (linking to many nodes at all); ``degree(node)`` rewards *depth* (linking to central,
+    high-degree hubs of Brain-2). A memory cross-linked to a load-bearing module thus outweighs one
+    linked to an isolated leaf, and one linked to many nodes outweighs one linked to a single node.
+
+    Deterministic and firewall-clean (§14.2/§14.3): computed **only** from the cross-link topology
+    (``links.nodes_for``) and the graph degree (``node_degree``) — never the memory's own text /
+    embedding or any model judgment of its prose. A memory with no live cross-links is absent from
+    the result (weight 0 → the rung leaves it on relevance alone). Stale links (node gone from the
+    current graph) contribute only their ``1`` breadth term (degree 0), not a phantom hub weight.
+    """
+    weights: dict[MemoryRef, float] = {}
+    degree_cache: dict[StructuralRef, int] = {}
+    for memory in memories:
+        total = 0.0
+        for node_ref in links.nodes_for(memory):
+            degree = degree_cache.get(node_ref)
+            if degree is None:
+                degree = node_degree(graph, node_ref)
+                degree_cache[node_ref] = degree
+            total += 1.0 + float(degree)
+        if total > 0.0:
+            weights[memory] = total
+    return weights
+
+
 def linked_nodes_for(
     memories: Iterable[MemoryRef],
     graph: StructuralGraph,

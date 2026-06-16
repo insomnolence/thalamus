@@ -54,6 +54,7 @@ from thalamus.core.types import (
     TenantId,
 )
 from thalamus.dreaming import (
+    CentralityRefreshPass,
     CoChangeRefreshPass,
     JsonlDreamLog,
     MaintenanceTicker,
@@ -85,7 +86,12 @@ from thalamus.instrumentation import (
     read_trajectory_log,
     read_usage_log,
 )
-from thalamus.retrieval import UsageWeightsRef, render_recent, select_recent
+from thalamus.retrieval import (
+    CentralityWeightsRef,
+    UsageWeightsRef,
+    render_recent,
+    select_recent,
+)
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import (
@@ -101,6 +107,7 @@ from thalamus.structural import (
     StructuralGraph,
     StructuralIndex,
     glob_files,
+    memory_centrality,
 )
 
 _DEFAULT_DIM = 128
@@ -359,6 +366,7 @@ def build_serve_gateway(
     SupersessionIndex | None,
     StructuralRederivePass | None,
     UsageRefreshPass,
+    CentralityRefreshPass,
 ]:
     """Assemble the two-hemisphere gateway from durable Brain 1 + the current repo.
 
@@ -454,6 +462,13 @@ def build_serve_gateway(
         usage_ref.refresh(_recompute_usage_weights())
     usage_refresh = UsageRefreshPass(_recompute_usage_weights, usage_ref.refresh)
 
+    # Relevance-credibility (L-R2, global): weight memories by their STRUCTURAL CENTRALITY — how
+    # connected each is to Brain 2 (summed degree of the code nodes it cross-links to). A
+    # deterministic graph-topology fact (the firewall: never the memory's prose), the sibling of the
+    # usage rung but query-independent. Seeded after the gateway builds (when graph + links exist,
+    # incl. the in-memory shell built inside); empty in investigate mode. The dreaming
+    # CentralityRefreshPass recomputes it from the graph + links each tick. Drives the rung.
+    centrality_ref = CentralityWeightsRef()
     gateway = build_two_hemisphere_gateway(
         config.repo,
         store=store,
@@ -478,12 +493,30 @@ def build_serve_gateway(
         structural_min_relevance=config.structural_min_relevance,
         hybrid_retrieval=config.hybrid_retrieval,
         usage_weights=usage_ref,
+        centrality_weights=centrality_ref,
         max_structural_items=config.max_structural_items,
         max_memory_chars=config.max_memory_chars,
         # Investigate mode logs nothing — inspecting a brain must not write retrieval/usage events
         # into its own logs (that would contaminate the verdict it is being used to check).
         event_sink=None if config.investigate else JsonlEventSink(logs / "retrieval.jsonl"),
         usage_sink=None if config.investigate else JsonlUsageSink(logs / "usage.jsonl"),
+    )
+    # Now the gateway holds the live graph + links (built inside for the in-memory shell, or the
+    # Neo4j handles), recompute centrality over them: the memories are the scanned episodes (whose
+    # footprints were linked), each weighted by the summed degree of the code nodes it cross-links
+    # to. Reads the gateway's own handles so the dreaming re-derive's updates are seen on recompute.
+    def _recompute_centrality_weights() -> dict[MemoryRef, float]:
+        live_graph, live_links = gateway.graph, gateway.links
+        if live_graph is None or live_links is None:
+            return {}
+        return memory_centrality(
+            (episode.ref for episode in episodes), live_graph, live_links
+        )
+
+    if not config.investigate:
+        centrality_ref.refresh(_recompute_centrality_weights())
+    centrality_refresh = CentralityRefreshPass(
+        _recompute_centrality_weights, centrality_ref.refresh
     )
     rederive = (
         StructuralRederivePass(
@@ -492,7 +525,7 @@ def build_serve_gateway(
         if corpora is not None and graph is not None and manifest is not None
         else None
     )
-    return gateway, store, episodes, supersession, rederive, usage_refresh
+    return gateway, store, episodes, supersession, rederive, usage_refresh, centrality_refresh
 
 
 def _source_newer_than_artifact(root: Path, include: tuple[str, ...], artifact: Path) -> bool:
@@ -728,9 +761,15 @@ def run_serve(config: ServeConfig) -> None:
         if config.encoder == "bge-small"
         else DeterministicEncoder(dim=config.dim)
     )
-    gateway, store, episodes, supersession, rederive, usage_refresh = build_serve_gateway(
-        config, encoder=encoder
-    )
+    (
+        gateway,
+        store,
+        episodes,
+        supersession,
+        rederive,
+        usage_refresh,
+        centrality_refresh,
+    ) = build_serve_gateway(config, encoder=encoder)
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     # Brain data home (logs/session/dream) — may differ from the code root (--repo).
     data_dir = config.data_dir or config.repo
@@ -801,6 +840,9 @@ def run_serve(config: ServeConfig) -> None:
                 # Refresh the usage-weighted recall rung from accrued usage each cycle, so memories
                 # that keep proving useful rise without a restart (the relevance-credibility loop).
                 usage_refresh=usage_refresh,
+                # Refresh the structural-centrality rung from the re-derived graph + links each
+                # cycle, so a memory's "well-connected to Brain 2" standing tracks the live code.
+                centrality_refresh=centrality_refresh,
                 # Refresh the plan tool's file co-change index from new commits each cycle, so fresh
                 # coupling reaches the blast radius without a restart (mirrors structural-rederive).
                 cochange_refresh=cochange_refresh,
