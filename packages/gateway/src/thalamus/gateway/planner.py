@@ -75,6 +75,33 @@ def _simple_name(label: str) -> str:
     return label.rsplit(".", 1)[-1]
 
 
+# Walking ``contains`` up from a symbol to its module: a small bound guards against a cyclic or
+# pathologically deep nesting chain (module → class → method is depth 2 in practice).
+_MAX_CONTAINER_DEPTH = 6
+_TEST_DIR_SEGMENTS = frozenset({"test", "tests", "__tests__", "spec"})
+
+
+def _is_test_path(path: str) -> bool:
+    """True for conventional test files in any language — ``tests/`` dirs, ``test_*`` / ``*_test``
+    stems, ``*.test.*`` / ``*.spec.*`` names.
+
+    Test-mirror co-change ("change a symbol → its own test file changes") is near-zero signal for
+    a blast radius — it's the trivial coupling, not the cross-cutting kind the layer exists to
+    surface — so co-change filters it out (removable via ``PlannerConfig.cochange_skip_tests``)."""
+    p = path.replace("\\", "/")
+    parts = p.split("/")
+    if any(seg in _TEST_DIR_SEGMENTS for seg in parts[:-1]):
+        return True
+    name = parts[-1]
+    stem = name.split(".", 1)[0]
+    return (
+        stem.startswith("test_")
+        or stem.endswith("_test")
+        or ".test." in name
+        or ".spec." in name
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RadiusNode:
     """One code node in the blast radius, tagged by how it relates to the integration point."""
@@ -94,7 +121,9 @@ class CoverageReport:
     """
 
     radius_nodes: int  # nodes in scope (integration point + blast radius)
-    nodes_with_context: int  # how many carry >= 1 cross-linked memory
+    nodes_with_context: int  # how many carry >= 1 *symbol-level* cross-link (direct)
+    files_in_scope: int = 0  # distinct modules (files) the in-scope nodes live in
+    files_with_context: int = 0  # how many of those files carry >= 1 cross-link
 
     @property
     def nodes_without_context(self) -> int:
@@ -175,9 +204,15 @@ class PlanBrief:
         lines += ["", "## Coverage"]
         if cov.radius_nodes:
             lines.append(
-                f"{cov.nodes_with_context} of {cov.radius_nodes} in-scope node(s) have recorded "
-                f"context; {cov.nodes_without_context} have NONE — absence there is *unverified* "
-                "(the brain may simply hold no memory for that code)."
+                f"{cov.nodes_with_context} of {cov.radius_nodes} in-scope node(s) have "
+                f"symbol-level context; {cov.nodes_without_context} have NONE — absence there is "
+                "*unverified* (the brain may simply hold no memory for that code)."
+            )
+        if cov.files_in_scope:
+            lines.append(
+                f"File-level: {cov.files_with_context} of {cov.files_in_scope} file(s) in scope "
+                "carry recorded notes — cross-links are file-granular, so these decisions/gotchas "
+                "are about the file, not pinned to the exact symbol."
             )
         if self.memories_omitted:
             lines.append(f"({self.memories_omitted} further memory(ies) omitted past the budget.)")
@@ -215,6 +250,8 @@ class PlannerConfig:
     max_memory_chars: int = 1000  # per-memory content/why truncation
     cochange_min_support: float = 2.0  # min coupling score (count symbol-level; lift file-level)
     cochange_max_nodes: int = 15  # max co-change nodes added to the radius
+    cochange_max_per_file: int = 3  # cap symbols taken from any one co-changed file (anti-flood)
+    cochange_skip_tests: bool = True  # drop test-mirror coupling (a symbol's own test is noise)
 
 
 class Planner:
@@ -264,7 +301,7 @@ class Planner:
 
         # 3 — Gather the why: cross-linked memories for the integration point + every radius node.
         scope_refs = [ref, *(rn.item_ref for rn in radius)]
-        constraints, context, with_context, mem_omitted = self._gather(scope_refs)
+        constraints, context, coverage, mem_omitted = self._gather(scope_refs)
 
         return PlanBrief(
             target=target,
@@ -277,7 +314,7 @@ class Planner:
             blast_radius=tuple(rn.node for rn in radius),
             constraints=constraints,
             context=context,
-            coverage=CoverageReport(radius_nodes=len(scope_refs), nodes_with_context=with_context),
+            coverage=coverage,
             radius_omitted=radius_omitted,
             memories_omitted=mem_omitted,
         )
@@ -445,11 +482,18 @@ class Planner:
         """Fold in symbols that historically co-changed with ``ref`` (above the coupling floor).
 
         A no-op without a co-change index (the removable-layer contract). Partners gone from the
-        current graph are skipped (stale); scores are sorted descending, so we stop at the floor."""
+        current graph are skipped (stale); scores are sorted descending, so we stop at the floor.
+
+        Two anti-flood guards (both removable via config): file-level co-change expands one coupled
+        *file* into *all* its symbols, so a single partner file could otherwise consume the whole
+        budget — ``cochange_max_per_file`` caps symbols taken from any one file, spreading the
+        budget across distinct coupled files; ``cochange_skip_tests`` drops a symbol's own test
+        file, whose co-change is the trivial mirror, not the cross-cutting coupling we want."""
         if self._cochange is None:
             return
         cfg = self._config
         added = 0
+        per_file: dict[str, int] = {}
         for partner, score in self._cochange.cochanged(ref):
             if score < cfg.cochange_min_support or added >= cfg.cochange_max_nodes:
                 break
@@ -458,17 +502,52 @@ class Planner:
             node = self._graph.get(partner)
             if node is None:
                 continue
+            path = node.anchor.path if node.anchor is not None else None
+            if path is not None:
+                if cfg.cochange_skip_tests and _is_test_path(path):
+                    continue
+                if per_file.get(path, 0) >= cfg.cochange_max_per_file:
+                    continue
+                per_file[path] = per_file.get(path, 0) + 1
             add([node], "co-change", 1)
             added += 1
 
+    def _containing_module(self, ref: StructuralRef) -> StructuralRef | None:
+        """Walk ``contains`` up from a symbol to the module (file) node that holds it.
+
+        Cross-links are created at **module granularity** (``structural.linking`` links a memory to
+        the module of each touched file — no finer footprint than git's per-file diff), so a
+        symbol's recorded context lives on its module, not on the symbol itself. Rolling up here is
+        the gather-side mirror of recall's k-hop spread (coarse link + graph spreading → fine
+        context). Returns ``ref`` if it is already a module, else ``None`` if no module is found."""
+        node = self._graph.get(ref)
+        if node is not None and node.kind == "module":
+            return ref
+        current = ref
+        for _ in range(_MAX_CONTAINER_DEPTH):
+            parents = self._graph.neighbors(current, edge_types=("contains",), direction="in")
+            if not parents:
+                return None
+            module = next((p for p in parents if p.kind == "module"), None)
+            if module is not None:
+                return module.ref
+            current = parents[0].ref
+        return None
+
     def _gather(
         self, scope_refs: Sequence[StructuralRef]
-    ) -> tuple[tuple[MemoryItem, ...], tuple[MemoryItem, ...], int, int]:
+    ) -> tuple[tuple[MemoryItem, ...], tuple[MemoryItem, ...], CoverageReport, int]:
         """Collect cross-linked memories for the in-scope nodes, deduped, partitioned, budgeted.
 
-        Returns ``(constraints, context, nodes_with_context, memories_omitted)``. A node counts
-        toward coverage if it has >= 1 cross-link, independent of the memory budget — coverage
-        reflects what the brain *holds*, not what fit in the brief."""
+        Returns ``(constraints, context, coverage, memories_omitted)``. Links are module-granular
+        (see :meth:`_containing_module`), so we harvest from each in-scope symbol's **direct** links
+        *and* its **containing module's** links — without the rollup the gather is blind to
+        file-scoped decisions/gotchas even when the brain holds them. Coverage is reported at both
+        granularities: ``nodes_with_context`` counts symbols with a direct (symbol-level) link
+        (sparse until finer linking lands), and ``files_with_context`` counts in-scope files
+        (modules) carrying notes — the granularity at which the brain actually records today. A file
+        counts toward coverage independent of the memory budget — coverage reflects what the brain
+        *holds*, not what fit in the brief."""
         cfg = self._config
         views = self._views.views
         seen_mem: set[MemoryId] = set()
@@ -477,11 +556,19 @@ class Planner:
         with_context = 0
         omitted = 0
 
+        # Distinct containing modules of the in-scope symbols (links live here), preserving order.
+        modules: dict[str, StructuralRef] = {}
         for ref in scope_refs:
-            memory_refs = self._links.memories_for(ref)
-            if memory_refs:
-                with_context += 1
-            for memory_ref in memory_refs:
+            if self._links.memories_for(ref):
+                with_context += 1  # a direct, symbol-level link
+            module = self._containing_module(ref)
+            if module is not None:
+                modules.setdefault(module.node_id, module)
+        files_with_context = sum(1 for m in modules.values() if self._links.memories_for(m))
+
+        # Harvest: direct symbol links first (most precise), then the module-rollup links.
+        for ref in (*scope_refs, *modules.values()):
+            for memory_ref in self._links.memories_for(ref):
                 if memory_ref.memory_id in seen_mem:
                     continue
                 seen_mem.add(memory_ref.memory_id)
@@ -499,7 +586,13 @@ class Planner:
                 )
                 (constraints if record.kind in _CONSTRAINT_KINDS else context).append(item)
 
-        return tuple(constraints), tuple(context), with_context, omitted
+        coverage = CoverageReport(
+            radius_nodes=len(scope_refs),
+            nodes_with_context=with_context,
+            files_in_scope=len(modules),
+            files_with_context=files_with_context,
+        )
+        return tuple(constraints), tuple(context), coverage, omitted
 
 
 @dataclass(frozen=True, slots=True)

@@ -348,6 +348,74 @@ def test_cochange_min_support_drops_one_offs() -> None:
     assert "mod:sibling" not in {r.node_id for r in planner.blast_radius_refs(FOO.ref)}
 
 
+class _FixedCoChange:
+    """A co-change index returning a fixed partner list — to exercise the planner's anti-flood
+    guards independent of mining (file-level expansion would otherwise hide the per-file cap)."""
+
+    def __init__(self, partners: Sequence[tuple[StructuralRef, float]]) -> None:
+        self._partners = list(partners)
+
+    def cochanged(self, ref: StructuralRef) -> list[tuple[StructuralRef, float]]:
+        return list(self._partners)
+
+
+def test_cochange_caps_symbols_per_file_and_skips_test_mirrors() -> None:
+    """File-level co-change expands one coupled file into all its symbols; the per-file cap keeps a
+    single file from flooding the radius, and the test-mirror file is dropped entirely."""
+
+    def _at(node_id: str, path: str) -> StructuralNode:
+        return StructuralNode(
+            node_id=node_id, kind="function", label=node_id.split(":")[-1], scope=SCOPE,
+            anchor=SourceAnchor(path=path, line_start=1, line_end=2),
+        )
+
+    a1, a2, a3, a4 = (_at(f"m:a{i}", "pkg/svc.py") for i in range(1, 5))  # four symbols, one file
+    tst = _at("m:t1", "pkg/test_svc.py")  # the co-changed test mirror — pure noise
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(IngestResult(nodes=[FOO, a1, a2, a3, a4, tst], edges=[]))
+    cochange = _FixedCoChange([(n.ref, 9.0) for n in (a1, a2, a3, a4, tst)])
+    planner = Planner(
+        graph=graph, links=InMemoryCrossLinkIndex(), store=_Store(()),
+        structural_retrievers=[_Retr([(FOO, 0.9)])], views=DerivedViewsRef(), cochange=cochange,
+    )
+    brief = planner.plan(target="foo", scope=SCOPE)
+    cc_ids = {rn.item.node_id for rn in brief.blast_radius if rn.relation == "co-change"}
+    assert cc_ids == {"m:a1", "m:a2", "m:a3"}  # capped at 3/file (a4 dropped), test mirror excluded
+
+
+def test_gather_rolls_symbol_up_to_its_module() -> None:
+    """Cross-links are module-granular, but the radius is symbol-level — the gather must roll a
+    symbol up to its module so file-scoped memory surfaces even with no symbol-pinned link."""
+    mod = _node("module:m", kind="module", label="m")
+    cls = _node("m:Svc", kind="class", label="m.Svc")
+    meth = _node("m:Svc.run", kind="method", label="m.Svc.run")
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(IngestResult(
+        nodes=[mod, cls, meth],
+        edges=[StructuralEdge("module:m", "m:Svc", "contains"),
+               StructuralEdge("m:Svc", "m:Svc.run", "contains")],
+    ))
+    links = InMemoryCrossLinkIndex()
+    links.link(_mref("m-file"), mod.ref)  # memory linked ONLY to the module node
+    store = _Store([_record("m-file", "decision", "module owns wiring")])
+    planner = Planner(
+        graph=graph, links=links, store=store,
+        structural_retrievers=[_Retr([(meth, 0.9)])], views=DerivedViewsRef(),
+    )
+    brief = planner.plan(target="run the service", scope=SCOPE)
+
+    assert brief.integration_point is not None
+    assert brief.integration_point.node_id == "m:Svc.run"
+    radius_ids = {rn.item.node_id for rn in brief.blast_radius}
+    assert "m:Svc" in radius_ids  # the class is the container (one contains-hop up)
+    assert "module:m" not in radius_ids  # the module itself is NOT a radius node
+    # yet the module-scoped memory surfaces via the rollup, reported as file-level coverage
+    assert MemoryId("m-file") in {m.memory_id for m in brief.context}
+    assert brief.coverage.nodes_with_context == 0  # no direct symbol-level link in scope
+    assert brief.coverage.files_with_context == 1
+    assert "File-level: 1 of" in brief.render()
+
+
 def test_render_surfaces_coverage_and_constraints() -> None:
     records = [_record("m1", "gotcha", "foo mutates shared state")]
     planner = _build(hits=[(FOO, 0.9)], links=[("m1", FOO)], records=records)

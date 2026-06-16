@@ -247,3 +247,36 @@ def test_text_corpus_recall_surfaces_a_chunk_tagged_by_corpus(tmp_path: Path) ->
     assert tagged  # text nodes surfaced, tagged by their corpus (not the default "code")
     # a chunk node is among them (the line-anchored unit, distinct from the whole-file document)
     assert any(item.node_id.startswith("chunk:field-notes:") for item in tagged)
+
+
+def test_findings_corpus_recall_surfaces_a_finding_tagged_by_corpus(tmp_path: Path) -> None:
+    """A 'findings' [[corpus]] ingests external analysis results (SARIF/JSON) as retrievable
+    Brain-2 nodes, tagged by the corpus name — so recall can surface 'what's known wrong here'."""
+    import json
+
+    from thalamus.cli.brain import build_corpora_from_configs
+    from thalamus.cli.project import CorpusConfig
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "scan.sarif").write_text(
+        json.dumps({"findings": [
+            {"path": "src/auth.ts", "line": 88, "rule": "hardcoded-secret", "severity": "error",
+             "message": "possible hardcoded credential in the auth handler", "tool": "scanner"}
+        ]}),
+        encoding="utf-8",
+    )
+    encoder = DeterministicEncoder(dim=64)
+    corpora = build_corpora_from_configs(
+        [CorpusConfig(name="findings", root=reports, kind="findings", include=("*.sarif",))],
+        encoder=encoder,
+    )
+    gateway = build_two_hemisphere_gateway(
+        reports, store=InMemoryStore(dim=64), encoder=encoder, scope=SCOPE, episodes=[],
+        corpora=corpora, structural_min_relevance=-1.0,  # don't gate the lone finding on cosine
+    )
+    payload = gateway.recall(prompt="hardcoded credential in the auth handler", scope=SCOPE)
+    tagged = [item for item in payload.structural if item.corpus == "findings"]
+    assert tagged  # the finding surfaced, tagged by its corpus
+    assert any(item.node_id.startswith("finding:findings:") for item in tagged)
+    assert any("hardcoded-secret" in item.label for item in tagged)

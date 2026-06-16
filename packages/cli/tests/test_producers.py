@@ -30,7 +30,7 @@ def _cfg(**kwargs: object) -> CorpusConfig:
 
 
 def test_builtin_kinds_are_registered() -> None:
-    assert producer_kinds() == frozenset({"python-ast", "scip", "docs", "text"})
+    assert producer_kinds() == frozenset({"python-ast", "scip", "docs", "text", "findings"})
 
 
 def test_corpus_kinds_derive_from_the_registry() -> None:

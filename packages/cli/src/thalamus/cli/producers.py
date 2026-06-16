@@ -29,6 +29,7 @@ from thalamus.structural import (
     DEFAULT_CHUNK_CHARS,
     DEFAULT_OVERLAP_CHARS,
     DocIngestor,
+    FindingsIngestor,
     TextIngestor,
     code_files,
     glob_files,
@@ -121,6 +122,30 @@ class TextProducer:
         return ProducerBuild(ingestor=ingestor, files=files)
 
 
+class FindingsProducer:
+    """``findings`` — external analysis results (SARIF or generic JSON) as a retrievable corpus.
+
+    The producer/aggregator principle: ingest a tool's *findings*, never run its engine. ``include``
+    globs the findings file(s) (e.g. ``*.sarif``, ``findings.json``); they are the change-detection
+    set and the nodes' anchor — so a refreshed findings file re-embeds. Name the corpus ``findings``
+    so recall groups the hits under "## Related findings"."""
+
+    kind = "findings"
+
+    def validate(self, cfg: CorpusConfig) -> None:
+        if not cfg.include:
+            raise ThalamusError(
+                f"corpus {cfg.name!r}: kind='findings' requires 'include' globs for the "
+                "findings file(s) (e.g. include = ['*.sarif'])"
+            )
+
+    def build(self, cfg: CorpusConfig, *, ctx: ProducerContext) -> ProducerBuild:
+        files = glob_files(*cfg.include)
+        return ProducerBuild(
+            ingestor=FindingsIngestor(files=files, id_namespace=cfg.name), files=files
+        )
+
+
 def _text_chunking(cfg: CorpusConfig) -> tuple[int, int]:
     """Parse + range-check the text chunker options, returning ``(chunk_chars, overlap_chars)``."""
     chunk_chars = _int_option(cfg, "chunk_chars", DEFAULT_CHUNK_CHARS, minimum=50)
@@ -158,6 +183,7 @@ def register_builtins() -> None:
         ScipProducer(),
         DocsProducer(),
         TextProducer(),
+        FindingsProducer(),
     )
     for producer in builtins:
         register_producer(producer)

@@ -27,6 +27,12 @@ from thalamus.structural.cochange import (
 from thalamus.structural.composite import CompositeIngestor
 from thalamus.structural.cross_link import CrossLinkIndex, InMemoryCrossLinkIndex
 from thalamus.structural.doc_ingestor import DocIngestor
+from thalamus.structural.findings_ingestor import (
+    Finding,
+    FindingsIngestor,
+    findings_files,
+    parse_findings,
+)
 from thalamus.structural.graph import Direction, InMemoryStructuralGraph, StructuralGraph
 from thalamus.structural.incremental import (
     CorpusSpec,
@@ -88,6 +94,8 @@ __all__ = [
     "DocIngestor",
     "FileCoChangeIndex",
     "FileManifest",
+    "Finding",
+    "FindingsIngestor",
     "FootprintAttributor",
     "IncrementalResult",
     "InMemoryFileManifest",
@@ -121,12 +129,14 @@ __all__ = [
     "code_files",
     "glob_files",
     "footprint_staleness",
+    "findings_files",
     "incremental_ingest",
     "link_by_footprint",
     "linked_nodes_for",
     "markdown_files",
     "module_index",
     "node_text",
+    "parse_findings",
     "python_files",
     "ranked_hits",
     "resolve_and_expand",
