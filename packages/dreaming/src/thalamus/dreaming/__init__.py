@@ -6,6 +6,7 @@ need a hemisphere (structural graph, gateway refresh) live behind the
 scheduler stays removable and the §14.3 actor/proposer firewall stays auditable.
 """
 
+from thalamus.dreaming.attribution_refresh import AttributionRefreshPass
 from thalamus.dreaming.base import (
     CycleReport,
     DreamingPass,
@@ -36,6 +37,7 @@ from thalamus.dreaming.structural_refresh import StructuralRefreshPass
 from thalamus.dreaming.usage_refresh import UsageRefreshPass
 
 __all__ = [
+    "AttributionRefreshPass",
     "BeliefAuditPass",
     "CentralityRefreshPass",
     "CoChangeRefreshPass",

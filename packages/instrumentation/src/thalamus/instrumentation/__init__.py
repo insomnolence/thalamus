@@ -23,6 +23,7 @@ from thalamus.instrumentation.events import (
 from thalamus.instrumentation.git_observer import GitObserver, reverted_shas
 from thalamus.instrumentation.junit_observer import JUnitObserver
 from thalamus.instrumentation.logging_retriever import LoggingRetriever
+from thalamus.instrumentation.rotation import jsonl_segments, rotate_log
 from thalamus.instrumentation.session import (
     FileSessionContextStore,
     SessionContext,
@@ -44,6 +45,7 @@ from thalamus.instrumentation.trajectory import (
     serialize_trajectory_event,
 )
 from thalamus.instrumentation.usage import (
+    AttributedSignalsRef,
     InMemoryUsageSink,
     JsonlUsageSink,
     UsageSignal,
@@ -89,6 +91,7 @@ __all__ = [
     "TrajectoryEvent",
     "TrajectoryEventKind",
     "TrajectorySink",
+    "AttributedSignalsRef",
     "UsageSignal",
     "UsageSink",
     "attribute_overlap",
@@ -98,11 +101,13 @@ __all__ = [
     "deserialize_session_context",
     "deserialize_trajectory_event",
     "deserialize_usage",
+    "jsonl_segments",
     "mint_session_id",
     "read_event_log",
     "read_usage_log",
     "read_trajectory_log",
     "reverted_shas",
+    "rotate_log",
     "serialize_event",
     "serialize_session_context",
     "serialize_trajectory_event",

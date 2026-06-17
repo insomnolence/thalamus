@@ -66,6 +66,35 @@ def test_run_once_runs_capture_then_the_scheduler_synchronously() -> None:
     assert report is not None and report.ok
 
 
+def test_run_once_housekeeps_before_capture_then_consolidates() -> None:
+    order: list[str] = []
+    ticker = MaintenanceTicker(
+        Scheduler([_SignallingPass()]),
+        _ctx,
+        capture=lambda: order.append("capture"),
+        housekeeping=lambda: order.append("housekeeping"),
+        interval_seconds=3600,
+    )
+    report = ticker.run_once()
+    assert order == ["housekeeping", "capture"]  # housekeeping is a sibling phase, run first
+    assert report is not None and report.ok
+
+
+def test_a_housekeeping_failure_does_not_skip_capture_or_consolidation() -> None:
+    dpass = _SignallingPass()
+    capture = _Capture()
+
+    def boom() -> object:
+        raise RuntimeError("rotation backend hiccup")
+
+    ticker = MaintenanceTicker(
+        Scheduler([dpass]), _ctx, capture=capture, housekeeping=boom, interval_seconds=3600
+    )
+    report = ticker.run_once()  # must not raise
+    assert capture.runs == 1  # capture still ran despite the housekeeping error
+    assert dpass.runs == 1 and report is not None and report.ok
+
+
 def test_trigger_consolidates_only_and_does_not_capture() -> None:
     dpass = _SignallingPass()
     capture = _Capture()

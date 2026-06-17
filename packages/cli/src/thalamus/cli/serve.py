@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from thalamus.cli.attribute import compute_attribution
 from thalamus.cli.brain import (
     build_corpora,
     build_corpora_from_configs,
@@ -54,6 +55,7 @@ from thalamus.core.types import (
     TenantId,
 )
 from thalamus.dreaming import (
+    AttributionRefreshPass,
     CentralityRefreshPass,
     CoChangeRefreshPass,
     JsonlDreamLog,
@@ -74,17 +76,20 @@ from thalamus.gateway import Gateway, Planner
 from thalamus.gateway.http_security import build_security_middleware
 from thalamus.gateway.server import PlanReader, RecentReader, RememberWriter, ShownResolver
 from thalamus.instrumentation import (
+    AttributedSignalsRef,
     FileSessionContextStore,
     GitObserver,
     JsonlEventSink,
     JsonlTrajectorySink,
     JsonlUsageSink,
     SessionContext,
+    UsageSignal,
     default_session_path,
     mint_session_id,
     read_event_log,
     read_trajectory_log,
     read_usage_log,
+    rotate_log,
 )
 from thalamus.retrieval import (
     CentralityWeightsRef,
@@ -100,6 +105,7 @@ from thalamus.structural import (
     CorpusSpec,
     CrossLinkIndex,
     FileManifest,
+    FootprintAttributor,
     Neo4jCrossLinkIndex,
     Neo4jFileManifest,
     Neo4jStructuralGraph,
@@ -161,6 +167,12 @@ class ServeConfig:
     # commits at startup and fold it into the blast radius (validated to lift cross-file recall).
     # 0 disables it (call-graph radius only). A larger window = more signal but slower startup.
     plan_cochange_commits: int = 500
+    # Log retention (Track I): rotate an append-only log to a numbered archive once it exceeds
+    # log_max_bytes (0 disables), keeping log_keep archive segments (older ones dropped). Readers
+    # concatenate the segments, so the retained history stays whole; the bound caps unbounded growth
+    # until Architecture B makes raw logs disposable. Default ~64 MiB × 8 ≈ 0.5 GiB/log ceiling.
+    log_max_bytes: int = 64 * 1024 * 1024
+    log_keep: int = 8
     # Extra doc roots ingested as their own labeled corpora (e.g. a design-docs dir outside the
     # code root). Empty = the single default docs corpus over --repo.
     doc_roots: tuple[Path, ...] = ()
@@ -197,6 +209,15 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "--plan-cochange-commits", type=int, default=500,
         help="recent commits to build the plan tool's file co-change index from at startup "
         "(0 disables; larger = more coupling signal but slower startup)",
+    )
+    parser.add_argument(
+        "--log-max-bytes", type=int, default=64 * 1024 * 1024,
+        help="rotate an append-only log to a numbered archive once it exceeds this size "
+        "(0 disables rotation); readers concatenate segments so retained history stays whole",
+    )
+    parser.add_argument(
+        "--log-keep", type=int, default=8,
+        help="number of rotated archive segments to retain per log (older ones dropped)",
     )
     parser.add_argument(
         "--code-language", choices=("python", "typescript"), default="python",
@@ -324,6 +345,8 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         code_language=code_language,
         scip_index=scip_index,
         plan_cochange_commits=int(args.plan_cochange_commits),
+        log_max_bytes=int(args.log_max_bytes),
+        log_keep=int(args.log_keep),
         doc_roots=tuple(Path(d).resolve() for d in (args.doc_roots or ())),
         investigate=bool(args.investigate),
         data_dir=Path(args.data_dir).resolve() if args.data_dir else None,
@@ -365,6 +388,7 @@ def build_serve_gateway(
     list[MemoryRecord],
     SupersessionIndex | None,
     StructuralRederivePass | None,
+    AttributionRefreshPass[UsageSignal],
     UsageRefreshPass,
     CentralityRefreshPass,
 ]:
@@ -443,24 +467,10 @@ def build_serve_gateway(
             scip_index=config.scip_index,
             resolve_calls=config.resolve_calls,
         )
-    # Relevance-credibility (L-R1): weight memories by cross-session behavioral usage — distinct
-    # sessions each was recalled-AND-used in (the "reliably-useful core") — so recall lifts what has
-    # repeatedly proven useful. Computed once from the durable logs at startup (empty → off for a
-    # cold brain). Behavioral signal only (the firewall). Skipped in investigate mode, which must
-    # not let the brain's own usage history bias the read it is being used to inspect.
-    def _recompute_usage_weights() -> dict[MemoryId, float]:
-        events = list(read_event_log(logs / "retrieval.jsonl"))
-        signals = list(read_usage_log(logs / "usage.jsonl")) + list(
-            read_usage_log(logs / "usage_attributed.jsonl")
-        )
-        return {mid: float(n) for mid, n in reuse_by_memory(events, signals).items()}
-
-    # A refreshable holder so the dreaming UsageRefreshPass can swap in fresh weights mid-serve as
-    # usage accrues (else the rung is frozen at the startup snapshot). Empty in investigate mode.
+    # L-R1 usage-weighted rung holder — created empty here so it can be passed into the gateway,
+    # then SEEDED below once the gateway's live graph and the attribution the rung feeds on
+    # exist. Refreshable so the dreaming UsageRefreshPass swaps fresh weights in mid-serve.
     usage_ref = UsageWeightsRef()
-    if not config.investigate:
-        usage_ref.refresh(_recompute_usage_weights())
-    usage_refresh = UsageRefreshPass(_recompute_usage_weights, usage_ref.refresh)
 
     # Relevance-credibility (L-R2, global): weight memories by their STRUCTURAL CENTRALITY — how
     # connected each is to Brain 2 (summed degree of the code nodes it cross-links to). A
@@ -501,6 +511,69 @@ def build_serve_gateway(
         event_sink=None if config.investigate else JsonlEventSink(logs / "retrieval.jsonl"),
         usage_sink=None if config.investigate else JsonlUsageSink(logs / "usage.jsonl"),
     )
+    # L-R1 step 1 — footprint usage ATTRIBUTION (the primary, deterministic Tier-1 signal): which
+    # surfaced memories a session's *committed work* drew on. A re-derivable view of the recall +
+    # commit logs + the live code graph, so it must refresh mid-serve — else it freezes at startup
+    # and silently drags down both the usage rung (which consumes it) and the verdict. Reuses the
+    # gateway's OWN graph, not a flat-config re-derive: build_code_graph keys on code_language,
+    # which the declarative [[corpus]] path leaves at its default — so a per-tick re-derive would
+    # mis-language the graph (the same flat-config trap that silently emptied co-change). The module
+    # index needs only module nodes; k-hop spreads over the live graph. Held in a ref the rung uses;
+    # the derived log is rewritten for the offline verdict/rung-eval. Skipped in investigate mode
+    # (writing the log would contaminate the brain it is inspecting).
+    def _recompute_attributed_signals() -> list[UsageSignal]:
+        live_graph = gateway.graph
+        if live_graph is None:
+            return []
+        footprints = {
+            record.memory_id: tuple(record.metadata.get("footprint", ()))
+            for record in store.scan(scope)
+        }
+        attributor = FootprintAttributor(
+            live_graph,
+            live_graph.nodes_of_kind(scope, "module"),
+            repo_root=config.repo,
+            k_hop=config.k_hop,
+        )
+        events = (
+            list(read_event_log(logs / "retrieval.jsonl"))
+            if (logs / "retrieval.jsonl").exists()
+            else []
+        )
+        trajectory = (
+            list(read_trajectory_log(logs / "trajectory.jsonl"))
+            if (logs / "trajectory.jsonl").exists()
+            else []
+        )
+        signals = compute_attribution(events, trajectory, footprints, attributor)
+        attributed_log = logs / "usage_attributed.jsonl"
+        attributed_log.parent.mkdir(parents=True, exist_ok=True)
+        attributed_log.unlink(missing_ok=True)  # derived view: overwrite, never append (§14.1)
+        sink = JsonlUsageSink(attributed_log)
+        for signal in signals:
+            sink.emit(signal)
+        return signals
+
+    attributed_ref = AttributedSignalsRef()
+    if not config.investigate:
+        attributed_ref.refresh(_recompute_attributed_signals())
+    attribution_refresh = AttributionRefreshPass(
+        _recompute_attributed_signals, attributed_ref.refresh
+    )
+
+    # L-R1 step 2 — the usage rung's weights: distinct sessions each memory was recalled-AND-used in
+    # (the "reliably-useful core"). Reads the citation log + the in-memory attribution holder
+    # (fresh, no file round-trip). Seeded now attribution exists; empty for cold brain/investigate.
+    # Behavioral signal only (the firewall).
+    def _recompute_usage_weights() -> dict[MemoryId, float]:
+        events = list(read_event_log(logs / "retrieval.jsonl"))
+        signals = list(read_usage_log(logs / "usage.jsonl")) + list(attributed_ref.signals)
+        return {mid: float(n) for mid, n in reuse_by_memory(events, signals).items()}
+
+    if not config.investigate:
+        usage_ref.refresh(_recompute_usage_weights())
+    usage_refresh = UsageRefreshPass(_recompute_usage_weights, usage_ref.refresh)
+
     # Now the gateway holds the live graph + links (built inside for the in-memory shell, or the
     # Neo4j handles), recompute centrality over them: the memories are the scanned episodes (whose
     # footprints were linked), each weighted by the summed degree of the code nodes it cross-links
@@ -525,7 +598,16 @@ def build_serve_gateway(
         if corpora is not None and graph is not None and manifest is not None
         else None
     )
-    return gateway, store, episodes, supersession, rederive, usage_refresh, centrality_refresh
+    return (
+        gateway,
+        store,
+        episodes,
+        supersession,
+        rederive,
+        attribution_refresh,
+        usage_refresh,
+        centrality_refresh,
+    )
 
 
 def _source_newer_than_artifact(root: Path, include: tuple[str, ...], artifact: Path) -> bool:
@@ -767,6 +849,7 @@ def run_serve(config: ServeConfig) -> None:
         episodes,
         supersession,
         rederive,
+        attribution_refresh,
         usage_refresh,
         centrality_refresh,
     ) = build_serve_gateway(config, encoder=encoder)
@@ -837,6 +920,10 @@ def run_serve(config: ServeConfig) -> None:
                 # changed code becomes recallable without a restart — hash-gated, so a no-change
                 # tick is nearly free. Toggle with --structural-tick.
                 structural_rederive=rederive if config.structural_tick else None,
+                # Re-derive footprint usage attribution from the freshly-derived graph + the logs
+                # each cycle (before usage-refresh, which consumes it), so the primary Tier-1 signal
+                # never goes stale mid-serve — un-staling both the usage rung and the verdict.
+                attribution_refresh=attribution_refresh,
                 # Refresh the usage-weighted recall rung from accrued usage each cycle, so memories
                 # that keep proving useful rise without a restart (the relevance-credibility loop).
                 usage_refresh=usage_refresh,
@@ -850,10 +937,27 @@ def run_serve(config: ServeConfig) -> None:
             context_factory = make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo
             )
+
+        # Housekeeping phase (Track I): cap the unbounded append-only logs by rotating each to
+        # numbered archives once it exceeds log_max_bytes (the overwrite-bounded attributed log is
+        # exempt). Readers concatenate the segments, so retained history stays whole. None disables.
+        logs_dir = data_dir / ".thalamus" / "logs"
+        rotate_targets = [
+            logs_dir / "retrieval.jsonl",
+            logs_dir / "usage.jsonl",
+            logs_dir / "trajectory.jsonl",
+            dream_log_path(data_dir),
+        ]
+
+        def _rotate_logs() -> None:
+            for log_path in rotate_targets:
+                rotate_log(log_path, max_bytes=config.log_max_bytes, keep=config.log_keep)
+
         ticker = MaintenanceTicker(
             scheduler,
             context_factory,
             capture=capture,
+            housekeeping=_rotate_logs if config.log_max_bytes > 0 else None,
             interval_seconds=max(config.dream_tick_minutes, 0.0) * 60.0,
         )
 

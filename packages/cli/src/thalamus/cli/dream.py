@@ -51,6 +51,7 @@ def build_dream_scheduler(
     dream_log: DreamLog | None = None,
     credibility: DreamingPass | None = None,
     structural_rederive: DreamingPass | None = None,
+    attribution_refresh: DreamingPass | None = None,
     usage_refresh: DreamingPass | None = None,
     centrality_refresh: DreamingPass | None = None,
     cochange_refresh: DreamingPass | None = None,
@@ -62,10 +63,12 @@ def build_dream_scheduler(
     footprints, which must see the freshly-added module nodes. ``structural-refresh`` (actor)
     re-links episodes to current code modules — included only when the gateway exposes a structural
     graph + link index (Brain 2 present). ``link-resolution`` (actor) refreshes the gateway's
-    derived views (superseded frontier + staleness). ``usage-refresh`` / ``centrality-refresh``
-    (actors, when supplied) recompute the relevance-credibility recall rungs — the latter AFTER the
-    re-derive + re-link passes, so it reads the freshly-derived graph topology. ``credibility``
-    (actor, when supplied) assesses
+    derived views (superseded frontier + staleness). ``attribution-refresh`` (actor, when supplied)
+    re-derives the footprint usage attribution from the freshly-derived graph + the logs — it runs
+    AFTER re-derive/re-link (needs the current graph) and BEFORE ``usage-refresh`` (which consumes
+    the attribution). ``usage-refresh`` / ``centrality-refresh`` (actors, when supplied) recompute
+    the relevance-credibility recall rungs — the latter AFTER the re-derive + re-link passes, so it
+    reads the freshly-derived graph topology. ``credibility`` (actor, when supplied) assesses
     each curated memory's fate-based standing — after link-resolution (it reads the refreshed
     superseded frontier) and before the proposer. ``belief-audit`` (proposer) records propose-only
     supersession suggestions."""
@@ -75,6 +78,8 @@ def build_dream_scheduler(
     if gateway.graph is not None and gateway.links is not None:
         passes.append(StructuralRefreshPass(gateway.graph, gateway.links))
     passes.append(LinkResolutionPass(gateway.refresh))
+    if attribution_refresh is not None:  # re-derive footprint attribution before usage consumes it
+        passes.append(attribution_refresh)
     if usage_refresh is not None:  # refresh the usage-weighted recall rung from accrued usage
         passes.append(usage_refresh)
     # Refresh the structural-centrality rung from the freshly-derived graph + links — AFTER the
@@ -234,6 +239,7 @@ def run_dream(config: DreamConfig) -> None:
         _episodes,
         supersession,
         rederive,
+        attribution_refresh,
         usage_refresh,
         centrality_refresh,
     ) = build_serve_gateway(serve_config)
@@ -246,6 +252,7 @@ def run_dream(config: DreamConfig) -> None:
                 logs_dir=config.repo, code_repo=config.repo, supersession=supersession, scope=scope
             ),
             structural_rederive=rederive,
+            attribution_refresh=attribution_refresh,
             usage_refresh=usage_refresh,
             centrality_refresh=centrality_refresh,
         )

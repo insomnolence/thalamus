@@ -53,6 +53,29 @@ class UsageSignal:
     used: bool
 
 
+class AttributedSignalsRef:
+    """Single-slot, atomic-swap holder of the latest footprint-attribution signals.
+
+    Mirrors ``retrieval.UsageWeightsRef``/``structural.CoChangeRef``: the footprint usage signals
+    are a *re-derivable view* of the raw logs + the current code graph, so a long-running serve must
+    refresh them mid-flight (the ``AttributionRefreshPass`` recomputes and swaps them in each
+    maintenance tick) rather than read a file written once at startup. ``refresh`` replaces the slot
+    atomically under the GIL (a concurrent reader observes the old or new tuple whole, never a
+    partial); a consumer snapshots ``signals`` once per use. Holding the signals in memory lets the
+    live usage rung read fresh attribution without a file round-trip; the pass still writes the
+    derived log for the offline ``verdict``/``rung-eval`` tools."""
+
+    def __init__(self) -> None:
+        self._signals: tuple[UsageSignal, ...] = ()
+
+    @property
+    def signals(self) -> tuple[UsageSignal, ...]:
+        return self._signals
+
+    def refresh(self, signals: Sequence[UsageSignal]) -> None:
+        self._signals = tuple(signals)
+
+
 def attribute_overlap(
     event_id: EventId,
     shown: Sequence[tuple[MemoryId, str]],

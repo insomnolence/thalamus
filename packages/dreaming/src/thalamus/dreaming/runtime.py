@@ -51,20 +51,36 @@ class MaintenanceTicker:
         context_factory: Callable[[], PassContext] | None,
         *,
         capture: Callable[[], object] | None = None,
+        housekeeping: Callable[[], object] | None = None,
         interval_seconds: float,
     ) -> None:
         self._scheduler = scheduler
         self._context_factory = context_factory
         self._capture = capture
+        self._housekeeping = housekeeping
         self._interval = interval_seconds
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def run_once(self) -> CycleReport | None:
-        """Run one full cycle (perceive then consolidate) synchronously in the caller's thread."""
+        """Run one full cycle (housekeep, perceive, then consolidate) synchronously in-caller."""
+        self._run_housekeeping()
         self._run_capture()
         return self._run_dream()
+
+    def _run_housekeeping(self) -> None:
+        """The housekeeping phase — log rotation/retention. A sibling of capture (writes the file
+        system, not derived views), failure-isolated so a rotation hiccup never skips the cycle."""
+        if self._housekeeping is None:
+            return
+        try:
+            self._housekeeping()
+        except Exception as exc:  # housekeeping must never skip perceive/consolidate
+            print(
+                f"thalamus: housekeeping phase errored (will retry next tick): {exc}",
+                file=sys.stderr,
+            )
 
     def _run_capture(self) -> None:
         if self._capture is None:
@@ -113,9 +129,11 @@ class MaintenanceTicker:
             self._wake.clear()
             try:
                 if not triggered:
-                    # Periodic wake: perceive new commits first, so consolidation in this same
-                    # cycle links and scores what was just captured. A write-trigger skips this —
-                    # a remember didn't change the git history, only the views below.
+                    # Periodic wake: housekeep (rotate oversized logs), then perceive new commits,
+                    # so consolidation in this same cycle links and scores what was just captured.
+                    # A write-trigger skips both — a remember changed neither the logs' size nor the
+                    # git history, only the views refreshed below.
+                    self._run_housekeeping()
                     self._run_capture()
                 self._run_dream()
             except Exception as exc:  # never let the background thread die on a transient error
