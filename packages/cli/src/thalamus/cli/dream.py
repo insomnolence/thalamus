@@ -52,6 +52,7 @@ def build_dream_scheduler(
     credibility: DreamingPass | None = None,
     structural_rederive: DreamingPass | None = None,
     attribution_refresh: DreamingPass | None = None,
+    behavioral_consolidation: DreamingPass | None = None,
     usage_refresh: DreamingPass | None = None,
     centrality_refresh: DreamingPass | None = None,
     cochange_refresh: DreamingPass | None = None,
@@ -80,6 +81,8 @@ def build_dream_scheduler(
     passes.append(LinkResolutionPass(gateway.refresh))
     if attribution_refresh is not None:  # re-derive footprint attribution before usage consumes it
         passes.append(attribution_refresh)
+    if behavioral_consolidation is not None:  # fold the log WAL's usage into the brain (B)
+        passes.append(behavioral_consolidation)
     if usage_refresh is not None:  # refresh the usage-weighted recall rung from accrued usage
         passes.append(usage_refresh)
     # Refresh the structural-centrality rung from the freshly-derived graph + links — AFTER the
@@ -240,6 +243,7 @@ def run_dream(config: DreamConfig) -> None:
         supersession,
         rederive,
         attribution_refresh,
+        behavioral_consolidation,
         usage_refresh,
         centrality_refresh,
     ) = build_serve_gateway(serve_config)
@@ -253,6 +257,7 @@ def run_dream(config: DreamConfig) -> None:
             ),
             structural_rederive=rederive,
             attribution_refresh=attribution_refresh,
+            behavioral_consolidation=behavioral_consolidation,
             usage_refresh=usage_refresh,
             centrality_refresh=centrality_refresh,
         )

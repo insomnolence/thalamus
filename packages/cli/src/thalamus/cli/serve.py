@@ -56,6 +56,7 @@ from thalamus.core.types import (
 )
 from thalamus.dreaming import (
     AttributionRefreshPass,
+    BehavioralConsolidationPass,
     CentralityRefreshPass,
     CoChangeRefreshPass,
     JsonlDreamLog,
@@ -66,11 +67,14 @@ from thalamus.dreaming import (
     UsageRefreshPass,
 )
 from thalamus.experiential import (
+    BehavioralStore,
     FileCheckpoint,
     GitEpisodeIngestor,
+    InMemoryBehavioralStore,
+    Neo4jBehavioralStore,
     Neo4jSupersessionIndex,
     SessionStampingSource,
-    reuse_by_memory,
+    consolidate_usage,
 )
 from thalamus.gateway import Gateway, Planner
 from thalamus.gateway.http_security import build_security_middleware
@@ -389,6 +393,7 @@ def build_serve_gateway(
     SupersessionIndex | None,
     StructuralRederivePass | None,
     AttributionRefreshPass[UsageSignal],
+    BehavioralConsolidationPass,
     UsageRefreshPass,
     CentralityRefreshPass,
 ]:
@@ -415,6 +420,10 @@ def build_serve_gateway(
     doc_index_factory: Callable[[str], StructuralIndex] | None = None
     manifest: FileManifest | None = None
     supersession: SupersessionIndex | None = None
+    # The behavioral store (Track I / B): the brain's durable usage record the rung reads from,
+    # instead of recomputing weights from the log files each tick. Neo4j when the brain is durable;
+    # an empty in-memory store in investigate mode (no behavioral writes, no persisted-usage bias).
+    behavioral_store: BehavioralStore = InMemoryBehavioralStore()
     if store is None and config.neo4j_uri is not None:
         driver = connect(config.neo4j_uri, config.neo4j_user, config.neo4j_password or "")
         store = Neo4jStore(
@@ -437,6 +446,8 @@ def build_serve_gateway(
 
         manifest = Neo4jFileManifest(driver, scope)
         supersession = Neo4jSupersessionIndex(driver, scope)
+        if not config.investigate:  # investigate stays read-only — no behavioral schema/writes
+            behavioral_store = Neo4jBehavioralStore(driver, scope)
     elif store is None:
         store = build_store(
             dim=encoder.dim, neo4j_uri=None, neo4j_user=config.neo4j_user,
@@ -561,14 +572,24 @@ def build_serve_gateway(
         _recompute_attributed_signals, attributed_ref.refresh
     )
 
-    # L-R1 step 2 — the usage rung's weights: distinct sessions each memory was recalled-AND-used in
-    # (the "reliably-useful core"). Reads the citation log + the in-memory attribution holder
-    # (fresh, no file round-trip). Seeded now attribution exists; empty for cold brain/investigate.
-    # Behavioral signal only (the firewall).
-    def _recompute_usage_weights() -> dict[MemoryId, float]:
+    # L-R1 step 2 — CONSOLIDATE behavioral usage into the brain (Track I / B): fold the citation
+    # the fresh in-memory attribution into the durable behavioral store (idempotent set-union). This
+    # is what makes the brain — not a file scan — the system of record for usage: the store
+    # accumulates, so a restart keeps prior signal even after rotation drops old log segments.
+    def _consolidate_behavioral() -> int:
         events = list(read_event_log(logs / "retrieval.jsonl"))
         signals = list(read_usage_log(logs / "usage.jsonl")) + list(attributed_ref.signals)
-        return {mid: float(n) for mid, n in reuse_by_memory(events, signals).items()}
+        return consolidate_usage(behavioral_store, events, signals)
+
+    if not config.investigate:
+        _consolidate_behavioral()
+    behavioral_consolidation = BehavioralConsolidationPass(_consolidate_behavioral)
+
+    # L-R1 step 3 — the usage rung's weights, now read FROM THE BRAIN (the consolidated behavioral
+    # store) rather than recomputed from the log files each tick. Distinct used-sessions per memory
+    # — the "reliably-useful core". Empty for a cold brain / investigate. Behavioral (firewall).
+    def _recompute_usage_weights() -> dict[MemoryId, float]:
+        return dict(behavioral_store.usage_weights())
 
     if not config.investigate:
         usage_ref.refresh(_recompute_usage_weights())
@@ -605,6 +626,7 @@ def build_serve_gateway(
         supersession,
         rederive,
         attribution_refresh,
+        behavioral_consolidation,
         usage_refresh,
         centrality_refresh,
     )
@@ -850,6 +872,7 @@ def run_serve(config: ServeConfig) -> None:
         supersession,
         rederive,
         attribution_refresh,
+        behavioral_consolidation,
         usage_refresh,
         centrality_refresh,
     ) = build_serve_gateway(config, encoder=encoder)
@@ -924,6 +947,9 @@ def run_serve(config: ServeConfig) -> None:
                 # each cycle (before usage-refresh, which consumes it), so the primary Tier-1 signal
                 # never goes stale mid-serve — un-staling both the usage rung and the verdict.
                 attribution_refresh=attribution_refresh,
+                # Consolidate the log WAL's behavioral usage into the brain each cycle (after
+                # attribution, before usage-refresh reads it) — the brain accumulates its own usage.
+                behavioral_consolidation=behavioral_consolidation,
                 # Refresh the usage-weighted recall rung from accrued usage each cycle, so memories
                 # that keep proving useful rise without a restart (the relevance-credibility loop).
                 usage_refresh=usage_refresh,

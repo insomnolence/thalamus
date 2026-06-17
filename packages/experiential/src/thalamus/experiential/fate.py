@@ -192,12 +192,16 @@ def compute_fate(
     }
 
 
-def reuse_by_memory(
+def usage_sessions_by_memory(
     events: Iterable[RetrievalEvent], signals: Iterable[UsageSignal]
-) -> dict[MemoryId, int]:
-    """Count the distinct later sessions in which each memory was recalled **and used** — the
-    recurring-usefulness fate signal. Joins each ``used`` usage signal to its recall event's
-    session (an unkeyed event is skipped). Pure."""
+) -> dict[MemoryId, set[SessionId]]:
+    """The distinct sessions each memory was recalled **and used** in — the raw session *sets*
+    behind :func:`reuse_by_memory`'s counts. Joins each ``used`` usage signal to its recall event's
+    session (an unkeyed event is skipped). Pure.
+
+    This is the incremental unit the behavioral store accumulates (Track I / Architecture B): a set
+    of session ids unions idempotently, so folding the same log entries twice — or re-consolidating
+    a log subset after old segments are dropped — never double-counts and never loses signal."""
     session_of: dict[EventId, SessionId] = {
         event.event_id: event.session_id for event in events if event.session_id is not None
     }
@@ -208,7 +212,19 @@ def reuse_by_memory(
         session = session_of.get(signal.event_id)
         if session is not None:
             sessions.setdefault(signal.memory_id, set()).add(session)
-    return {memory_id: len(found) for memory_id, found in sessions.items()}
+    return sessions
+
+
+def reuse_by_memory(
+    events: Iterable[RetrievalEvent], signals: Iterable[UsageSignal]
+) -> dict[MemoryId, int]:
+    """Count the distinct later sessions in which each memory was recalled **and used** — the
+    recurring-usefulness fate signal (the distinct-session counts of
+    :func:`usage_sessions_by_memory`). Pure."""
+    return {
+        memory_id: len(found)
+        for memory_id, found in usage_sessions_by_memory(events, signals).items()
+    }
 
 
 def build_fate_context(

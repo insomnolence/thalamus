@@ -6,6 +6,11 @@ materializes them as Brain-1 records — the unfinished half of §10 step 1
 (§13.18) and the derived why-view (§13.17) build on this foundation.
 """
 
+from thalamus.experiential.behavioral import (
+    BehavioralStore,
+    InMemoryBehavioralStore,
+    consolidate_usage,
+)
 from thalamus.experiential.episode import EpisodeBuilder, WhyComponent, WhyProvenance
 from thalamus.experiential.fate import (
     FateContext,
@@ -19,6 +24,7 @@ from thalamus.experiential.fate import (
     fate_signals_for,
     fate_success,
     reuse_by_memory,
+    usage_sessions_by_memory,
 )
 from thalamus.experiential.ingest import ingest_episodes
 from thalamus.experiential.labeler import (
@@ -27,6 +33,7 @@ from thalamus.experiential.labeler import (
     OutcomeLabeler,
     region_fate,
 )
+from thalamus.experiential.neo4j_behavioral import Neo4jBehavioralStore
 from thalamus.experiential.neo4j_supersession import Neo4jSupersessionIndex
 from thalamus.experiential.outcome import EpisodeOutcome, classify_outcome, is_success
 from thalamus.experiential.segmentation import (
@@ -46,6 +53,7 @@ from thalamus.experiential.sync import (
 )
 
 __all__ = [
+    "BehavioralStore",
     "Checkpoint",
     "CommitBoundedSegmenter",
     "CommitSource",
@@ -61,8 +69,10 @@ __all__ = [
     "FileCheckpoint",
     "GitEpisodeIngestor",
     "GitSurvivalLabeler",
+    "InMemoryBehavioralStore",
     "InMemoryCheckpoint",
     "InMemorySupersessionIndex",
+    "Neo4jBehavioralStore",
     "Neo4jSupersessionIndex",
     "OutcomeLabeler",
     "OutcomeTier",
@@ -74,10 +84,12 @@ __all__ = [
     "build_fate_context",
     "classify_outcome",
     "compute_fate",
+    "consolidate_usage",
     "fate_signals_for",
     "fate_success",
     "ingest_episodes",
     "is_success",
     "region_fate",
     "reuse_by_memory",
+    "usage_sessions_by_memory",
 ]
