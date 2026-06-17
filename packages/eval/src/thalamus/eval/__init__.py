@@ -16,7 +16,7 @@ The L2 task outcomes and the L3 brain-on/off verdict arrive once outcome capture
 an actuator are wired in.
 """
 
-from thalamus.eval.benchmark import BenchmarkCase, load_cases
+from thalamus.eval.benchmark import BenchmarkCase, cases_from_usage, load_cases
 from thalamus.eval.harness import EvalReport, NullRetriever, compare, evaluate
 from thalamus.eval.impact import (
     BlastRadiusOracle,
@@ -75,6 +75,7 @@ __all__ = [
     "TranscriptProbe",
     "UsageStabilityReport",
     "UtilityReport",
+    "cases_from_usage",
     "compare",
     "compare_probes",
     "default_transcripts_dir",

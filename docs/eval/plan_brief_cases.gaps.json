@@ -1,0 +1,17 @@
+[
+  {
+    "name": "control-planner-fix (predict HIT — memory is linked to planner.py)",
+    "target": "_compute_radius",
+    "expect_memory_id": "retained:0d382ca086df6147"
+  },
+  {
+    "name": "cochange-bug (predict MISS — the co-change gotcha lives in cochange.py, not planner.py)",
+    "target": "_add_cochange",
+    "expect_memory_id": "retained:af9d359f7f4e8f3c"
+  },
+  {
+    "name": "cochange-refresh (predict MISS — CoChangeRefreshPass memory lives in dreaming/)",
+    "target": "_add_cochange",
+    "expect_memory_id": "retained:c2465c1455c4a129"
+  }
+]

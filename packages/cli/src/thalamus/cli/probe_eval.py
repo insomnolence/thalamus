@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from thalamus.cli.brain import build_store, close_store
+from thalamus.cli.rung_arms import compose_rung_arms
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Retriever, Store
 from thalamus.core.types import (
@@ -39,7 +40,6 @@ from thalamus.core.types import (
 if TYPE_CHECKING:
     from neo4j import Driver
 from thalamus.eval import (
-    NullRetriever,
     ProbeReport,
     TranscriptProbe,
     compare_probes,
@@ -48,11 +48,14 @@ from thalamus.eval import (
     find_transcripts,
 )
 from thalamus.experiential import Neo4jSupersessionIndex, reuse_by_memory
-from thalamus.gateway import SupersededDemotingRetriever
 from thalamus.instrumentation import read_event_log, read_usage_log
-from thalamus.retrieval import L0Retriever, UsageWeightedRetriever, UsageWeightsRef
+from thalamus.retrieval import (
+    CentralityWeightsRef,
+    L0Retriever,
+)
 from thalamus.routing import BgeEncoder, DeterministicEncoder
 from thalamus.store import Neo4jStore, connect
+from thalamus.structural import memory_centrality
 
 _DEFAULT_DIM = 128
 _DEFAULT_ENCODER = "bge-small"
@@ -68,6 +71,7 @@ class ProbeEvalConfig:
     k: int
     threshold: float
     max_probes: int  # 0 = no cap
+    rungs: bool  # also ablate the Brain-2-signal relevance rungs (structrel / centrality / full)
     transcripts_dir: Path | None  # None = default for this repo
     neo4j_uri: str | None
     neo4j_user: str
@@ -113,6 +117,11 @@ def add_probe_eval_arguments(parser: argparse.ArgumentParser) -> None:
         "--transcripts-dir", type=Path, default=None,
         help="override the transcripts directory (default: ~/.claude/projects/<sanitized-cwd>)",
     )
+    parser.add_argument(
+        "--rungs", action="store_true",
+        help="also ablate the Brain-2-signal relevance rungs (+structrel/+central/+full); "
+        "needs Neo4j (builds Brain 2) — shows each rung's marginal lift over brain-on",
+    )
 
 
 def probe_eval_config(args: argparse.Namespace) -> ProbeEvalConfig:
@@ -126,6 +135,7 @@ def probe_eval_config(args: argparse.Namespace) -> ProbeEvalConfig:
         k=int(args.k),
         threshold=float(args.threshold),
         max_probes=int(args.max_probes),
+        rungs=bool(args.rungs),
         transcripts_dir=Path(args.transcripts_dir) if args.transcripts_dir else None,
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
         neo4j_user=os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
@@ -180,6 +190,13 @@ def _render(report: ProbeEvalReport) -> str:
     return "\n".join(lines)
 
 
+def _encoder(config: ProbeEvalConfig) -> Encoder:
+    """The embedding model for the eval — BGE (real) or deterministic (offline smoke)."""
+    if config.encoder == "bge-small":
+        return BgeEncoder("BAAI/bge-small-en-v1.5")
+    return DeterministicEncoder(dim=config.dim)
+
+
 def _build_brain_on(
     config: ProbeEvalConfig, scope: Scope
 ) -> tuple[Retriever, Mapping[MemoryRef, Supersession], Store, Driver | None]:
@@ -188,11 +205,7 @@ def _build_brain_on(
     Returns (L0 base, superseded_map, store, driver_or_None) so the caller can compose the
     ablation variants over the *same* store and close them. The supersession-demoting view is
     applied by the caller so the eval reflects current truth (§13.18 R1)."""
-    encoder: Encoder = (
-        BgeEncoder("BAAI/bge-small-en-v1.5")
-        if config.encoder == "bge-small"
-        else DeterministicEncoder(dim=config.dim)
-    )
+    encoder = _encoder(config)
     superseded_map: dict[MemoryRef, Supersession] = {}
     driver: Driver | None = None
     if config.neo4j_uri is not None:
@@ -233,25 +246,79 @@ def run_probe_eval(config: ProbeEvalConfig) -> ProbeEvalReport:
     if not probes:
         raise ThalamusError(f"no substantive probes extracted from {len(transcripts)} transcripts")
 
-    base, superseded_map, store, driver = _build_brain_on(config, scope)
-    try:
-        retrievers: dict[str, Retriever] = {
-            "brain-off": NullRetriever(),
-            "brain-on": SupersededDemotingRetriever(base, superseded_map),
-        }
-        # The L-R1 usage rung as an ablation arm: if mean relevance holds vs brain-on, usage
-        # re-ranks within the relevance band without trading it away (the regression guard).
-        usage_weights = _usage_weights(config)
-        if usage_weights:
-            retrievers["brain-on+usage"] = SupersededDemotingRetriever(
-                UsageWeightedRetriever(base, UsageWeightsRef(usage_weights)), superseded_map
+    usage_weights = _usage_weights(config)
+    if config.rungs:
+        report = _run_with_rungs(config, scope, probes, usage_weights)
+    else:
+        base, superseded_map, store, driver = _build_brain_on(config, scope)
+        try:
+            retrievers = compose_rung_arms(
+                base, superseded_map, usage_weights=usage_weights
             )
-        report = compute_probe_eval(
-            probes, retrievers, scope=scope, k=config.k, threshold=config.threshold
+            report = compute_probe_eval(
+                probes, retrievers, scope=scope, k=config.k, threshold=config.threshold
+            )
+        finally:
+            close_store(store)
+            if driver is not None:
+                driver.close()
+    print(_render(report))
+    return report
+
+
+def _run_with_rungs(
+    config: ProbeEvalConfig,
+    scope: Scope,
+    probes: Sequence[TranscriptProbe],
+    usage_weights: Mapping[MemoryId, float],
+) -> ProbeEvalReport:
+    """Ablate the Brain-2-signal rungs over the probe corpus: +structrel, +central, and the full
+    stack, each a marginal arm over brain-on. Needs Brain 2, so it builds the full gateway (reusing
+    its graph / links / structural retrievers) and composes each rung over the same L0 base.
+
+    The structural rungs re-rank *experiential* candidates by Brain-2 signal (cross-link relevance
+    / centrality) — firewall-clean, never grading prose — so this stays a recall-quality question,
+    just structure-informed. No graph (experiential-only) raises rather than dropping arms."""
+    # Lazy import: serve pulls heavy optional wiring; keep the CLI light until --rungs is used.
+    from thalamus.cli.serve import ServeConfig, build_serve_gateway
+
+    encoder = _encoder(config)
+    serve_config = ServeConfig(
+        repo=config.repo, tenant=config.tenant, repo_id=config.repo_id, dim=config.dim,
+        encoder=config.encoder, k=config.k, k_hop=1, resolve_calls=True,
+        structural_min_relevance=0.6, max_structural_items=12, max_memory_chars=1000,
+        neo4j_uri=config.neo4j_uri, neo4j_user=config.neo4j_user,
+        neo4j_password=config.neo4j_password, session=False,
+    )
+    gateway, store, *_rest = build_serve_gateway(serve_config, encoder=encoder)
+    try:
+        graph, links = gateway.graph, gateway.links
+        if graph is None or links is None:
+            raise ThalamusError("--rungs needs a Brain-2 graph (Neo4j); none was built")
+        structural_retrievers = gateway.structural_retrievers
+        base = L0Retriever(encoder, store)
+        superseded = _superseded(config, scope)
+        centrality = CentralityWeightsRef(
+            memory_centrality([record.ref for record in store.scan(scope)], graph, links)
+        )
+
+        arms = compose_rung_arms(
+            base, superseded, usage_weights=usage_weights,
+            links=links, structural_retrievers=structural_retrievers, centrality=centrality,
+        )
+        return compute_probe_eval(
+            probes, arms, scope=scope, k=config.k, threshold=config.threshold
         )
     finally:
         close_store(store)
-        if driver is not None:
-            driver.close()
-    print(_render(report))
-    return report
+
+
+def _superseded(config: ProbeEvalConfig, scope: Scope) -> Mapping[MemoryRef, Supersession]:
+    """The current superseded frontier from durable state (empty without Neo4j)."""
+    if config.neo4j_uri is None:
+        return {}
+    driver = connect(config.neo4j_uri, config.neo4j_user, config.neo4j_password or "")
+    try:
+        return dict(Neo4jSupersessionIndex(driver, scope).superseded(scope))
+    finally:
+        driver.close()

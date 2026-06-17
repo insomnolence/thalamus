@@ -247,7 +247,10 @@ def build_two_hemisphere_gateway(
     usage_weights: UsageWeightsRef | None = None,
     structural_centrality: bool = True,
     centrality_weights: CentralityWeightsRef | None = None,
-    structural_relevance: bool = True,
+    # Off by default: the rung-eval utility-join (2026-06-17) found the query-local structural
+    # relevance rung earns ~nothing on both the dogfood and dollhouse brains. Kept behind the flag
+    # (removable layer, §14) for a future rework, not wired into the live chain.
+    structural_relevance: bool = False,
     max_structural_items: int = 12,
     max_memory_chars: int = 1000,
     event_sink: EventSink | None = None,
@@ -362,6 +365,10 @@ def build_two_hemisphere_gateway(
     # useful core"), re-ranking within the relevance pool. Behavioral signal only (the firewall).
     # Reads a refreshable holder (empty → identity for a cold brain; the dreaming UsageRefreshPass
     # swaps in fresh weights mid-serve as usage accrues).
+    # Verdict (rung-eval utility-join, de-leaked, 2026-06-17): a strong MRR win but a recall@k
+    # tradeoff (over-promotes used-but-unpopular
+    # memories) — big on dogfood (process-heavy), a wash on dollhouse (code-rich). Applied INNER
+    # (centrality leads); disable via usage_weighting where recall matters more than the top hit.
     if usage_weighting and usage_weights is not None:
         base = UsageWeightedRetriever(base, usage_weights)
         policy += "+usage"
@@ -370,7 +377,8 @@ def build_two_hemisphere_gateway(
     # to the code graph" relevance-credibility signal, the sibling of the usage rung. Re-ranks in
     # the relevance pool; firewall-clean (graph topology only, never the memory's prose). Reads a
     # refreshable holder (empty → identity for a cold/linkless brain; a dreaming pass swaps in fresh
-    # weights as Brain 2 + links re-derive mid-serve).
+    # weights as Brain 2 + links re-derive mid-serve). Verdict (2026-06-17): the clean winner —
+    # lifts recall AND MRR on both brains, no tradeoff — so it's applied OUTERMOST to lead the rank.
     if structural_centrality and centrality_weights is not None:
         base = StructuralCentralityRetriever(base, centrality_weights)
         policy += "+central"

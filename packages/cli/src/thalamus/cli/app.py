@@ -30,9 +30,15 @@ from thalamus.cli.impact_eval import (
     impact_eval_config,
     run_impact_eval,
 )
+from thalamus.cli.plan_brief_eval import (
+    add_plan_brief_eval_arguments,
+    plan_brief_eval_config,
+    run_plan_brief_eval,
+)
 from thalamus.cli.probe_eval import add_probe_eval_arguments, probe_eval_config, run_probe_eval
 from thalamus.cli.project import find_project_config, load_project_config
 from thalamus.cli.remember import add_remember_arguments, remember_config, run_remember
+from thalamus.cli.rung_eval import add_rung_eval_arguments, run_rung_eval, rung_eval_config
 from thalamus.cli.serve import add_serve_arguments, run_serve, serve_config
 from thalamus.cli.test_capture import add_test_arguments, run_test_capture, test_config
 from thalamus.cli.verdict import add_verdict_arguments, run_verdict, verdict_config
@@ -108,6 +114,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "impact-eval", help="git-derived blast-radius recall for the plan tool"
     )
     add_impact_eval_arguments(parsers["impact-eval"])
+    parsers["plan-brief-eval"] = sub.add_parser(
+        "plan-brief-eval", help="gotcha-case recall for the plan tool's gather (M-2)"
+    )
+    add_plan_brief_eval_arguments(parsers["plan-brief-eval"])
+    parsers["rung-eval"] = sub.add_parser(
+        "rung-eval", help="utility-join ablation: do the rungs rank the actually-used memory higher"
+    )
+    add_rung_eval_arguments(parsers["rung-eval"])
     parsers["dream"] = sub.add_parser(
         "dream", help="run one dreaming cycle (refresh views + audit beliefs)"
     )
@@ -152,6 +166,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_probe_eval(probe_eval_config(args))
     elif args.command == "impact-eval":
         run_impact_eval(impact_eval_config(args))
+    elif args.command == "plan-brief-eval":
+        run_plan_brief_eval(plan_brief_eval_config(args))
+    elif args.command == "rung-eval":
+        run_rung_eval(rung_eval_config(args))
     elif args.command == "dream":
         run_dream(dream_config(args))
     return 0

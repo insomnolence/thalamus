@@ -1,0 +1,17 @@
+[
+  {
+    "name": "planner-gather-blindness",
+    "target": "_compute_radius",
+    "expect_text": "STRUCTURALLY BLIND"
+  },
+  {
+    "name": "planner-refined-design",
+    "target": "_blast_radius",
+    "expect_text": "REFINED DESIGN"
+  },
+  {
+    "name": "cochange-feature",
+    "target": "_add_cochange",
+    "expect_text": "co-change"
+  }
+]
