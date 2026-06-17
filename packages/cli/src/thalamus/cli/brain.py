@@ -40,6 +40,7 @@ from thalamus.gateway import (
 from thalamus.instrumentation import EventSink, LoggingRetriever, UsageSink
 from thalamus.retrieval import (
     CentralityWeightsRef,
+    ExploringRetriever,
     HybridRetriever,
     L0Retriever,
     LexicalRetriever,
@@ -255,6 +256,8 @@ def build_two_hemisphere_gateway(
     max_memory_chars: int = 1000,
     event_sink: EventSink | None = None,
     usage_sink: UsageSink | None = None,
+    explore_epsilon: float = 0.0,
+    explore_pool: int = 20,
 ) -> Gateway:
     """Re-derive Brain 2 + cross-links from ``repo`` and return a two-hemisphere gateway.
 
@@ -390,6 +393,13 @@ def build_two_hemisphere_gateway(
         policy += "+structrel"
     retriever: Retriever = StructuralLinkedRetriever(base, store, graph, links, k_hop=k_hop)
     retriever = SupersededDemotingRetriever(retriever, views=views_ref)
+    # Calibrated exploration (R-7): serve a stochastic shown-set with a known, logged propensity so
+    # off-policy evaluation has common support later. Off by default (ε=0 ⇒ deterministic top-k,
+    # propensity 1.0) — only an operator opting in (--explore-epsilon) perturbs live serving. Sits
+    # just inside the logger so the explored shown set + propensities are what gets recorded.
+    if explore_epsilon > 0.0:
+        retriever = ExploringRetriever(retriever, epsilon=explore_epsilon, pool=explore_pool)
+        policy += "+explore"
     if event_sink is not None:
         retriever = LoggingRetriever(
             retriever, event_sink, policy_id=f"{policy}+structural+supersession"

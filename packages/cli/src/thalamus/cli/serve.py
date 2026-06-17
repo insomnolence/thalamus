@@ -177,6 +177,12 @@ class ServeConfig:
     # until Architecture B makes raw logs disposable. Default ~64 MiB × 8 ≈ 0.5 GiB/log ceiling.
     log_max_bytes: int = 64 * 1024 * 1024
     log_keep: int = 8
+    # Calibrated exploration (R-7): with probability explore_epsilon, serve a random k-subset of
+    # the top explore_pool candidates instead of the deterministic top-k, and LOG the realized
+    # propensity — so off-policy eval (IPS) has common support later. 0.0 = off (deterministic,
+    # prop 1.0); live recall is unchanged until an operator opts in. Keep small (e.g. 0.05–0.1).
+    explore_epsilon: float = 0.0
+    explore_pool: int = 20
     # Extra doc roots ingested as their own labeled corpora (e.g. a design-docs dir outside the
     # code root). Empty = the single default docs corpus over --repo.
     doc_roots: tuple[Path, ...] = ()
@@ -222,6 +228,15 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--log-keep", type=int, default=8,
         help="number of rotated archive segments to retain per log (older ones dropped)",
+    )
+    parser.add_argument(
+        "--explore-epsilon", type=float, default=0.0,
+        help="calibrated exploration (R-7): probability of serving a random k-subset of the top "
+        "--explore-pool candidates with a logged propensity (0 = off; keep small, e.g. 0.05)",
+    )
+    parser.add_argument(
+        "--explore-pool", type=int, default=20,
+        help="candidate pool size to explore within when --explore-epsilon > 0",
     )
     parser.add_argument(
         "--code-language", choices=("python", "typescript"), default="python",
@@ -351,6 +366,8 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         plan_cochange_commits=int(args.plan_cochange_commits),
         log_max_bytes=int(args.log_max_bytes),
         log_keep=int(args.log_keep),
+        explore_epsilon=float(args.explore_epsilon),
+        explore_pool=int(args.explore_pool),
         doc_roots=tuple(Path(d).resolve() for d in (args.doc_roots or ())),
         investigate=bool(args.investigate),
         data_dir=Path(args.data_dir).resolve() if args.data_dir else None,
@@ -521,6 +538,9 @@ def build_serve_gateway(
         # into its own logs (that would contaminate the verdict it is being used to check).
         event_sink=None if config.investigate else JsonlEventSink(logs / "retrieval.jsonl"),
         usage_sink=None if config.investigate else JsonlUsageSink(logs / "usage.jsonl"),
+        # Calibrated exploration (R-7): off in investigate (must not perturb the inspected brain).
+        explore_epsilon=0.0 if config.investigate else config.explore_epsilon,
+        explore_pool=config.explore_pool,
     )
     # L-R1 step 1 — footprint usage ATTRIBUTION (the primary, deterministic Tier-1 signal): which
     # surfaced memories a session's *committed work* drew on. A re-derivable view of the recall +

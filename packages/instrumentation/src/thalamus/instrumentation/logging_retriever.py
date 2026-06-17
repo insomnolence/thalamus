@@ -72,10 +72,14 @@ class LoggingRetriever:
             CandidateLog(memory_id=item.record.memory_id, features=dict(item.features))
             for item in result.candidates
         ]
-        # Deterministic top-k: every shown item has propensity 1.0. Stochastic
-        # rungs will surface real propensities (a future RetrievalResult field).
+        # The selection propensity is carried in the shown item's decision-time features by a
+        # stochastic rung (ExploringRetriever, R-7); absent it (deterministic top-k) it is 1.0.
         shown = [
-            ShownItem(memory_id=item.record.memory_id, rank=rank, propensity=1.0)
+            ShownItem(
+                memory_id=item.record.memory_id,
+                rank=rank,
+                propensity=float(item.features.get("propensity", 1.0)),
+            )
             for rank, item in enumerate(result.shown)
         ]
         return RetrievalEvent(
