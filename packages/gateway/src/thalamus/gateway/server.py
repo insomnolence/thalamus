@@ -97,6 +97,18 @@ def build_server(
         ) from exc
 
     server = FastMCP(name)
+
+    # A tiny liveness route. The HTTP serve registers only the MCP endpoint (/mcp), so every other
+    # path 404s — a health probe or LAN scanner hitting GET /health is the most common source of
+    # that 404 log noise. Return 200 with no brain state and no auth (pure liveness), so the common
+    # legitimate probe stops 404ing. Only mounted for the HTTP transport; harmless under stdio.
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response
+
+    @server.custom_route("/health", methods=["GET"])
+    async def health(_request: Request) -> Response:
+        return JSONResponse({"status": "ok"})
+
     pending: dict[EventId, ContextPayload] = {}
     max_pending = 1000
 

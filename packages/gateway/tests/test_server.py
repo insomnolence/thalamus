@@ -48,6 +48,14 @@ def _gateway() -> Gateway:
     return Gateway(L0Retriever(encoder, store, now=lambda: NOW), k=3)
 
 
+def test_health_route_is_registered_for_liveness_probes() -> None:
+    # The HTTP serve mounts only /mcp, so any other path 404s; a GET /health → 200 liveness route
+    # keeps health probes / scanners from generating that 404 noise.
+    server = build_server(_gateway(), SCOPE)
+    paths = {getattr(route, "path", None) for route in server._additional_http_routes}
+    assert "/health" in paths
+
+
 async def test_recall_tool_returns_context_over_mcp() -> None:
     from fastmcp import Client
 
