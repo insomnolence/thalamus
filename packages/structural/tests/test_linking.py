@@ -3,9 +3,25 @@ from __future__ import annotations
 from pathlib import Path
 
 from thalamus.core.types import MemoryId, MemoryRef, RepoId, Scope, TenantId
-from thalamus.structural import InMemoryCrossLinkIndex, PythonAstIngestor, link_by_footprint
+from thalamus.structural import (
+    InMemoryCrossLinkIndex,
+    PythonAstIngestor,
+    footprint_from_metadata,
+    link_by_footprint,
+)
 
 SCOPE = Scope(TenantId("t"), RepoId("r"))
+
+
+def test_footprint_from_metadata_pairs_files_with_their_lines() -> None:
+    md = {"footprint": ["a.py", "b.py"], "footprint_lines": {"a.py": [3, 4]}}
+    # a.py carries line data → a (file, lines) entry (symbol-level); b.py has none → bare path.
+    assert footprint_from_metadata(md) == (("a.py", [3, 4]), "b.py")
+
+
+def test_footprint_from_metadata_without_lines_is_files_only() -> None:
+    assert footprint_from_metadata({"footprint": ["x.py"]}) == ("x.py",)
+    assert footprint_from_metadata({}) == ()
 
 
 def _write(repo: Path, rel: str, src: str) -> None:

@@ -21,9 +21,41 @@ from thalamus.instrumentation.trajectory import TrajectoryEvent, TrajectoryEvent
 
 _UNIT = "\x1f"  # ASCII unit separator — safe field delimiter for git --format
 
+# A unified-diff hunk header: ``@@ -old[,n] +new[,m] @@`` — we want the new-side start + count.
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
 
 def _uuid_event_id() -> EventId:
     return EventId(uuid.uuid4().hex)
+
+
+def _parse_changed_lines(diff_text: str) -> dict[str, list[int]]:
+    """New-side changed line numbers per file, parsed from a ``--unified=0`` diff (C-8).
+
+    Reads ``+++ b/<path>`` file headers and ``@@ … +start[,count] @@`` hunk headers; a hunk with
+    count 0 (a pure deletion) contributes no new-side lines, and ``+++ /dev/null`` (a deleted file)
+    contributes none either. The line ranges let a memory's footprint link to the *symbol* it
+    touched, not just the file (C-7). Pure and tolerant of odd/empty diffs."""
+    lines_by_file: dict[str, list[int]] = {}
+    current: str | None = None
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            target = line[4:].strip()
+            if target == "/dev/null":
+                current = None
+            else:
+                current = target[2:] if target[:2] in ("a/", "b/") else target
+            continue
+        if current is None:
+            continue
+        match = _HUNK_RE.match(line)
+        if match is None:
+            continue
+        start = int(match.group(1))
+        count = int(match.group(2)) if match.group(2) is not None else 1
+        if count > 0:
+            lines_by_file.setdefault(current, []).extend(range(start, start + count))
+    return {path: sorted(set(nums)) for path, nums in lines_by_file.items() if nums}
 
 
 class GitObserver:
@@ -79,13 +111,24 @@ class GitObserver:
                 ).splitlines()
                 if name
             ]
+            # C-8: per-file changed line ranges (additive) so a footprint can link to the symbol it
+            # touched, not just the file. A second diff with zero context — files without parseable
+            # hunks (binary, pure rename) simply carry no lines and fall back to module linking.
+            file_lines = _parse_changed_lines(
+                self._git("diff-tree", "--no-commit-id", "-r", "--root", "--unified=0", sha)
+            )
             events.append(
                 TrajectoryEvent(
                     event_id=self._event_id_factory(),
                     timestamp=datetime.fromtimestamp(int(committed_at), tz=UTC),
                     scope=self._scope,
                     kind=TrajectoryEventKind.COMMIT,
-                    payload={"sha": sha, "subject": subject, "files": files},
+                    payload={
+                        "sha": sha,
+                        "subject": subject,
+                        "files": files,
+                        "file_lines": file_lines,
+                    },
                 )
             )
         return events

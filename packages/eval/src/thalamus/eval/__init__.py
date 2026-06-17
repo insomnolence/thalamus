@@ -27,6 +27,15 @@ from thalamus.eval.impact import (
     parse_changed_lines,
 )
 from thalamus.eval.metrics import hit_at_k, precision_at_k, recall_at_k, reciprocal_rank
+from thalamus.eval.plan_brief import (
+    BriefCaseResult,
+    BriefEvalReport,
+    GotchaCase,
+    PlanBriefView,
+    evaluate_plan_briefs,
+    score_case,
+    view_from_brief,
+)
 from thalamus.eval.probe import (
     ProbeOutcome,
     ProbeReport,
@@ -52,7 +61,11 @@ from thalamus.eval.utility import UtilityReport, utility_at_k
 __all__ = [
     "BenchmarkCase",
     "BlastRadiusOracle",
+    "BriefCaseResult",
+    "BriefEvalReport",
     "EvalReport",
+    "GotchaCase",
+    "PlanBriefView",
     "ImpactPair",
     "ImpactReport",
     "NullRetriever",
@@ -67,6 +80,7 @@ __all__ = [
     "default_transcripts_dir",
     "evaluate",
     "evaluate_impact",
+    "evaluate_plan_briefs",
     "evaluate_probes",
     "extract_probes",
     "find_transcripts",
@@ -79,8 +93,10 @@ __all__ = [
     "proxy_truth",
     "recall_at_k",
     "reciprocal_rank",
+    "score_case",
     "session_proxy_truth",
     "session_utility",
     "usage_stability",
     "utility_at_k",
+    "view_from_brief",
 ]

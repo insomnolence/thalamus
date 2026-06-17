@@ -63,6 +63,7 @@ from thalamus.structural.ingestor import Ingestor
 from thalamus.structural.jedi_calls import JediCallIngestor
 from thalamus.structural.linking import (
     FootprintFile,
+    footprint_from_metadata,
     footprint_staleness,
     link_by_footprint,
     module_index,
@@ -151,6 +152,7 @@ __all__ = [
     "code_files",
     "default_annotation_location",
     "glob_files",
+    "footprint_from_metadata",
     "footprint_staleness",
     "findings_files",
     "incremental_ingest",

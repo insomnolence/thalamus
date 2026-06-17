@@ -59,6 +59,31 @@ def test_commit_span_becomes_episode_with_tagged_why() -> None:
     assert "aiosqlite" in record.content and "store.py" in record.content
 
 
+def test_footprint_lines_merge_across_commits() -> None:
+    # C-8: per-file changed line numbers from each commit's payload merge into footprint_lines.
+    c1 = TrajectoryEvent(
+        EventId("e1"), _at(10), SCOPE, TrajectoryEventKind.COMMIT,
+        {"sha": "s1", "subject": "x", "files": ["a.py"], "file_lines": {"a.py": [1, 2]}},
+    )
+    c2 = TrajectoryEvent(
+        EventId("e2"), _at(20), SCOPE, TrajectoryEventKind.COMMIT,
+        {"sha": "s2", "subject": "y", "files": ["a.py", "b.py"],
+         "file_lines": {"a.py": [2, 5], "b.py": [9]}},
+    )
+    record = EpisodeBuilder().build(EpisodeSpan(events=(c1, c2), closed=True))
+    assert record is not None
+    assert record.metadata["footprint_lines"] == {"a.py": [1, 2, 5], "b.py": [9]}
+
+
+def test_footprint_lines_empty_without_line_capture() -> None:
+    # A pre-C-8 commit (no file_lines in payload) → empty footprint_lines, files-only footprint.
+    record = EpisodeBuilder().build(
+        EpisodeSpan(events=(_commit("e1", 10, "s", "x", ["a.py"]),), closed=True)
+    )
+    assert record is not None
+    assert record.metadata["footprint_lines"] == {}
+
+
 def test_open_span_has_no_terminal_outcome() -> None:
     span = EpisodeSpan(events=(_failing_test("e1", 10, "t::x", "boom"),), closed=False)
     record = EpisodeBuilder().build(span)

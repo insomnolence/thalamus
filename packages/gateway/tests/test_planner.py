@@ -580,3 +580,80 @@ def test_gather_ranking_leaves_coverage_independent_of_the_budget() -> None:
     assert cov_tight.nodes_with_context == cov_roomy.nodes_with_context
     assert cov_tight.files_with_context == cov_roomy.files_with_context
     assert cov_tight.radius_nodes == cov_roomy.radius_nodes
+
+
+# --- C-3b: external-analysis findings annotating in-scope code surface in the brief ---------------
+def _finding(
+    node_id: str, source_path: str, line: int, severity: str, message: str
+) -> StructuralNode:
+    base = source_path.rsplit("/", 1)[-1]
+    return StructuralNode(
+        node_id=node_id,
+        kind="finding",
+        label=f"R-{node_id} ({severity}) {base}:{line} — {message}",
+        scope=SCOPE,
+        anchor=SourceAnchor(path="scan.sarif", line_start=1, line_end=1),
+        metadata={
+            "rule": f"R-{node_id}", "severity": severity, "tool": "semgrep",
+            "source_path": source_path, "source_line": line, "text": message,
+        },
+    )
+
+
+def _build_with_findings(
+    findings: Sequence[tuple[StructuralNode, str]],  # (finding node, code node_id it annotates)
+) -> Planner:
+    extra = [f for f, _ in findings]
+    edges = [StructuralEdge(f.node_id, target, "annotates") for f, target in findings]
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(IngestResult(nodes=[*_NODES, *extra], edges=[*_EDGES, *edges]))
+    return Planner(
+        graph=graph, links=InMemoryCrossLinkIndex(), store=_Store(()),
+        structural_retrievers=[_Retr([(FOO, 0.9)])], views=DerivedViewsRef(),
+    )
+
+
+def test_findings_annotating_in_scope_code_surface_in_the_brief() -> None:
+    f = _finding("f1", "pkg/foo.py", 42, "error", "SQL injection")
+    brief = _build_with_findings([(f, "mod:foo")]).plan(target="foo", scope=SCOPE)
+    assert {x.node_id for x in brief.findings} == {"f1"}
+    rendered = brief.render()
+    assert "## Known findings in scope (1)" in rendered
+    assert "SQL injection" in rendered
+    assert "pkg/foo.py:42" in rendered  # full source location from metadata
+
+
+def test_findings_outside_the_blast_radius_are_not_surfaced() -> None:
+    # mod:IStore is not reachable from foo's radius → a finding on it must not appear.
+    f = _finding("f2", "pkg/store.py", 5, "warning", "unused import")
+    brief = _build_with_findings([(f, "mod:IStore")]).plan(target="foo", scope=SCOPE)
+    assert brief.findings == ()
+    assert "Known findings in scope" not in brief.render()
+
+
+def test_findings_are_ranked_by_severity_and_deduped() -> None:
+    warn = _finding("w", "pkg/foo.py", 10, "warning", "style nit")
+    err = _finding("e", "pkg/helper.py", 3, "error", "null deref")
+    # err annotates BOTH helper (a callee, in scope) and foo → appears once; error before warning.
+    planner = _build_with_findings(
+        [(warn, "mod:foo"), (err, "mod:helper"), (err, "mod:foo")]
+    )
+    brief = planner.plan(target="foo", scope=SCOPE)
+    assert [x.node_id for x in brief.findings] == ["e", "w"]
+
+
+def test_finding_budget_caps_and_reports_omitted() -> None:
+    fs = [(_finding(f"n{i}", "pkg/foo.py", i, "info", f"m{i}"), "mod:foo") for i in range(4)]
+    extra = [f for f, _ in fs]
+    edges = [StructuralEdge(f.node_id, t, "annotates") for f, t in fs]
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(IngestResult(nodes=[*_NODES, *extra], edges=[*_EDGES, *edges]))
+    planner = Planner(
+        graph=graph, links=InMemoryCrossLinkIndex(), store=_Store(()),
+        structural_retrievers=[_Retr([(FOO, 0.9)])], views=DerivedViewsRef(),
+        config=PlannerConfig(finding_budget=2),
+    )
+    brief = planner.plan(target="foo", scope=SCOPE)
+    assert len(brief.findings) == 2
+    assert brief.findings_omitted == 2
+    assert "2 further finding(s) omitted" in brief.render()

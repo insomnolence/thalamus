@@ -62,6 +62,23 @@ def _dead_ends(events: tuple[TrajectoryEvent, ...]) -> list[dict[str, str]]:
     return dead_ends
 
 
+def _merge_footprint_lines(commits: list[TrajectoryEvent]) -> dict[str, list[int]]:
+    """Per-file changed line numbers across the span's commits — the line-aware footprint (C-8).
+
+    Each COMMIT event carries ``payload["file_lines"]`` (path → new-side changed lines, from
+    ``GitObserver``); the span's value is their per-file union, sorted. Empty when no commit
+    captured line data (e.g. pre-C-8 events) — the footprint then links at module level."""
+    merged: dict[str, set[int]] = {}
+    for commit in commits:
+        file_lines = commit.payload.get("file_lines", {})
+        if not isinstance(file_lines, dict):
+            continue
+        for path, lines in file_lines.items():
+            if isinstance(lines, (list, tuple)):
+                merged.setdefault(str(path), set()).update(int(n) for n in lines)
+    return {path: sorted(nums) for path, nums in merged.items() if nums}
+
+
 def _render_content(
     subject: str | None, footprint: list[str], dead_ends: list[dict[str, str]]
 ) -> str:
@@ -85,6 +102,7 @@ class EpisodeBuilder:
         commits = [event for event in events if event.kind is TrajectoryEventKind.COMMIT]
         terminal = commits[-1] if commits else None
         footprint = sorted({f for c in commits for f in c.payload.get("files", [])})
+        footprint_lines = _merge_footprint_lines(commits)  # C-8: per-file touched line numbers
         dead_ends = _dead_ends(events)
 
         why: list[WhyComponent] = []
@@ -117,6 +135,7 @@ class EpisodeBuilder:
             "segmentation": span.segmentation,
             "closed": span.closed,
             "footprint": footprint,
+            "footprint_lines": footprint_lines,
             "terminal_outcome": outcome,
             "outcome": classify_outcome(events).value,  # Tier-2 truth signal (§13.8)
             "dead_ends": dead_ends,

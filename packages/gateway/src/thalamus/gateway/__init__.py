@@ -11,7 +11,13 @@ from thalamus.gateway.gateway import (
     StructuralRelevanceRetriever,
     SupersededDemotingRetriever,
 )
-from thalamus.gateway.payload import ContextPayload, MemoryItem, StructuralItem, SupersededNote
+from thalamus.gateway.payload import (
+    ContextPayload,
+    FindingItem,
+    MemoryItem,
+    StructuralItem,
+    SupersededNote,
+)
 from thalamus.gateway.planner import (
     CoverageReport,
     PlanBrief,
@@ -27,6 +33,7 @@ __all__ = [
     "CoverageReport",
     "DerivedViews",
     "DerivedViewsRef",
+    "FindingItem",
     "Gateway",
     "MemoryItem",
     "PlanBrief",

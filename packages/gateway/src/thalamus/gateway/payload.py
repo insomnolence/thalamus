@@ -179,6 +179,38 @@ class StructuralItem:
 
 
 @dataclass(frozen=True, slots=True)
+class FindingItem:
+    """An external-analysis finding annotating in-scope code (C-3b).
+
+    The flattened view of a ``finding`` node reached by an ``annotates`` edge from an in-scope
+    code node — "what the brain already knows is flagged here." Distinct from the blast radius
+    (*what breaks*) and from curated memories (*the why*): a finding is an already-recorded flag.
+    The node's ``label`` is a ready one-line summary (rule, severity, basename:line, message);
+    ``location`` is the full source path:line carried in metadata.
+    """
+
+    node_id: str
+    label: str
+    severity: str
+    location: str | None = None  # full source_path:line the finding is about
+    tool: str = ""
+
+    @classmethod
+    def from_node(cls, node: StructuralNode) -> FindingItem:
+        md = node.metadata
+        path = str(md.get("source_path", "")).strip()
+        line = md.get("source_line")
+        location = f"{path}:{line}" if path and line is not None else (path or None)
+        return cls(
+            node_id=node.node_id,
+            label=node.label,
+            severity=str(md.get("severity", "")).strip() or "info",
+            location=location,
+            tool=str(md.get("tool", "")).strip(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class CallRelation:
     """A surfaced code symbol with its direct callers and callees (the Brain-2 call graph).
 

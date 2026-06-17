@@ -23,8 +23,9 @@ the gated layers on top (§13.19); this is the deterministic floor they build on
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from thalamus.core.types import MemoryRef, StructuralRef
 from thalamus.structural.cross_link import CrossLinkIndex
@@ -62,6 +63,30 @@ def _file_and_lines(entry: FootprintFile) -> tuple[str, Sequence[int] | None]:
         return entry, None
     file, lines = entry
     return file, lines
+
+
+def footprint_from_metadata(metadata: Mapping[str, Any]) -> tuple[FootprintFile, ...]:
+    """Build footprint entries from a memory's metadata, pairing each file with its touched lines.
+
+    ``metadata["footprint"]`` is the touched files (always present); ``metadata["footprint_lines"]``
+    (C-8, optional) maps a file → its changed line numbers. A file with captured lines becomes a
+    ``(file, lines)`` entry → a smallest-enclosing-symbol link; a file without falls back to a bare
+    path → a module-level link. The one source of truth both link-builder call sites use (the serve
+    startup build and the ``StructuralRefreshPass``), so they stay in lock-step."""
+    files = metadata.get("footprint", ())
+    if not isinstance(files, (list, tuple)):
+        return ()
+    raw_lines = metadata.get("footprint_lines")
+    lines_by_file = raw_lines if isinstance(raw_lines, Mapping) else {}
+    entries: list[FootprintFile] = []
+    for path in files:
+        path_str = str(path)
+        lines = lines_by_file.get(path_str)
+        if isinstance(lines, (list, tuple)) and lines:
+            entries.append((path_str, [int(n) for n in lines]))
+        else:
+            entries.append(path_str)
+    return tuple(entries)
 
 
 def link_by_footprint(

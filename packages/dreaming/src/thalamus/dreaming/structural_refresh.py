@@ -21,7 +21,12 @@ from pathlib import Path
 
 from thalamus.core.types import MemoryId
 from thalamus.dreaming.base import PassContext, PassKind, PassOutcome
-from thalamus.structural import CrossLinkIndex, StructuralGraph, link_by_footprint
+from thalamus.structural import (
+    CrossLinkIndex,
+    StructuralGraph,
+    footprint_from_metadata,
+    link_by_footprint,
+)
 
 # Code-corpus node kinds re-linked against (module is the coarse fallback; the rest are symbols).
 _CODE_KINDS = ("module", "interface", "class", "enum", "function", "method")
@@ -54,7 +59,7 @@ class StructuralRefreshPass:
             for node in self._graph.nodes_of_kind(ctx.scope, kind)
         ]
         footprints = [
-            (record.ref, tuple(record.metadata.get("footprint", ())))
+            (record.ref, footprint_from_metadata(record.metadata))
             for record in ctx.store.scan(ctx.scope)
             if record.memory_id not in self._linked  # only memories new since the last tick
         ]

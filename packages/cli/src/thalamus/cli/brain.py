@@ -69,6 +69,7 @@ from thalamus.structural import (
     StructuralNode,
     StructuralRetriever,
     code_files,
+    footprint_from_metadata,
     footprint_staleness,
     incremental_ingest,
     link_anchored_nodes,
@@ -301,7 +302,7 @@ def build_two_hemisphere_gateway(
 
     links = links if links is not None else InMemoryCrossLinkIndex()
     footprints = [
-        (episode.ref, tuple(episode.metadata.get("footprint", ()))) for episode in episodes
+        (episode.ref, footprint_from_metadata(episode.metadata)) for episode in episodes
     ]
     # Footprints link to code nodes only (episodes touch source files).
     link_by_footprint(footprints, code_nodes, links, repo_root=repo)

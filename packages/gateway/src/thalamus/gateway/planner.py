@@ -44,7 +44,7 @@ from thalamus.core.types import (
     StructuralRef,
     Supersession,
 )
-from thalamus.gateway.payload import MemoryItem, StructuralItem
+from thalamus.gateway.payload import FindingItem, MemoryItem, StructuralItem
 from thalamus.gateway.views import DerivedViews, DerivedViewsRef
 from thalamus.structural import (
     CoChangeIndex,
@@ -57,6 +57,19 @@ from thalamus.structural import (
 
 # Memory kinds that count as a load-bearing *constraint* (vs. general decision/context).
 _CONSTRAINT_KINDS = frozenset({"constraint", "gotcha"})
+
+# Finding severity → sort rank (lower = more urgent), so the brief lists errors before warnings
+# before notes. Open vocab across tools (SARIF level, generic severity) → normalize loosely.
+_SEVERITY_RANK = {
+    "error": 0, "critical": 0, "high": 0, "fatal": 0,
+    "warning": 1, "warn": 1, "medium": 1, "moderate": 1,
+    "note": 2, "info": 2, "low": 2, "information": 2, "none": 3,
+}
+
+
+def _severity_rank(severity: str) -> int:
+    """Sort rank for a finding severity (lower = more urgent); unknown severities rank mid-low."""
+    return _SEVERITY_RANK.get(severity.strip().lower(), 2)
 
 # Cross-link proximity tiers for a gathered memory, smaller = closer to the change (§C-3a). A memory
 # is tagged by the *closest* in-scope node it links to: the integration point itself outranks a
@@ -183,9 +196,11 @@ class PlanBrief:
     blast_radius: tuple[RadiusNode, ...] = ()
     constraints: tuple[MemoryItem, ...] = ()  # constraint / gotcha memories in scope
     context: tuple[MemoryItem, ...] = ()  # decision / investigation / episode memories in scope
+    findings: tuple[FindingItem, ...] = ()  # external-analysis findings annotating in-scope code
     coverage: CoverageReport = field(default_factory=lambda: CoverageReport(0, 0))
     radius_omitted: int = 0  # radius nodes dropped past the node budget
     memories_omitted: int = 0  # memories dropped past the memory budget
+    findings_omitted: int = 0  # findings dropped past the finding budget
 
     def render(self) -> str:
         """Render the brief as a clean text block for the actuator — coverage honesty included."""
@@ -235,6 +250,15 @@ class PlanBrief:
             lines.append("  (no direct callers/callees recorded in Brain 2)")
         if self.radius_omitted:
             lines.append(f"  - ... {self.radius_omitted} further node(s) omitted past the budget")
+
+        if self.findings:
+            lines += ["", f"## Known findings in scope ({len(self.findings)})"]
+            lines.append("  external analysis already flags these on the in-scope code:")
+            for f in self.findings:
+                loc = f" [{f.location}]" if f.location else ""
+                lines.append(f"  - {f.label}{loc}")
+            if self.findings_omitted:
+                lines.append(f"  - ... {self.findings_omitted} further finding(s) omitted")
 
         self._render_memories(lines, "Known constraints & gotchas", self.constraints)
         self._render_memories(lines, "Decisions & context", self.context)
@@ -286,6 +310,7 @@ class PlannerConfig:
     fanout_threshold: int = 25  # direct-caller degree above which the hub breaker trips
     node_budget: int = 40  # max blast-radius nodes in the brief
     memory_budget: int = 30  # max memories gathered into the brief
+    finding_budget: int = 20  # max external-analysis findings surfaced in the brief
     max_memory_chars: int = 1000  # per-memory content/why truncation
     cochange_min_support: float = 2.0  # min coupling score (count symbol-level; lift file-level)
     cochange_max_nodes: int = 15  # max co-change nodes added to the radius
@@ -351,6 +376,9 @@ class Planner:
         scope_refs = [ref, *(rn.item_ref for rn in radius)]
         constraints, context, coverage, mem_omitted = self._gather(scope_refs)
 
+        # 4 — Gather external-analysis findings annotating any in-scope code (C-3b).
+        findings, findings_omitted = self._gather_findings(scope_refs)
+
         return PlanBrief(
             target=target,
             integration_point=res.item,
@@ -362,9 +390,11 @@ class Planner:
             blast_radius=tuple(rn.node for rn in radius),
             constraints=constraints,
             context=context,
+            findings=findings,
             coverage=coverage,
             radius_omitted=radius_omitted,
             memories_omitted=mem_omitted,
+            findings_omitted=findings_omitted,
         )
 
     def _resolve(self, cue: Cue) -> _Resolution | None:
@@ -581,6 +611,30 @@ class Planner:
                 return module.ref
             current = parents[0].ref
         return None
+
+    def _gather_findings(
+        self, scope_refs: Sequence[StructuralRef]
+    ) -> tuple[tuple[FindingItem, ...], int]:
+        """External-analysis findings annotating any in-scope code node (C-3b).
+
+        A finding node is linked to the code it is about by an ``annotates`` edge (finding → code,
+        created by ``structural.anchor_linking``), so the findings flagged on an in-scope node are
+        its *incoming* ``annotates`` neighbours. Deduped across the scope, ranked most-urgent first
+        (severity, then location), and capped at ``finding_budget``. A no-op when no findings corpus
+        is ingested — the brief simply omits the section. Distinct from the blast radius (*what
+        breaks*) and the gathered memories (*the why*): findings are *already-recorded flags*."""
+        seen: set[str] = set()
+        items: list[FindingItem] = []
+        for ref in scope_refs:
+            for node in self._graph.neighbors(ref, edge_types=("annotates",), direction="in"):
+                if node.kind != "finding" or node.node_id in seen:
+                    continue
+                seen.add(node.node_id)
+                items.append(FindingItem.from_node(node))
+        items.sort(key=lambda f: (_severity_rank(f.severity), f.location or ""))
+        budget = self._config.finding_budget
+        omitted = max(len(items) - budget, 0)
+        return tuple(items[:budget]), omitted
 
     def _gather(
         self, scope_refs: Sequence[StructuralRef]
