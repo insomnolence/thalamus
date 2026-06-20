@@ -67,10 +67,11 @@ Architecture, research map, and roadmap: [`docs/design-notes.md`](docs/design-no
 **Requirements:** [`uv`](https://docs.astral.sh/uv/), Docker (for Neo4j), Python 3.12+. First run
 downloads a small local embedding model (BGE-small).
 
-**1. Start Neo4j** (a [`docker-compose.yml`](docker-compose.yml) is included):
+**1. Start Neo4j and install the workspace** (a [`docker-compose.yml`](docker-compose.yml) is included):
 
 ```bash
 docker compose up -d
+uv sync --all-packages --all-extras            # installs the CLI + the BGE encoder extra
 export THALAMUS_NEO4J_URI=bolt://localhost:7687
 export THALAMUS_NEO4J_USER=neo4j
 export THALAMUS_NEO4J_PASSWORD=thalamuspw      # local dev password; change it for anything real
@@ -79,7 +80,7 @@ export THALAMUS_NEO4J_PASSWORD=thalamuspw      # local dev password; change it f
 **2. Teach it something durable** about *this* repo, with a file footprint for structural context:
 
 ```bash
-uv run --package thalamus-routing --extra bge python -m thalamus.cli remember \
+uv run python -m thalamus.cli remember \
   --repo . --kind constraint \
   --text "Changing the vector encoder requires rebuilding compatible indexes." \
   --why "Embeddings from a different encoder aren't comparable; recall silently degrades." \
@@ -89,8 +90,8 @@ uv run --package thalamus-routing --extra bge python -m thalamus.cli remember \
 **3. Materialize episodes from your git history**, then serve the brain over MCP:
 
 ```bash
-uv run --package thalamus-routing --extra bge python -m thalamus.cli sync  --repo .
-uv run --package thalamus-routing --extra bge python -m thalamus.cli serve --repo .
+uv run python -m thalamus.cli sync  --repo .
+uv run python -m thalamus.cli serve --repo .
 ```
 
 **4. Point your agent at it.** A project-scoped [`.mcp.json`](.mcp.json) is included; in Claude Code,
@@ -124,8 +125,8 @@ measurable yet — proving it needs a controlled brain-on/off ablation, which is
 pre-registration). Reproduce any of the above on your own repo:
 
 ```bash
-uv run --package thalamus-cli python -m thalamus.cli health  --repo . --code-root .
-uv run --package thalamus-cli python -m thalamus.cli verdict --repo .
+uv run python -m thalamus.cli health  --repo . --code-root .
+uv run python -m thalamus.cli verdict --repo .
 ```
 
 ## Status & scope
