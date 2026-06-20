@@ -13,11 +13,15 @@ Honest-measurement choices:
 - **Macro mean over events** (each retrieval weighted equally, like recall@k in
   the harness; robust to fan-out skew). Pooled ``n_shown``/``n_used`` are exposed
   so a micro ratio is derivable.
-- An event that surfaced memories but has **no usage signal is *missing data***
-  (its outcome was never captured), not zero utility — it is excluded from the
-  metric and tracked via ``coverage``. Conflating "we don't know" with "nothing
-  was useful" would silently depress the number; ``coverage`` is the honest caveat
-  on how much Tier-1 signal actually backs it (the §13.13 data-volume concern).
+- An event that surfaced memories but has **no *deterministic* (footprint-attribution)
+  outcome is *missing data***, not zero utility — it is excluded from the metric and
+  tracked via ``coverage``. This includes **citation-only** events (``record_usage`` fired
+  but footprint attribution never produced a row, e.g. the session committed nothing in
+  window): the citation signal is a cooperation-dependent self-report whose ``used`` ~never
+  fires (§13.8), so scoring such events would feed guaranteed zeros into the metric.
+  Conflating "we don't know" with "nothing was useful" would silently depress the number;
+  ``coverage`` is the honest caveat on how much deterministic Tier-1 signal backs it
+  (the §13.13 data-volume concern).
 """
 
 from __future__ import annotations
@@ -28,6 +32,11 @@ from statistics import fmean
 
 from thalamus.core.types import EventId, MemoryId
 from thalamus.instrumentation import RetrievalEvent, UsageSignal
+
+# Secondary, cooperation-dependent signal kinds (§13.8): an actuator self-report (`record_usage`
+# lexical overlap), not a deterministic captured outcome. They may *mark* a memory used, but on
+# their own must NOT make an event count as scored — see utility_at_k.
+_SECONDARY_KINDS = frozenset({"citation"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,12 +60,17 @@ def utility_at_k(
 
     A memory counts as used if *any* Tier-1 signal for its ``(event_id, memory_id)``
     has ``used=True`` (forward-compatible with future overlap/citation/constraint
-    signal kinds). Events with no captured outcome are excluded (see module docs).
+    signal kinds). The **scoring universe** is events with a *deterministic* (footprint
+    attribution) outcome; an event whose only signals are the secondary citation kind is
+    treated as **missing data** (excluded, tracked via ``coverage``), not zero — else such
+    events enter as guaranteed zeros (citation ``used`` ~never fires; §13.8) and silently
+    depress the metric. See module docs.
     """
     used_pairs: set[tuple[EventId, MemoryId]] = set()
     events_with_outcome: set[EventId] = set()
     for signal in signals:
-        events_with_outcome.add(signal.event_id)
+        if signal.kind not in _SECONDARY_KINDS:  # only a deterministic outcome counts as "scored"
+            events_with_outcome.add(signal.event_id)
         if signal.used:
             used_pairs.add((signal.event_id, signal.memory_id))
 

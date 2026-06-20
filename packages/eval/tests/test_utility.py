@@ -92,6 +92,33 @@ def test_event_without_captured_outcome_is_excluded_not_zero() -> None:
     assert report.coverage == 0.5  # 1 of 2 surfacing events had an outcome
 
 
+def _citation(event_id: str, memory_id: str, *, used: bool) -> UsageSignal:
+    v = 1.0 if used else 0.0
+    return UsageSignal(EventId(event_id), MemoryId(memory_id), "citation", v, used)
+
+
+def test_citation_only_event_is_missing_data_not_a_scored_zero() -> None:
+    # e2's ONLY signal is a citation (record_usage fired, but footprint attribution never ran — e.g.
+    # the session committed nothing in window). Citation `used` ~never fires, so scoring e2 would
+    # feed a guaranteed zero. It must be treated as missing data, exactly like a no-signal event.
+    events = [_event("e1", ["a"]), _event("e2", ["b"])]
+    signals = [_signal("e1", "a", used=True), _citation("e2", "b", used=False)]
+    report = utility_at_k(events, signals, k=5)
+    assert report.utility_at_k == 1.0  # e1 only; e2 is excluded, NOT a 0 dragging it to 0.5
+    assert report.n_events == 1
+    assert report.coverage == 0.5  # e2 surfaced but had no deterministic outcome
+
+
+def test_citation_can_mark_a_memory_used_within_a_footprint_scored_event() -> None:
+    # e1 has a deterministic outcome (non-citation signal) → scored; a citation may still mark a
+    # second memory used. The secondary signal contributes a positive, it just can't define scoring.
+    events = [_event("e1", ["a", "b"])]
+    signals = [_signal("e1", "a", used=True), _citation("e1", "b", used=True)]
+    report = utility_at_k(events, signals, k=2)
+    assert report.utility_at_k == 1.0  # both a and b counted used
+    assert (report.n_events, report.n_used) == (1, 2)
+
+
 def test_macro_mean_weights_events_equally() -> None:
     # e1 shows 1 (used) -> 1.0; e2 shows 3 (1 used) -> 1/3. Macro = mean(1, 1/3).
     events = [_event("e1", ["a"]), _event("e2", ["b", "c", "d"])]
@@ -152,8 +179,18 @@ def test_end_to_end_recall_outcome_then_utility() -> None:
     payload = gateway.recall(prompt="how do we do async db work", scope=SCOPE)
     gateway.record_outcome(payload, "import aiosqlite\n# the async store now connects")
 
-    # one surfaced memory was used, one wasn't -> utility@2 = 0.5, fully covered
-    report = utility_at_k(event_sink.events, usage_sink.signals, k=2)
+    # record_outcome emits only the *citation* signal (a cooperation-dependent self-report). On its
+    # own that is not a deterministic captured outcome, so utility@k treats the event as missing
+    # data — the deterministic outcome is footprint attribution (usage_attributed.jsonl).
+    citation_only = utility_at_k(event_sink.events, usage_sink.signals, k=2)
+    assert (citation_only.n_events, citation_only.coverage) == (0, 0.0)  # excluded, not a scored 0
+
+    # Add the deterministic footprint outcome → the event scores: m_sqlite used, m_style not.
+    footprints = [
+        UsageSignal(e.event_id, MemoryId("m_sqlite"), "footprint", 1.0, True)
+        for e in event_sink.events
+    ]
+    report = utility_at_k(event_sink.events, list(usage_sink.signals) + footprints, k=2)
     assert report.utility_at_k == 0.5
     assert (report.n_events, report.n_shown, report.n_used) == (1, 2, 1)
     assert report.coverage == 1.0
