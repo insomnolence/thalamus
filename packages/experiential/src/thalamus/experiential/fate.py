@@ -8,7 +8,7 @@ is I/O-free so the combiner policy is unit-testable in isolation.
 
 **Read fate, not words (§13.7 firewall).** Credibility is derived purely from *what happened to a
 memory* — superseded (a graph edge), reverted (git), reused / survived (logs + time) — never from
-parsing the memory's prose for good/bad sentiment (that is the Polynoica self-reference trap: the
+parsing the memory's prose for good/bad sentiment (that is the self-validation trap: the
 model's opinion becoming its own label). Every signal here is therefore an external fact, tier
 ``OBJECTIVE``. ``OutcomeTier.MODEL_ARBITRATED`` is reserved for a future LLM-judge proposer
 (propose-only, calibrated against objective fate, not yet built) — no current signal uses it.

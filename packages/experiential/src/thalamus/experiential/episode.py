@@ -6,7 +6,7 @@ component is tagged by provenance — **evidenced** (grounded in the trajectory 
 structure: a commit's footprint, a real failed test) vs **asserted** (an author
 narrative such as a commit subject) — so a later reader (or dreaming pass) never
 mistakes a story the brain told itself for a fact. An unmarked inferred why is the
-historical-narrative cousin of the Polynoica self-reference trap (§13.7).
+historical-narrative cousin of the self-validation trap (§13.7).
 
 The episode id is **stable and idempotent**: re-running the spine over the same logs
 rebuilds the same record (derived-view discipline, §14.1) — `Store.add` overwrites

@@ -3,7 +3,9 @@
 *Part of [Project Thalamus design notes](../design-notes.md). The **plan of attack** for the
 credibility/learning track and the **"how we prove it"** companion to §13
 ([`outcome-learned-retrieval.md`](outcome-learned-retrieval.md) — "what we'd build") and §16.
-Same gated style as [`security.md`](security.md). Worked through 2026-06-15.*
+Same gated style as [`security.md`](security.md). Worked through 2026-06-15;
+eval instruments and rung verdict added 2026-06-17; Architecture B, R-9 diagnosis, R-7 build,
+and M-1 panel findings woven in 2026-06-17.*
 
 > **⮕ RE-AIMED 2026-06-15 — read this first.** The learning target moved from **code outcomes**
 > (did committed work survive / tests pass) to **relevance credibility** (which memories are
@@ -45,7 +47,7 @@ re-ranks by credibility — is correct but mis-weighted:
   fix-forward solo repo. Credibility is inert not because the re-ranker is missing, but because the
   *signal* is (`churn_ratio` / `survived_activity` are stubbed empty in `FateContext`).
 - **C hides a self-reference trap.** A fate-trained re-ranker measured by a fate-based metric scores
-  the model against its own training signal — the quiet version of the Polynoica trap.
+  the model against its own training signal — the quiet version of the self-validation trap.
 
 So the hard, build-first parts are the **input** (negatives) and the **validation** (causal). The
 re-ranker is last.
@@ -66,8 +68,16 @@ re-ranker is last.
   that deterministic top-k logging (`propensity=1.0`) has *no common support*, which makes all
   off-policy estimation **undefined, not just noisy** — so even before we build any estimator (Step
   3), we must (a) stamp the ranker version on every event [free "intervention-harvesting" data across
-  reships] and (b) add a small flag-gated randomization knob (FairPairs/ε swap) so realized
-  propensities are real.
+  reships] and (b) add a small flag-gated randomization knob so realized propensities are real.
+- **Status (propensity logging — 2026-06-17):** **BUILT** (`packages/retrieval/src/thalamus/retrieval/exploring.py`).
+  `ExploringRetriever` is a two-policy mixture: with prob 1−ε serve the deterministic top-k; with prob
+  ε serve a uniform random k-subset of the top-pool. An **exact per-item marginal propensity** is
+  computed and stamped into each shown item's `features["propensity"]`; `LoggingRetriever` now logs
+  that instead of a hardcoded `1.0`. Wired through `build_two_hemisphere_gateway` and `serve` via
+  `--explore-epsilon` / `--explore-pool`. **Off by default (ε=0 → deterministic top-k, live recall
+  unchanged).** The IPS/SNIPS estimator over logs collected with ε>0 is **deferred** — it needs
+  stochastic serving volume to mean anything. What is built is the **logging substrate** (the
+  irreversible-if-deferred half). Uniform-within-pool is v1; Plackett-Luce is the refinement.
 - **Done when:** new retrieval events carry a session key (today 61/110 are null) and a ranker-version
   + propensity field; verdict `n_units` rises above ~1 on keyed sessions.
 - **Firewall:** keys + mechanical logging only — no signal interpretation here.
@@ -135,7 +145,9 @@ re-ranker is last.
     perturbations (the Pre-step propensities + ranker-version harvesting), self-normalized IPS with
     exposure-aware propensities + weight clipping is the consensus low-n-robust estimator; DR /
     DR-shrinkage stay swappable for when an external reward model + more data exist. Always report
-    effective sample size + bootstrap CIs, never a point estimate.
+    effective sample size + bootstrap CIs, never a point estimate. **Gate: requires stochastic
+    serving (ε>0) and the volume to accrue — both now unblocked by the Pre-step `ExploringRetriever`
+    build.**
   - **Interleaving — demoted to a swappable complement, NOT the default.** The review found it's a
     poor fit for us: its credit machinery assumes an immediate *click* to attribute, but our outcome
     is a **delayed, sparse per-edit fate** with no per-item click; and its famous efficiency
@@ -166,14 +178,26 @@ re-ranker is last.
 
 ---
 
-## The pre-registered win condition  *(LOCKED 2026-06-15)*
+## The pre-registered win condition  *(LOCKED 2026-06-15; M-1a scoped 2026-06-17)*
 
 Framed as **experiment design at n=1**, not "pick a meaningful number." At single-user scale the
 binding constraints are **statistical power** (the metric must move often enough to test) and
 **Goodhart-resistance** — so the lessons are: *no composite primary* (a composite hides which part
 moved and hands you two knobs to rationalize with), and *a sensitive decision metric and an aligned
 validation metric are not the same number*. That pairing is exactly the proxy↔truth machinery we
-already have — so we pre-register the **pair + an alignment win condition**, not one outcome number:
+already have — so we pre-register the **pair + an alignment win condition**, not one outcome number.
+
+**M-1a scoping (2026-06-17):** The brain-on/off thesis ablation (M-1) was examined by a 3-expert
+panel. The naive "gotcha-avoidance" design is **circular as first proposed**: if the curated memory
+IS the warning, injecting it injects the answer; curating cases the brain holds conditions on it
+winning. Reframe M-1 as **M-1a — a conversion/delivery probe**: a necessary-condition proof for the
+§13.10 prohibitive-memory path, NOT the thesis. Hard gates for M-1a: a held-out negative-control
+set, a generic-salience arm, a content-ablation arm, memories that are episodes/why (reason-from, not
+warning-shaped), programmatic blind judging (code, not an LLM grading prose), pre-registration, and
+per-case anytime-valid statistics. The **better primitive to build toward** is a within-task
+decision-point ablation (per-decision N, uncurated). Per-recall IPS is the true-thesis estimator but
+**blocked on R-7 volume** (ε>0 serving must accrue). A pre-registration protocol lives at
+`docs/eval/m1a_preregistration.md` — the details are there, not duplicated here.
 
 - **Decision metric (proxy — chosen for sensitivity):** per-recall **`utility@k`** over recalls that
   fed real work. Leading, frequent, accrues fast — read every cycle.
@@ -212,6 +236,11 @@ scores retrieval *surface quality* (did the brain surface what turned out to mat
 transcripts, brain-on vs brain-off. It is real, cheap, the n=1 unlock for retrieval quality — and it
 is how we'd prove the **structural-hemisphere floor** the whole viability case rests on. It is **not**
 outcome proof: a fixed transcript's actions are frozen, so you cannot read a *new* outcome from it.
+
+**Important negative result (2026-06-17):** the SURFACE metric `probe-eval --rungs` uses — top-1
+cosine — **saturates** before re-ranker lift becomes visible. It cannot discriminate between rung
+arms. For rung ablation, use `rung-eval` (utility-join by attribution label) instead. `probe-eval`
+remains useful as a regression guard for the semantic retrieval floor, not as a rung discriminator.
 
 **The research pass sharpened this from "two tiers" to "two quantities known to diverge."** The RAG/IR
 literature repeatedly shows retrieval metrics do *not* predict downstream task quality — *Lost in the
@@ -285,12 +314,28 @@ Every signal at every step is an **external act** — a diff, a test-run event, 
 region, a propensity-logged exploration outcome. Nothing reads the memory's prose, sentiment, or the
 model's embedding geometry as a label. **Credibility never validates itself:** the training signal
 (fate) and the validation signal (future fate / counterfactual outcome) are kept distinct. This is
-what makes our version safe where Polynoica's was not.
+what makes our version safe where our predecessor project's was not.
 
 ## Relationship to existing components
 
 - `experiential/fate.py` — `FateContext` (the stubbed churn/survival fields Step 1 fills),
   `assess_fate`.
+- `experiential/behavioral.py` — `BehavioralStore` protocol + `InMemoryBehavioralStore` +
+  `consolidate_usage`. The swappable seam that lets the consolidation pass and the usage rung
+  remain decoupled from the storage backend.
+- `experiential/neo4j_behavioral.py` — `Neo4jBehavioralStore`: the durable backend. One MERGE'd
+  node per `(memory_id, session_id)` used-pair, additive label `M_behavioral_use` (never touches
+  `M_experiential`). Idempotent set-union — re-folding the same log segments never double-counts
+  and never loses signal.
+- `dreaming/behavioral_consolidation.py` — `BehavioralConsolidationPass`: folds the write-ahead
+  log buffer into the `BehavioralStore` each maintenance tick. The usage rung now reads
+  `behavioral_store.usage_weights()` **from the brain**, not from a file scan. This is
+  **Architecture B / Track I-3** (2026-06-17): the brain is the system of record for its own
+  behavioral history. The raw JSONL logs demote to a disposable write-ahead buffer; no cursor is
+  needed for correctness because the set-union is idempotent. Backed up + shadow-validated before
+  cutover (brain weights matched file-derived weights exactly on 44 memories).
+- `retrieval/exploring.py` — `ExploringRetriever` + `explore_selection` (the Pre-step propensity
+  substrate; see Pre section above).
 - `dreaming/credibility.py` — the pass that today only logs the distribution; Steps 1–4 give it real
   input + a durable consumer.
 - `eval/harness.py` `compare` + `cli/probe_eval.py` — the L1 ablation (mostly built); the measuring
@@ -298,6 +343,73 @@ what makes our version safe where Polynoica's was not.
 - `eval/proxy_truth.py`, `cli/verdict.py` — the monitor Step 2 un-blinds; the reward-hacking flag is
   the Goodhart guard for Steps 3–4.
 - §13 outcome-learned retrieval (what we'd build), §14.2 firewall, §16 roadmap, ROADMAP.md Track L.
+
+## Eval instruments as built (2026-06-17)
+
+Three instruments now exist for validating the retrieval rungs:
+
+**`plan-brief-eval` (CLI) + `eval.plan_brief`** — gather-recall for the `plan` tool: does the brief
+surface known-relevant context? Anti-circularity discipline baked in (the plan eval's ground truth
+comes from commit history, not from the brain's own ranking).
+
+**`probe-eval --rungs`** — ablates the rungs on the transcript probe corpus by the SURFACE metric
+(top-1 cosine). **Known negative: this metric saturates and cannot judge re-rankers.** The cosine
+surface score hits a ceiling before re-ranker lift is visible; using it as the discriminating metric
+for rung quality is unreliable. Keep `probe-eval` as a regression guard / sanity check (it is real
+and cheap for that purpose), not as the arbiter of rung benefit.
+
+**`rung-eval` (CLI) + `eval.cases_from_usage` + `cli.rung_arms.compose_rung_arms`** — the
+**utility-join ablation**: re-runs each past recall's cue through arms (`brain-off` / `+usage` /
+`+structrel` / `+central` / `+full`) and scores recall@k / MRR / hit@k of the memory **actually
+used** — the behavioral label from the attribution log (`usage_attributed.jsonl`). `--split` enables
+a leak-free **temporal split** (usage weights computed from older recalls; test cases drawn from
+the newest labeled ones). This is the right metric for re-rankers and the instrument that produced
+the rung verdict below.
+
+**Usage-signal reality (important context for any rung eval):** explicit `record_usage` calls are
+effectively dead on both brains (this repo ~6 true, the sample project 0). The **time-window attribution log**
+(`usage_attributed.jsonl`, produced by `attribute.py`) carries the real usage signal — 261 attributed
+on the sample project, 83 on this repo. Attribution is **backward-looking**: a recall is labeled "used"
+only once later commits touch its structural footprint, so the newest recalls are unlabeled. `rung-eval
+--split` handles this by holding out the newest labeled recalls as the test set.
+
+**Rung verdict (de-leaked, on both brains):**
+- **`StructuralCentralityRetriever` (L-R2 global): the clean winner** — lifts recall AND MRR on both
+  brains, no tradeoff; graph topology is independent of usage labels (non-circular). Applied outermost
+  in the live chain.
+- **`UsageWeightedRetriever` (L-R1): real signal, intrinsic recall@k tradeoff** — past usage predicts
+  future use; lift survives de-leaking; but it over-promotes used-but-not-yet-popular memories. Big
+  win on the process-heavy brain (this repo); a recall wash on a code-rich sample project. RRF weight
+  0.5≈1.0, not tunable away. Applied inner (centrality leads); disablable via `usage_weighting=False`.
+- **`StructuralRelevanceRetriever` (L-R2 query-local): earns ~nothing on both brains** — dropped from
+  the live chain (`structural_relevance=False` default), kept behind the flag as a removable §14 layer
+  for future rework.
+
+**Live default: centrality (leads, outermost) + usage (inner); structrel off.**
+
+**Scope of the verdict (important — 2026-06-17):** this verdict is **scoped to footprint-labelled
+memories evaluated on code-touching sessions**. The R-9 investigation found that 52 of 75 memories
+surfaced ≥2× are labeled "reliably ignored" — but ~87% of that is a measurement artifact, not a
+recall-precision defect. Decomposition: footprint-empty curated memories (vision, firewall, dogfood
+discipline) receive `used=False` by construction in `FootprintAttributor` regardless of whether they
+silently kept the actuator on track; the citation signal `|mem ∩ out| / |mem| ≥ 0.5` penalizes long
+memories (only ~1% of live citation signals clear 0.5); plus stale attribution. **Do not build a
+ranking fix to demote this "ignored" set** — doing so would demote the firewall, vision, and
+discipline constraints (a Goodhart trap). The verdict stands as a reliable description of how well
+the rungs rank *code-footprinted* memories for *code-touching* sessions; it is **silent on conceptual
+and orientation recall.**
+
+**The deeper open gap (firewall ceiling):** there is currently **no firewall-clean behavioral credit
+signal for conceptual recall**. An orientation memory that silently keeps the actuator on track but
+was never cited leaves no footprint overlap and cannot be credited by either current `used` definition.
+The only firewall-clean path is an explicit `record_usage` **declaration** from the actuator (naming
+the memory it used, independent of any token overlap). Until such declarations are common, the verdict
+is a partial picture and the "reliably ignored" framing misleads.
+
+Limit: small n on both brains (dogfood volume especially thin); results need more attribution
+volume and ideally a third test brain before strong conclusions. The non-circularity of centrality
+(graph topology only, no usage label dependency) is its clearest validation; usage's de-leaked lift
+is the strongest signal we have for L-R1.
 
 ## Open questions
 

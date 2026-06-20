@@ -34,7 +34,7 @@ def _user(content: object, *, ts: str = "2026-05-28T10:00:00Z", cwd: str | None 
 def test_extracts_real_user_questions(tmp_path: Path) -> None:
     transcript = tmp_path / "abc.jsonl"
     _write_transcript(transcript, [
-        _user("can you explain how the retrieval chain composes?", cwd="/home/dibble/thalamus"),
+        _user("can you explain how the retrieval chain composes?", cwd="~/thalamus"),
         _user("yes proceed"),  # short → excluded
         _user(  # exactly 20 chars including the question mark and spaces → kept
             "how do we ablate it?"
@@ -47,7 +47,7 @@ def test_extracts_real_user_questions(tmp_path: Path) -> None:
         "how do we ablate it?",
     ]
     assert probes[0].session_id == "abc"
-    assert probes[0].cwd == "/home/dibble/thalamus"
+    assert probes[0].cwd == "~/thalamus"
     assert probes[0].timestamp == datetime(2026, 5, 28, 10, 0, tzinfo=UTC)
 
 

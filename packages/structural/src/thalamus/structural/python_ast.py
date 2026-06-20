@@ -4,9 +4,9 @@ Stdlib ``ast``, deterministic, zero-dependency. Extracts modules, classes,
 functions, and methods with stable qualified ids + source anchors, and
 ``contains`` / ``inherits`` / ``imports`` edges.
 
-(Referenced from Polynoica's ``PythonCodeIngestor``: kept the stable-id and
+(Referenced from an earlier project of ours: kept the stable-id and
 line-range lessons; reimplemented into the corpus-agnostic schema, dropped the
-GNN node types.)
+model-specific node types.)
 
 **Not yet:** resolved ``calls``/``references`` edges (and cross-module inherit/
 import resolution). That needs type-aware resolution, which we *delegate* to a

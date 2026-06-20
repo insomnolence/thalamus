@@ -39,9 +39,10 @@ def compose_rung_arms(
     ``brain-off`` / ``brain-on`` always present; ``brain-on+usage`` when usage weights are given;
     the structural arms (``+structrel`` / ``+central`` / ``+full``) only when ``links`` +
     ``centrality`` are present (they need Brain 2). ``usage_weight`` tunes the usage rung's RRF
-    strength (dollhouse verdict: 1.0 over-promotes and hurts recall@k). ``+full`` mirrors the LIVE
-    stack — usage → central, NOT structrel (which earned nothing in both brains) — so it measures
-    what ships; ``+structrel`` stays a standalone diagnostic arm to keep re-confirming it."""
+    strength (a code-rich sample project's verdict: 1.0 over-promotes and hurts recall@k).
+    ``+full`` mirrors the LIVE stack — usage → central, NOT structrel (which earned nothing
+    in both brains) — so it measures what ships; ``+structrel`` stays a standalone diagnostic
+    arm to keep re-confirming it."""
     arms: dict[str, Retriever] = {
         "brain-off": NullRetriever(),
         "brain-on": SupersededDemotingRetriever(base, superseded),

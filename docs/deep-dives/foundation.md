@@ -49,7 +49,7 @@ Everything else is reuse; the gateway is the product surface (§4):
 - **Home of the retrieval-event log** (OLR §13.11a): it sees every query, candidate set, what it
   returned, propensities. The *trajectory* log comes from out-of-band observers (watcher / git / test
   hook), not the gateway.
-- **Payload assembly is where practical quality lives** — Polynoica's hard lesson (§5.6: good retrieval
+- **Payload assembly is where practical quality lives** — our predecessor project's hard lesson (§5.6: good retrieval
   stuffed badly ≠ usable understanding). The graph-context renderer (§11, "weeks of tuning") transfers.
 - **MCP / FastMCP** protocol → usable with off-the-shelf editors immediately.
 
@@ -64,8 +64,8 @@ Everything else is reuse; the gateway is the product surface (§4):
 | Brain 1 (episodic + why capture, vector retrieval) | **new** | the genuinely new build; start *coarse* (see below) |
 | Out-of-band observers (watcher, git hooks, **test-runner hook**) | **new** | test hook = the critical capture unlock (OLR §13.11) |
 
-**Reuse verified (2026-05-24)** against `/home/dibble/polynoica` — uv workspace, `requires-python
->=3.12`, `src/polynoica/<pkg>` src-layout, Pydantic `extra="forbid"` config + `core`
+**Reuse verified (2026-05-24)** against an earlier project of ours — uv workspace, `requires-python
+>=3.12`, `src/<project>/<pkg>` src-layout, Pydantic `extra="forbid"` config + `core`
 protocols/exceptions. All §11 assets **present** at clear paths:
 - `memory/knowledge/code_ingestor.py` (+ bonus `treesitter_ingestor.py`, `trajectory_extractor.py`);
 - `memory/store/{in_memory,neo4j_store,neo4j_graph,knowledge_graph,experience_buffer}.py`;
@@ -78,11 +78,11 @@ protocols/exceptions. All §11 assets **present** at clear paths:
 §11):** `packages/{orchestrator,workers}`, `outcome_scorer.py`, and the JEPA/talker/slot config in
 `core/config.py`. **Verdict:** "boring base is mostly reuse, low-risk" holds — build estimate de-risked.
 
-**Reuse method — reference, not copy.** Reuse Polynoica heavily (don't reinvent the wheel), but for
+**Reuse method — reference, not copy.** Reuse the predecessor project heavily (don't reinvent the wheel), but for
 each asset: (1) read + assess *what it did well vs. its incurred tech debt* (JEPA/orchestrator coupling,
 dead abstractions, self-referential bits, over-engineering); (2) **reimplement cleanly** in Thalamus,
 carrying forward the good and dropping the debt — never lift-and-shift debt with the code. Record the
-per-asset verdict here as we go. Likewise, don't mirror Polynoica's package layout by default — justify
+per-asset verdict here as we go. Likewise, don't mirror the predecessor's package layout by default — justify
 Thalamus's structure on its own merits (below).
 
 **Per-asset verdicts (filled as reused):**

@@ -5,7 +5,7 @@ each ``Neo4jStore`` owns one hemisphere's label + cosine vector index, so the
 structural and experiential stores never pollute each other's retrieval while
 sharing one database (the substrate for native cross-hemisphere links later).
 
-(Referenced from Polynoica's ``memory/store/neo4j_store.py``: the
+(Referenced from an earlier project of ours: the
 ``CREATE VECTOR INDEX ... cosine`` + ``db.index.vector.queryNodes`` pattern is
 kept; reimplemented to store ``MemoryRecord`` + ``Scope``, scope-filter the
 search, and avoid torch.)

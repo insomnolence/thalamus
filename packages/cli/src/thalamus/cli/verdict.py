@@ -7,7 +7,8 @@ The composition root for the measurement loop (``docs/deep-dives/outcome-learned
   retrieval-event + usage logs; and
 - the **proxy↔truth** monitor: per-session Tier-1 ``utility@k`` joined to per-session Tier-2
   success (``classify_outcome`` over the session-bounded trajectory), flagging reward-hacking
-  if utility reads high but fails to separate good outcomes from bad (§13.12, the Polynoica trap).
+  if utility reads high but fails to separate good outcomes from bad (§13.12, the
+  self-validation trap).
 
 Tier-2 is grouped by **session** (the only coherent recall↔outcome unit — a commit can't be
 mapped to the single session that informed it); the report surfaces **coverage** at both levels

@@ -1,5 +1,5 @@
 """Multi-root doc ingestion: docs from directories OUTSIDE the code root, each as its own
-labeled corpus — the dollhouse case (a design-docs dir beside the code package's own docs).
+labeled corpus — the sample-project case (a design-docs dir beside the code package's own docs).
 
 In-memory (no Neo4j/MCP). Asserts: no node-id collision across roots that share a filename,
 and each root surfaces as its own ``docs (<label>)`` corpus.

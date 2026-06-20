@@ -8,7 +8,7 @@ Two interchangeable implementations behind the one protocol:
 - :class:`BgeEncoder` — frozen BGE sentence-transformer (the production
   encoder). Requires the optional ``bge`` extra.
 
-(Referenced from Polynoica's ``app/text_bridge.py`` ``SentenceEncoder``: the
+(Referenced from an earlier project of ours: the
 lazy-load + ``TYPE_CHECKING`` pattern is kept; its torch coupling and
 single-string API are dropped in favour of plain float lists + batch encode.)
 """

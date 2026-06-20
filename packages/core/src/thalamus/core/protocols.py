@@ -8,8 +8,8 @@ are promoted here when a second consumer appears.
 These are the **swappable seams** the design relies on: each encoder, store,
 router, and retrieval rung is an interchangeable implementation behind one of
 these interfaces (design-notes §14; build-discipline memory). **v0** — expected
-to evolve. (Protocol/structural-subtyping pattern referenced from Polynoica's
-``core/protocols.py``; their tensor/GNN/JEPA contracts are not carried over.)
+to evolve. (Protocol/structural-subtyping pattern from an earlier project of
+ours; its model-specific contracts are not carried over.)
 """
 
 from __future__ import annotations

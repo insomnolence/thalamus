@@ -5,7 +5,7 @@ Python (no torch/numpy) — fine for the small-scale baseline and for tests; the
 Neo4j-backed store swaps in behind the same protocol for scale and the shared
 graph substrate (deep-dives/foundation.md).
 
-(Referenced from Polynoica's ``memory/store/in_memory.py``: dimension
+(Referenced from an earlier project of ours: dimension
 validation and defensive copies are kept; reimplemented to store a
 ``MemoryRecord`` + ``Scope`` and return ``ScoredMemory``, and to compute true
 cosine rather than assuming unit-normalized inputs.)

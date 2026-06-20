@@ -9,7 +9,7 @@ The file is flat and declarative; path-valued keys are resolved relative to the 
 directory (so it is portable). Secrets (the Neo4j password, any HTTP token) are NEVER in the
 file — they stay in the environment. Example::
 
-    repo_id    = "dollhouse"
+    repo_id    = "sample-app"
     code_root  = "mcp-server"              # the code corpus root (serve --repo)
     data_dir   = "."                       # where the brain's .thalamus data lives
     language   = "typescript"

@@ -8,9 +8,10 @@ this measures the right thing: take each past recall's cue → the memory actual
 used memory higher than brain-on does. ``--split`` de-leaks the usage rung (weights from the older
 recalls, tested on the newest fraction). Offline (reads durable Neo4j + the logs); no serve needed.
 
-Reuses ``serve``'s argument + config machinery, so a config-rich brain (dollhouse: ``code_root`` +
-``data_dir`` split, SCIP / docs / findings corpora) is built as the live tool builds it — pass
-``--config <repo>/thalamus.toml``. Logs are read from the brain's ``data_dir`` (else its repo).
+Reuses ``serve``'s argument + config machinery, so a config-rich brain (a sample project:
+``code_root`` + ``data_dir`` split, SCIP / docs / findings corpora) is built as the live tool
+builds it — pass ``--config <repo>/thalamus.toml``. Logs are read from the brain's ``data_dir``
+(else its repo).
 """
 
 from __future__ import annotations

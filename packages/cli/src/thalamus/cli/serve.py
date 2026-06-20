@@ -955,7 +955,7 @@ def run_serve(config: ServeConfig) -> None:
                 gateway,
                 dream_log=JsonlDreamLog(dream_log_path(data_dir)),
                 # The credibility pass runs in the automatic loop too — logs from the data dir,
-                # git reverts from the code root (they differ for e.g. dollhouse).
+                # git reverts from the code root (they differ for e.g. a sample project).
                 credibility=build_credibility_pass(
                     logs_dir=data_dir, code_repo=config.repo, supersession=supersession, scope=scope
                 ),

@@ -122,8 +122,8 @@ def _footprint(config: RememberConfig) -> list[str]:
     """Repo-relative footprint paths. A file outside the repo (or escaping via ``..``) is SKIPPED
     with a warning, never fatal — a stray or out-of-corpus path must not cost the whole memory
     (§14.4: losing the memory is worse than a missing footprint entry). E.g. a multi-root brain
-    (dollhouse: code root vs. outer doc roots) legitimately cites docs outside the code root; those
-    simply don't become footprint entries (which only link to code modules anyway)."""
+    (a sample project: code root vs. outer doc roots) legitimately cites docs outside the code
+    root; those simply don't become footprint entries (which only link to code modules anyway)."""
     footprint: list[str] = []
     for file_path in config.files:
         path = file_path

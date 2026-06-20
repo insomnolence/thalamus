@@ -8,7 +8,7 @@
 # The target project needs its deps installed (npm ci / npm install) and a tsconfig.json.
 #
 #   scripts/scip-index-typescript.sh <project-dir> [output.scip]
-#   scripts/scip-index-typescript.sh /mnt/devstuff/Development/Projects/dollhouse/mcp-server
+#   scripts/scip-index-typescript.sh /path/to/sample-project/mcp-server
 #
 # Then serve that corpus:
 #   python -m thalamus.cli serve \

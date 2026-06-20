@@ -2,8 +2,8 @@
 
 All cross-package errors inherit from :class:`ThalamusError` and carry structured
 attributes so callers can inspect failures programmatically rather than parsing
-message strings. (Pattern referenced from Polynoica's ``core/exceptions.py``;
-the JEPA/hypersphere-specific errors are intentionally not carried over.)
+message strings. (Pattern from an earlier project of ours; the model-specific
+errors there are intentionally not carried over.)
 """
 
 from __future__ import annotations

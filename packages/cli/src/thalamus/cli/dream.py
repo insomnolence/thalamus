@@ -107,8 +107,8 @@ def build_credibility_pass(
     """Wire the fate-based credibility pass to the brain's logs + git reverts (the composition that
     closes over the ``experiential`` fate primitives, keeping ``dreaming`` decoupled). ``logs_dir``
     holds ``.thalamus/logs`` (the data dir); ``code_repo`` is the git repo whose reverts are read
-    (the code root — may differ from ``logs_dir``, e.g. dollhouse). Needs the supersession index —
-    the belief layer it assesses; returns ``None`` otherwise."""
+    (the code root — may differ from ``logs_dir``, e.g. a code-rich sample project). Needs the
+    supersession index — the belief layer it assesses; returns ``None`` otherwise."""
     if supersession is None:
         return None
     logs = logs_dir / ".thalamus" / "logs"

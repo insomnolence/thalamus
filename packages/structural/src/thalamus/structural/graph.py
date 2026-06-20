@@ -3,7 +3,7 @@
 Deterministic graph traversal (k-hop) is how the structural hemisphere surfaces
 *connected* code — the HippoRAG-style associative spreading (§13.19), done by the
 graph, not a model. ``InMemoryStructuralGraph`` is the v0 baseline; a Neo4j-backed
-implementation (reference: Polynoica ``Neo4jKnowledgeGraph.query_subgraph``) slots
+implementation (reference: an earlier project of ours) slots
 in behind the same protocol for scale + persistence.
 
 Edges may reference targets not present in the graph (e.g. imports of external

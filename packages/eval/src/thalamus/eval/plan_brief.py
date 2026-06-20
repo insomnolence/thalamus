@@ -8,7 +8,7 @@ gotcha / finding the brain already holds about the in-scope code?
 THE CIRCULARITY HAZARD — read before authoring cases. The trap ``impact.py`` names applies here in
 full: author a gotcha, cross-link it to the target, then "verify" the brief surfaces it. That
 measures only that the link round-trips through the gather — which the planner unit tests already
-prove — and tells you NOTHING about the brain's real usefulness. It is the Polynoica self-reference
+prove — and tells you NOTHING about the brain's real usefulness. It is the self-validation
 trap in eval clothing (§13.7 / §14.2).
 
 A gotcha-case is honest only if BOTH hold:

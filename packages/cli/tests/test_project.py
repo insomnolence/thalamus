@@ -10,7 +10,7 @@ from thalamus.cli.project import find_project_config, load_project_config
 from thalamus.cli.serve import add_serve_arguments, serve_config
 
 _TOML = """
-repo_id    = "dollhouse"
+repo_id    = "sample-app"
 code_root  = "mcp-server"
 data_dir   = "."
 language   = "typescript"
@@ -31,7 +31,7 @@ def _write_toml(tmp_path: Path) -> Path:
 def test_load_maps_keys_and_resolves_paths(tmp_path: Path) -> None:
     arg_defaults, env_defaults, _ = load_project_config(_write_toml(tmp_path))
     # friendly keys -> argparse dests
-    assert arg_defaults["repo_id"] == "dollhouse"
+    assert arg_defaults["repo_id"] == "sample-app"
     assert arg_defaults["code_language"] == "typescript"
     assert arg_defaults["port"] == 8788
     # path keys resolved relative to the toml's dir (existence not required)
@@ -75,7 +75,7 @@ def test_toml_defaults_flow_into_serve_config_and_cli_overrides(tmp_path: Path) 
 
     # No CLI flags: the toml supplies the values.
     cfg = serve_config(parser.parse_args([]))
-    assert cfg.repo_id == "dollhouse"
+    assert cfg.repo_id == "sample-app"
     assert cfg.code_language == "typescript"
     assert cfg.port == 8788
     assert cfg.repo == (tmp_path / "mcp-server").resolve()
@@ -85,7 +85,7 @@ def test_toml_defaults_flow_into_serve_config_and_cli_overrides(tmp_path: Path) 
     # An explicit flag overrides the toml default (CLI > thalamus.toml).
     cfg2 = serve_config(parser.parse_args(["--port", "9999"]))
     assert cfg2.port == 9999
-    assert cfg2.repo_id == "dollhouse"  # untouched keys still from the toml
+    assert cfg2.repo_id == "sample-app"  # untouched keys still from the toml
 
 
 # ── declarative [[corpus]] config ────────────────────────────────────────────────────────────

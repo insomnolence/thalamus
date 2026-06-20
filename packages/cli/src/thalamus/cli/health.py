@@ -3,7 +3,7 @@
 Composes the "does it help?" verdict (Tier-1 utility@k + the proxy↔truth monitor) with an
 activity summary (recalls, commits, reverts, test runs green/red). Reads only the JSONL logs
 under ``<repo>/.thalamus/logs`` — no Neo4j, no encoder — so it can inspect ANY brain's data
-dir (e.g. a separate dollhouse brain) from anywhere, without serving it or generating events.
+dir (e.g. a separate code-rich sample brain) from anywhere, without serving it or generating events.
 
 Designed for the periodic "is Thalamus doing the right thing?" check. It deliberately surfaces
 whether NEGATIVE outcomes (reverts / red runs) are being captured at all — without them the

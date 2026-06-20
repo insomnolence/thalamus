@@ -2,7 +2,7 @@
 
 The plan tool's claim is "the brief shows you what a change will break." The *circular* way to
 test that (curate a gotcha, link it to a node, then check the brief surfaces it) measures only
-that the link round-trips — the Polynoica self-reference trap in eval clothing. This instrument
+that the link round-trips — the self-validation trap in eval clothing. This instrument
 avoids it by taking the ground truth from **git history**, authored by neither us nor the model:
 
 > When a real **fix commit** touches two code symbols together, those symbols were *coupled* —

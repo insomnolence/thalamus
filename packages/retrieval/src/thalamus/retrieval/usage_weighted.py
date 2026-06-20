@@ -12,10 +12,11 @@ relies on relevance alone. Because it only re-orders the inner's candidate pool 
 the relevance frontier), usage can *promote* a used memory but can never summon an irrelevant one.
 
 Firewall (§14.2): the signal is an external/behavioral act — the memory was *used* (``record_usage``
-/ footprint attribution) — **never** the model grading the memory's own prose (the Polynoica trap).
-Like the hybrid/structural/supersession decorators it composes behind the same ``core.Retriever``
-protocol, so the relevance baseline stays pristine and the rung is ablatable; each candidate keeps
-its native ``score`` for the off-policy log, and the usage rank/weight are recorded in ``features``.
+/ footprint attribution) — **never** the model grading the memory's own prose (the self-validation
+trap). Like the hybrid/structural/supersession decorators it composes behind the same
+``core.Retriever`` protocol, so the relevance baseline stays pristine and the rung is ablatable;
+each candidate keeps its native ``score`` for the off-policy log, and the usage rank/weight are
+recorded in ``features``.
 """
 
 from __future__ import annotations

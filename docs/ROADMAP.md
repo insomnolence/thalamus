@@ -6,7 +6,37 @@ deep-dives (per-area specs), and [`STATUS.md`](STATUS.md) (what's in-flight righ
 is the **ranked, actionable superset**: every item carries a status, what it does, why, the
 concrete steps, its gate/dependency, and where it's spec'd.*
 
-*Last updated 2026-06-15.*
+*Last updated 2026-06-16.*
+
+> **Session delta (2026-06-16):** the **`plan` tool (C-3) shipped** (built → live MCP tool → dogfooded
+> → fixed; gather module-rollup + co-change anti-flood committed in `5542954`), and the **findings
+> producer (C-1) v1** with it. Then a 3-agent parallel batch landed (staged, validated live, not yet
+> committed): **C-3a** gather ranking, **C-2 + C-7** cross-link layer (annotates edges + symbol
+> resolution), **L-R2** structural-centrality weighting. Gate green at **560 passed / 18 skipped**.
+> New backlog from this batch: **C-3b** (findings into the plan radius — now unblocked), **C-8**
+> (line-aware footprints — the keystone that upgrades C-7 + L-R2 to symbol granularity). The lost
+> **`research` tool (C-5)** design was recovered from a prior transcript → [`deep-dives/research.md`](deep-dives/research.md).
+>
+> **Session delta (2026-06-17):** committed C-3b/C-8/M-2-v1 (`bc17a1e`); then built the **measurement
+> the learning track lacked** and acted on its verdict (all staged). `plan-brief-eval` (M-2), and the
+> decisive **`rung-eval`** utility-join ablation (M-4) — validated the rungs by recall@k/MRR of the
+> *actually-used* memory, leak-free temporal split, on the sample project. **Verdict: centrality = clean winner
+> (now leads); usage = real but a recall tradeoff (kept, disablable); structrel = dead → dropped from
+> live.** Plus: explicit `record_usage` is dead on both brains — *attribution* carries the usage signal.
+>
+> **Session delta (2026-06-17, pt 2):** **R-9 diagnosed and its premise refuted** — the "52 reliably
+> ignored" is ~87% measurement artifact (footprint-empty curated memories + stale attribution + dead ids),
+> 0% demotable junk; do NOT rank against it (`retained:d23fd352`). Surfaced the deeper issue: the brain
+> *learns from its own behavioral history out of loose JSONL files outside the brain*, with no
+> consolidation, retention, or index → new **Track I** (attribution-as-a-pass, log retention, behavioral
+> events intrinsic to the brain). The shipped rung verdict is **scoped** (footprint-labelled), not invalid.
+>
+> **Session delta (2026-06-17, pt 3):** **Track I COMPLETE + live-validated** (`retained:8232acbb`). **I-1**
+> attribution-as-a-pass, **I-2** log rotation/retention, **I-3** Architecture B — the brain now ACCUMULATES
+> its own behavioral usage (`Neo4jBehavioralStore` / `M_behavioral_use`, consolidated from the WAL by a
+> dreaming pass) and the usage rung reads weights FROM THE BRAIN, not a file scan. Backed up first;
+> shadow-validated (brain==file exactly); proven live (a recall surfaced the new module; the brain holds 80
+> pair-nodes / 46 memories). **Committed:** I-1+I-2 `dfdbe2e`, /health+fastmcp `15b504d`. **Uncommitted:** I-3.
 
 ---
 
@@ -22,8 +52,8 @@ There are **two parallel tracks**, plus supporting work:
   spec'd: producers, the `plan` tool, multi-language. Spec: §16 + [`planning.md`](deep-dives/planning.md)
   + [`structural-hemisphere.md`](deep-dives/structural-hemisphere.md).
 - **Track R — Retrieval & infra hardening**, **Track M — Measurement/eval**, **Track D — Brain-1
-  data quality**, **Track S — Security** (§17 [`security.md`](deep-dives/security.md), tracked but
-  deliberately lower).
+  data quality**, **Track I — Instrumentation & event-store architecture** (new 2026-06-17), **Track
+  S — Security** (§17 [`security.md`](deep-dives/security.md), tracked but deliberately lower).
 
 **Two cross-cutting truths that drive the ranking:**
 
@@ -33,7 +63,7 @@ There are **two parallel tracks**, plus supporting work:
    competing — capability work is also data generation.
 2. **Credibility C is gated on B is gated on data.** The learned re-ranking payoff (L-C) cannot be
    trusted until the proxy↔truth monitor can discriminate (L-B), which needs *negatives* in the data
-   (L-A loop / friction capture). Shipping a feedback layer you can't measure is the exact Polynoica
+   (L-A loop / friction capture). Shipping a feedback layer you can't measure is the exact self-validation
    trap. So the learning track's **near-term** work is *un-blocking the measurement*, not the fancy
    ranker.
 
@@ -52,14 +82,22 @@ counterfactual) is **parked** (no data source here). See Track L.*
 
 | # | Item | Track | Why this rank |
 |---|------|-------|---------------|
-| 1 | **Usage-weighted retrieval rung** (L-R1) | L | The active learning build: lift recalled-and-used + cross-session-reused memories. Feedable *without* code outcomes (usage accrues every session); surfacing the right/current stuff over stale is the token-saving win. Supersession-demotion + recency already ship. |
-| 2 | **`plan` / impact tool** (C-3) | C | The headline capability — fuse current/used memories + Brain-2 structure into one tight brief. Works for any domain; doesn't need the outcome loop. |
-| 3 | **External-analysis findings producer** (C-1) | C | First drop-in on the producer seam; enriches Brain-2 (more for recall + the plan brief to draw on). |
-| 4 | **Structural-centrality weighting** (L-R2) | L | Lift memories well-connected to Brain-2 — the substrate the plan tool fuses. |
+| ✅1 | ~~Usage-weighted retrieval rung (L-R1)~~ | L | **SHIPPED** (`f5153a6`) + mid-serve refresh + a first cut of L-R2. |
+| ✅2 | ~~`plan` / impact tool (C-3)~~ | C | **SHIPPED + dogfooded + fixed** (committed; today's gather/co-change fixes uncommitted). |
+| ✅3 | ~~Findings producer v1 (C-1)~~ | C | **BUILT** (retrievable corpus; uncommitted). v2 = fuse into the plan radius (C-1/C-2/C-3b). |
+| ✅4 | ~~Today's plan fixes + findings producer~~ | C | **COMMITTED** `5542954` (gather blindness + co-change flood fixes + findings v1). |
+| ✅5 | ~~C-3a — gather ranking~~ | C | **BUILT + staged** (validated live: tight budget keeps the highest-value memories, constraints prioritized). |
+| ✅6 | ~~C-2 + C-7 — cross-link layer~~ | C | **BUILT + staged** (annotates edges + symbol-level resolution; validated live over 1,917 nodes). C-3b still open. |
+| ✅7 | ~~L-R2 — structural-centrality weighting~~ | L | **BUILT + staged** (validated live: 181/243 memories weighted, hubs float up). |
+| ✅8 | ~~C-3b findings-in-brief + C-8 line-aware footprints + M-2/M-4 eval~~ | C/M | **COMMITTED** `bc17a1e`/`a6ab5fd`; rung verdict acted on (centrality leads). |
+| ✅9 | ~~Track I (I-1 attribution-pass, I-2 retention, I-3 Architecture B)~~ | I | **DONE + live-validated** (`retained:8232acbb`). Brain reads its own usage from Neo4j, not files. |
+| **1** | **Commit I-3** (housekeeping) | I | Built, gated, live-proven, uncommitted (leave-it per the user). One clean commit when ready. |
+| **2** | **Finish B's loose ends** *(optional)* | I | Real log disposal (I-2 drops consolidated segments) + consolidate attribution/outcome into the brain the same way. Completes the architecture; non-blocking. |
+| **3** | **M-1 — brain-on/off thesis ablation** | M | The big unmeasured question: does a brain-informed actuator make fewer cross-cutting mistakes? Hardest; the project's central claim. |
 | — | **PARKED:** the outcome loop (churn / monitor / counterfactual) | L | Built + gated but dormant — no captured code outcomes in this workflow. Kept for if instrumented coding resumes. |
 
-After these: the re-ranker (credibility C, gated on 1+2+3+4), multi-language ingestion, retrieval
-hardening, then the security workstream. Full detail below.
+After these: the re-ranker (credibility C, gated on the parked outcome loop), multi-language
+ingestion (C-4), retrieval hardening (Track R), then the security workstream (Track S). Full detail below.
 
 ---
 
@@ -79,7 +117,7 @@ hardening, then the security workstream. Full detail below.
 > - **Structural centrality** — memories well-connected to Brain-2 knowledge. *Links built; weighting next.*
 >
 > **Firewall (held):** elevate by external/behavioral facts only (used / superseded / recent / central),
-> **never** the model grading its own memory prose (Polynoica). Using top-ranked memory *content* to
+> **never** the model grading its own memory prose (the self-validation trap). Using top-ranked memory *content* to
 > inform a plan is fine; scoring memory *quality* from text is not.
 >
 > **PARKED — the outcome loop** (churn / `session_fate` / `session_struggle` / proxy↔truth-on-commits):
@@ -92,19 +130,16 @@ hardening, then the security workstream. Full detail below.
 > instrumented coding resumes. The active work is the relevance signals in the blockquote above
 > (usage-weighted rung next). The next active build item is **L-R1** (immediately after L-5).*
 
-### L-1. Fix the Tier-2 join starvation — `parked` · ~~P0~~
-- **What:** Recalls aren't reliably joining to outcomes. 61/110 retrieval events have
-  `session_id=null`; usage signals are dominated by `used:false`; `record_usage` is under-called.
-- **Why:** The proxy↔truth verdict joins per-session Tier-1 (utility) to Tier-2 (fate/outcome). No
-  keys → no join → `n_units≈1` forever. This is the floor under all of Track L.
-- **Do:** (a) Audit where `session_id` is dropped (recall path → retrieval-event log; the
-  time-window attribution join in `attribute.py` is the resilient fallback — confirm it covers the
-  HTTP multi-agent case). (b) Tighten the dogfood `record_usage` discipline (CLAUDE.md already
-  mandates it; verify it's actually firing). (c) Confirm episodes are persisted in **Neo4j** in the
-  live instance, not just in-memory (the on-disk artifacts are logs + a curated backup only).
-- **Gate:** none — do first.
-- **Spec:** dreaming.md (verdict), §13.11 logging contract; code: `cli/{verdict,attribute}.py`,
-  `gateway/server.py`, `experiential/sync.py` (SessionStampingSource).
+### L-1. Tier-2 join starvation — `LARGELY RESOLVED` · ✅ *(verified live 2026-06-17)*
+- **The old "`n_units≈1` forever" framing is obsolete.** `classify_outcome` now blesses the
+  green-tests-then-commit flow → PASSED (`experiential/outcome.py`), and footprint **attribution**
+  (the primary durable usage signal, `usage_attributed.jsonl`) works. **Live `thalamus verdict`:**
+  Tier-1 utility@5 0.152; **proxy↔truth n_units=20, coverage 0.95, alignment +0.125** (proxy tracks
+  truth), reward-hacking False; 27 sessions Tier-2-labelled. The join/keying is **not** the bottleneck.
+- **Residual (the real remaining gap):** **negatives are thin** — only 1 fate-negative, so
+  `utility | failure` can't discriminate yet. That's the parked outcome-loop / negative-labeler
+  (L-2), and negatives are scarce by nature in fix-forward dev → it *accrues with use*, not a build.
+- **Spec:** `cli/{verdict,attribute}.py`, `experiential/outcome.py`; finding `retained:33fcc02a`.
 
 ### L-2. The negative-signal labeler (survival-vs-overwrite) — `partial` · **P0** · *step 1, the real first build*
 - **What:** A region-level labeler over git diffs + the trajectory log that fills the stubbed
@@ -153,7 +188,7 @@ hardening, then the security workstream. Full detail below.
   the `Retriever` seam. Measure two ways: **L1** (surfaces better-*future*-fated memories — temporal
   hold-out via `compare`, NOT the fate it trained on) + **L3** (improves outcomes — needs L-4).
 - **Gate:** **hard-gated on L-2 (input) + L-3 (monitor) + L-4 (a non-circular validation).** A
-  fate-trained ranker measured by a fate metric is circular — the quiet Polynoica trap. Doing C before
+  fate-trained ranker measured by a fate metric is circular — the quiet self-validation trap. Doing C before
   L-4 exists is the thing not to do.
 - **Spec:** **[`learning-loop.md`](deep-dives/learning-loop.md) Step 4**; dreaming.md; `dreaming/credibility.py:10-12`.
 
@@ -176,13 +211,23 @@ hardening, then the security workstream. Full detail below.
   (computes weights from the durable logs at startup; off for a cold brain / investigate mode).
 - **Verified on real logs:** 20 memories carry a usage weight; top used in 7 sessions → recall lifts
   them on restart. **Firewall:** behavioral act, never the model grading prose. Suite 464 passed.
-- **Next (follow-ups):** mid-serve refresh of the weights (a dreaming refresh, like the superseded
-  frontier); `harness.compare` L1 eval (does it surface the reliably-used core higher?); tune `weight`.
+- **VALIDATED (2026-06-17, utility-join `rung-eval`, de-leaked temporal split):** a **real** lift —
+  survives the de-leak (past usage predicts future use) — but with an **intrinsic recall@k tradeoff**
+  (over-promotes used-but-not-yet-popular memories; `weight 0.5≈1.0`, not tunable away). Big win on the
+  process-heavy brain (this repo); a recall wash on a code-rich sample project. **Live: kept ON (inner), behind
+  `usage_weighting`** so recall-sensitive deployments can disable it. The lever is enable/disable per
+  workload, not weight-tuning.
 
-### L-R2. Structural-centrality weighting + Brain-2 correlation — `idea` · **P2**
-- **What:** Lift memories well-connected to the structural graph / Brain-2 knowledge; the substrate the
-  `plan` tool (C-3) fuses. The "connect architecture memories with where the function goes" step.
-- **Gate:** soft-depends on L-R1 + the cross-link coverage (C-2).
+### L-R2. Structural-centrality weighting + Brain-2 correlation — `built + validated (staged)` · ✅ *(2026-06-17)*
+- **What:** Lift memories well-connected to the structural graph (summed degree of cross-linked code
+  nodes) — the query-independent relevance-credibility signal. Two legs shipped: a query-local
+  `StructuralRelevanceRetriever` (`f5153a6`) and the global `StructuralCentralityRetriever`.
+- **VALIDATED (rung-eval utility-join):** **global centrality is the clean winner** — lifts recall AND
+  MRR on both brains, no tradeoff, non-circular (graph topology ⟂ usage labels) → **applied OUTERMOST
+  (leads the live ranking)**. The **query-local structrel leg earns ~nothing** on both brains →
+  **dropped from the live chain** (`structural_relevance=False`, kept behind the flag for a rework).
+- **Open:** structrel rework (or retire); the `+full` stack underperforms centrality-alone when usage
+  is stacked on a code-rich brain (don't blindly stack — see L-R1's recall tradeoff).
 
 ### L-7. Belief supersession beyond D1 (D2 AST-drift, D3 semantic) — `partial` · **P2**
 - **What:** Today supersession is explicit-only (`remember --supersedes`, D1). D2 = detect stale
@@ -207,59 +252,113 @@ hardening, then the security workstream. Full detail below.
 > The producer registry (just shipped) is the seam these plug into. §16 build order: hybrid ✅ →
 > universal ingestion ✅ → **#3 multi-language → #4 findings → #5 plan → #6 research**.
 
-### C-1. External-analysis findings producer — `design` · **P1**
-- **What:** A `FindingsIngestor` (kind `findings`): an external tool (static/security/program
-  analysis, e.g. code-scalpel) writes a normalized JSON via `regen_command`; the ingestor reads it →
-  `finding` nodes anchored to code. The *first* thing built on the new producer seam.
-- **Why:** High leverage, clean drop-in (`register_producer`), and findings-through-the-brain are
-  exactly the kind of cross-cutting context the `plan` tool needs — and generate dogfood volume.
-- **Do:** Define the normalized findings schema; write `FindingsIngestor` (anchor findings to
-  `SourceAnchor` → code nodes); register the producer; wire `regen_command` gating (already generic).
-  **Depends on C-2** for the findings to actually fuse into recall via cross-links.
-- **Gate:** soft-depends on C-2 for cross-linking.
+### C-1. External-analysis findings producer — `built (v1, uncommitted)` · ✅ *(2026-06-16)*
+- **What:** `FindingsIngestor` + `parse_findings` (structural pkg) accept **SARIF** and a **generic
+  JSON** → one `finding` `StructuralNode` per result; `FindingsProducer` (kind `findings`) registered
+  in the producer registry; surfaced under "## Related findings" in recall. Demo-confirmed live (BGE).
+- **v1 = retrievable corpus** (nodes anchor to the findings FILE, real src location in label/metadata).
+  Wired into a sample project's `thalamus.toml` (empty until a SARIF/JSON file is dropped + serve restart).
+- **v2 follow-on (→ C-3b):** finding→code `annotates` edges so findings appear in a plan blast radius.
+  **Depends on C-2.**
 - **Spec:** §16 step 4; structural-hemisphere.md (deferred producers list).
 
-### C-2. Anchor-based cross-linking of non-code nodes to code — `design` · **P1**
+### C-2. Anchor-based cross-linking of non-code nodes to code — `built (staged, uncommitted)` · ✅ *(2026-06-16)*
 - **What:** Today non-code corpora (docs, text, findings) surface only via *direct* retrieval,
   correctly tagged by corpus. To make a finding/doc *fuse* into a code node's context (and the `plan`
   brief), link non-code nodes to code by `SourceAnchor`. Only then does the `corpus="code"` default
   in the gateway cross-link path (`payload.py from_node`, gateway `_structural_for`) matter.
 - **Why:** Prerequisite for findings/docs to show up as "what the brain knows about this code," which
-  is the core of the `plan` tool.
+  is the core of the `plan` tool. **Now the near-term unblock** — findings v1 ships but can't fuse.
 - **Do:** Add anchor→code-node resolution in the cross-link layer; generalize the corpus tag in the
   cross-link path.
-- **Gate:** unblocks C-1 fusion and C-3.
+- **Gate:** unblocks C-1 v2 fusion and C-3b.
 - **Spec:** §13.19; structural-hemisphere.md (deferred).
 
-### C-3. `plan` / impact tool (v1) — `design` · **P1/P2**
-- **What:** Given a target, resolve the integration point → compute structural blast radius
-  (forward/reverse reachability, bounded hops) → gather attached decisions/gotchas/docs/findings →
-  return one fused brief. Deterministic core.
-- **Why:** The vision's headline capability — "give the actuator the forest."
-- **Do:** Build steps 1–4 from planning.md (symbol resolution via hybrid retrieval + semantic
-  fallback; deterministic graph traversal; cross-link + curated gather; structured payload assembly
-  with staleness flags + superseded-but-included lineage). Defer NL synthesis (open question).
-- **Gate:** needs hybrid retrieval ✅ + Brain-2 coverage good enough + C-2 (cross-link coverage). The
-  eval (L3 "fewer cross-cutting mistakes") is hard — start with an L1.5 "gotcha-case" set (see M-2).
-- **Spec:** [`planning.md`](deep-dives/planning.md) (full design + open questions); §16 step 5.
+### C-3. `plan` / impact tool (v1) — `built` · ✅ *(2026-06-16, committed e8f878f/4594c44/9ea4c88)*
+- **What:** Given a target → resolve integration point (whole-graph exact-name lookup, then
+  code-preferring semantic) → edge-typed, budget-bounded blast radius (callers / subtypes / callees /
+  git co-change / container, hub circuit-breaker) → gather cross-linked decisions/gotchas → one
+  coverage-honest fused brief. Deterministic core; NL synthesis deferred. Live as a read-only `plan`
+  MCP tool; co-change refreshed mid-serve by a dreaming pass; git-derived `impact-eval` measures recall.
+- **Dogfooded + fixed (2026-06-16):** beat grep on a real sample-project task (GitHub-semantic coupling);
+  today's Python-brain run drove the gather/co-change fixes below.
+- **Honest limits (inherent, not bugs):** no cross-module string-literal coupling; can't report what's
+  *missing*; no SQL constraints; greenfield targets mis-anchor. Model: "plan finds the dense coupling
+  cluster; grep/reads for the rest."
+- **Spec:** [`planning.md`](deep-dives/planning.md); §16 step 5.
+
+### C-3a. Plan gather — relevance ranking before the memory budget — `built (staged, uncommitted)` · ✅ *(2026-06-16)*
+- **What:** With the gather rollup working, the live brief hits `memory_budget=30` and **omits the
+  rest with no ranking** (e.g. on `_compute_radius`: 30 surfaced, 40 omitted, trimmed in traversal
+  order). Rank gathered memories before the cut — by recency, importance, usage (L-R1 weights),
+  supersession (demote replaced), and cross-link proximity (integration point > radius node) — so the
+  surviving set is the *most* relevant, not the first encountered.
+- **Why:** The difference between "surfaces context" and "surfaces the *right* context"; reuses the
+  Track-L relevance signals already built.
+- **Spec:** `gateway/planner.py` `_gather`; ties to L-R1/L-R2.
+
+### C-3b. Findings (and docs) in the plan blast radius — `design` · **P1** *(findings v2 — now unblocked)*
+- **What:** C-2 has landed finding→code `annotates` edges; fold the annotating finding/doc nodes into
+  the plan brief (follow `annotates` edges from the in-scope code, mirroring `_add_cochange`/`_gather`)
+  so the brief shows "what's already flagged here."
+- **Likely shape:** a **separate brief section** ("Known findings in scope"), not a radius *relation*
+  (findings are "already-flagged," not "what breaks").
+- **Gate:** ✅ unblocked — C-2 (annotates edges) + C-1 v1 both landed. The next concrete plan-tool build.
+- **Spec:** planning.md; §16 step 4–5.
 
 ### C-4. Multi-language structural ingestion (tree-sitter producer) — `design` · **P2**
 - **What:** A lightweight syntactic (tree-sitter or equivalent) ingestor as a producer, for
   languages whose SCIP indexer is unavailable/too heavy.
-- **Why:** Broadens Brain-2 coverage; dollhouse is TypeScript (765 files) and today only SCIP covers
+- **Why:** Broadens Brain-2 coverage; the sample project is TypeScript (765 files) and today only SCIP covers
   it — a tree-sitter producer is a lighter path. Language becomes a plugin axis.
 - **Do:** `register_producer` a tree-sitter ingestor; map its nodes/edges to the open schema.
 - **Gate:** none (drop-in on the seam); prioritize behind findings + plan.
 - **Spec:** §16 step 3; structural-hemisphere.md (deferred).
 
-### C-5. `research` tool — `idea` · **P3**
-- **What:** Deeper cross-hemisphere "what do we know about X" synthesis. To be designed.
-- **Spec:** §16 step 6.
+### C-5. `research` tool — `design captured, not built` · **P3**
+- **What:** Deeper cross-hemisphere "what do we know about X" synthesis — entry is a *question/topic*
+  (no code anchor); broad cross-hemisphere retrieval → synthesis. The complement to `plan` (which is
+  target→radius): research is *understanding before you know where to start*.
+- **Design captured** (2026-06-16, was a lost design discussion — now durable): full plan-vs-research
+  distinction + the two honest tensions + the recommendation in
+  **[`deep-dives/research.md`](deep-dives/research.md)**.
+- **Verdict:** don't build as a headline yet — its core is **synthesis** (unmeasurable, L3-gated, the
+  part we deferred for plan) and **reference breadth** (the brain is thin on docs/findings today).
+  Preconditions: more Brain-2 content + an eval (cf. M-2). First step when ready = a **thin experiment**
+  (deep multi-pass recall + organize, no synthesis). Today's C-2/C-3a/L-R2 already build its substrate.
+- **Spec:** [`deep-dives/research.md`](deep-dives/research.md); §16 step 6.
 
 ### C-6. Producer entry-point / plugin auto-discovery — `idea` · **P3**
 - **What:** External plugins register producers via entry points (the in-process registry is the v1
   seam).
 - **Spec:** structural-hemisphere.md (deferred).
+
+### C-7. Symbol-level cross-linking (finer than module) — `built — seam only, gated on line footprints` · ◑ *(2026-06-16)*
+- **What:** Cross-links are created at **module granularity** (`structural.linking` links a memory to
+  the *module* of each touched file — git's per-file diff is the finest footprint today). Recall
+  bridges to symbols via k-hop spread; the plan gather now bridges via a module-rollup (today's fix).
+  Both are *bridges*. Finer linking — map a memory's diff lines → the enclosing **symbol** — would
+  make per-node coverage real (symbol-level `nodes_with_context` instead of always ~0) and retire the
+  rollup. Proven live: 797 cross-links, 100% on module nodes, 0 on symbols.
+- **Why:** The honest end-state for coverage; the rollup over-attributes a file's notes to every symbol.
+- **Status (2026-06-16):** the **seam is built + staged** — `link_by_footprint` accepts `(file, lines)`
+  and resolves to the smallest enclosing symbol via the new `SymbolResolver` (validated live: line
+  410→`_lexical_resolve`, 470→`_blast_radius`, module fallback when no line). But it **stays module-level
+  in practice** because live footprints carry no line data (see C-8). The machinery is proven correct
+  and lights up the moment line footprints exist.
+- **Gate:** depends on **C-8** (line-aware footprints) to actually produce symbol-level links live.
+- **Spec:** §13.19 ("symbol-identity re-resolution" — the deferred layer); `structural/linking.py`,
+  `structural/symbol_resolution.py`.
+
+### C-8. Line-aware footprint capture — `idea` · **P2** *(new 2026-06-16, the keystone)*
+- **What:** Episode footprints are git per-file diffs (`payload["files"]`) — **paths only, no lines**.
+  Capture the touched line ranges per file so a footprint becomes `(file, lines)`.
+- **Why:** The single unlock that upgrades **both** C-7 (symbol-level cross-links) and **L-R2**
+  (symbol-degree centrality instead of module-degree) from "seam built" to "fully effective." Without
+  it, both run at module granularity.
+- **Do:** Extend the episode/footprint producer (`experiential/episode.py`) to record diff line ranges;
+  thread them through `link_by_footprint` (already accepts the shape).
+- **Spec:** §13.19; `experiential/episode.py`, `structural/linking.py`.
 
 ---
 
@@ -295,10 +394,22 @@ hardening, then the security workstream. Full detail below.
   warm-starts at scale.
 - **Spec:** structural-hemisphere.md (deferred).
 
-### R-7. Off-policy propensity (IPS) — `design` · **P3**
-- **What:** `propensity=1.0` is a placeholder; real IPS/off-policy estimation needs stochastic rungs.
-  Unblocks honest evaluation of learned rungs (L-6).
-- **Spec:** logging_retriever.py:75.
+### R-7. Off-policy propensity (IPS) — `BUILT (serving + logging)` · ✅ *(2026-06-17; gate 611 passed)*
+- **What was the gap:** `propensity=1.0` (deterministic top-k) made off-policy eval (IPS) *undefined*
+  (no common support), not just noisy — so the per-recall counterfactual the thesis ablation eventually
+  needs couldn't be built. The **logging** half is irreversible-if-deferred (can't reconstruct a
+  propensity after the fact).
+- **Built:** `retrieval/exploring.py` `ExploringRetriever` + pure `explore_selection` — a two-policy
+  **mixture** (with prob 1−ε serve the deterministic top-k; with prob ε serve a uniform random k-subset
+  of the top-`pool`) with an **exact per-item marginal propensity** stamped into each shown item's
+  `features["propensity"]`; `LoggingRetriever` now logs *that* instead of a hardcoded 1.0. Wired through
+  `build_two_hemisphere_gateway` (`explore_epsilon`/`explore_pool`) + serve (`--explore-epsilon` /
+  `--explore-pool`). **Off by default (ε=0 ⇒ deterministic top-k, propensity 1.0 — live recall
+  unchanged);** off in investigate. 6 tests (exact propensity, common support, the propensity reaches
+  the log end-to-end). Uniform-within-pool is the boring-exact v1; a Plackett-Luce explorer is the refinement.
+- **Deferred (the estimator, NOT this):** the IPS/SNIPS estimator + anytime-valid CIs over logs
+  collected with ε>0 — that's the M-1 long-game, gated on volume. This builds the *logging substrate* now.
+- **Spec:** `retrieval/exploring.py`, `instrumentation/logging_retriever.py`, `cli/brain.py`, `cli/serve.py`.
 
 ### R-8. Misc structural coverage — `partial` · **P3**
 - Router protocol has no impl (intent routing deferred). · Nested defs not indexed (AST v0). ·
@@ -306,22 +417,162 @@ hardening, then the security workstream. Full detail below.
   precise Python calls. · Bent-geometry retrieval (§13.4) gated on confirming the recall-miss
   hypothesis from logs.
 
+### R-9. Recall precision — the reliably-ignored set — `DIAGNOSED → premise refuted` · ✅ *(2026-06-17)*
+- **What it was:** The live verdict shows **52 of 75** memories surfaced ≥2× are reliably *ignored*.
+  R-9 assumed this was junk the rungs (centrality/usage) should demote.
+- **Diagnosis (read-only probe, dogfood brain; `retained:d23fd352`):** the "ignored" signal is **~87%
+  measurement artifact, 0% demotable junk.** Decomposition of the 52: **5** stale not-in-store ids,
+  **20** in-store but *footprint-empty* high-importance curated memories (vision roadmap, firewall
+  constraint, dogfood discipline) — `used=bool(∅)=False` in `FootprintAttributor` **by construction**,
+  **20** footprinted-but-citation-only (stale-attribution gap), leaving only **7** genuine residual,
+  themselves foundational architectural memories whose value is *orientation*. Two `used` definitions
+  are structurally blind to conceptual recall: footprint overlap (credits only code-overlapping
+  memories) and citation overlap (`|mem∩out|/|mem|≥0.5`, denominator penalizes long memories — only
+  **1.1%** of 534 live citation signals clear 0.5).
+- **Verdict:** **do NOT build a ranking fix** — demoting the "ignored" set would demote the firewall /
+  vision / discipline (a Goodhart trap). R-9-as-framed is dead. The real work is measurement honesty
+  (Track I below) + a firewall-clean credit path for conceptual recall (`retained:24f64014`). The
+  shipped rung verdict ("centrality wins") is **scoped, not invalid**: it was struck on
+  footprint-dominated labels on *both* brains (`cases_from_usage`), so it means "centrality best ranks
+  *code-footprinted* memories for *code-touching* sessions" and is silent on conceptual recall.
+- **Spec:** `eval/stability.py`, `eval/benchmark.py`, `instrumentation/usage.py`, `structural/attribution.py`.
+
+---
+
+## Track I — Instrumentation & event-store architecture  *(surfaced 2026-06-17, owner-driven)*
+
+> **The reframe:** the learning loop reads the brain's *own behavioral history* (recalls, usage,
+> outcomes) out of **loose append-only JSONL files outside the brain** — `retrieval.jsonl`,
+> `usage.jsonl`, `trajectory.jsonl`, `dream.jsonl`. Knowledge is correctly in Neo4j (`store.add`);
+> these are the *event/telemetry stream*, a different data type. Separating telemetry from knowledge
+> is right (§14 firewall made physical; the flat log survived the Neo4j-wipe incident). **What's wrong
+> is that the replay buffer has become the system of record for learning:** no consolidation into the
+> brain, no retention, no index — so the brain must be "updated from outside itself" every cycle.
+> Target the hippocampal design the project already espouses: **cheap volatile capture → dreaming
+> consolidates events into the brain's own queryable state → learning passes read brain state, not raw
+> files → the flat log demotes to a rotatable write-ahead buffer.** Do **not** move this into Neo4j as
+> a high-write time-series (wrong fit); if it outgrows files, an owned indexed event store (SQLite-class)
+> is the step, **never** the graph DB that holds the brain.
+
+### I-1. Attribution as a maintenance pass (not a manual CLI) — `BUILT` · ✅ *(2026-06-17; gate 591 passed)*
+- **What:** `usage_attributed.jsonl` was a re-derivable view yet only produced by the manual
+  `thalamus attribute` CLI → **stale since May 31**, silently dragging down the usage rung (which
+  re-reads it each tick) and every `verdict`. Now an **`AttributionRefreshPass`** (dreaming actor,
+  generic, mirrors `UsageRefreshPass` — injected recompute/apply seams, firewall-clean) re-derives the
+  footprint signals each maintenance tick from the **live gateway graph** + the logs and swaps them
+  into an **`AttributedSignalsRef`** the usage rung reads (no file round-trip), also rewriting the log
+  for the offline tools. Runs after re-derive/re-link, **before** usage-refresh (which consumes it).
+- **Key correctness choice:** reuses `gateway.graph` (not a flat-config `build_code_graph` re-derive) —
+  the declarative `[[corpus]]` path leaves `config.code_language` at its default, the same flat-config
+  trap that once silently emptied co-change. Skipped in investigate mode (no log writes).
+- **Validated live (dogfood `thalamus dream`):** `attribution-refresh (actor): refreshed footprint
+  attribution: 555 signal(s)` ran in DAG order; deterministic (same 555 as the manual run). The manual
+  refresh this session also moved the verdict: utility@5 0.15→0.28, reliably-used 1→15.
+- **Deferred:** per-tick gating (recompute only when retrieval/trajectory logs grew) — matches the
+  other refresh passes which recompute fully each tick; cheap on current brains.
+- **Spec:** `dreaming/attribution_refresh.py`, `instrumentation/usage.py` (`AttributedSignalsRef`),
+  `cli/serve.py`, `cli/dream.py`. **Serves need a restart to pick it up.**
+
+### I-2. Log retention / rotation / compaction — `BUILT` · ✅ *(2026-06-17; gate 598 passed)*
+- **What was wrong:** all four event logs were **append-only with zero retention** → unbounded growth.
+- **Built:** `instrumentation/rotation.py` — `rotate_log(path, max_bytes, keep)` renames an oversized
+  log to a numbered archive (`<name>.1`, older = higher index), shifting archives and dropping beyond
+  the `keep` retention window; `jsonl_segments` lists the segments oldest-first. `read_jsonl` (the one
+  reader all of retrieval/usage/trajectory funnel through) now **concatenates segments**, so the
+  retained history is read back whole — rotation is invisible to `verdict`/attribution/L-6.
+  Concurrency-safe with `append_jsonl`'s reopen-per-append (a rename + the next append recreates the
+  live file, no lock). Wired as a **housekeeping phase** on `MaintenanceTicker` (a sibling of capture —
+  writes the filesystem, not derived views, so NOT a `DreamingPass`), run on the periodic wake before
+  capture, failure-isolated. Config: `--log-max-bytes` (default 64 MiB, 0 disables) / `--log-keep`
+  (default 8) → ~0.5 GiB/log ceiling. 7 tests (5 rotation/segment-read + 2 ticker housekeeping).
+- **Honest note:** `keep` is a deliberate retention bound (the "no silent caps" discipline) and a
+  **stopgap** — it holds until I-3/Architecture B consolidates events into the brain and makes the raw
+  log disposable (then dropped segments are redundant, not lost signal). `dream.jsonl` is rotated too;
+  its observability reader stays on the live segment (archives preserved on disk).
+- **Spec:** `instrumentation/rotation.py`, `instrumentation/_jsonl.py`, `dreaming/runtime.py`, `cli/serve.py`.
+
+### I-3. Behavioral events intrinsic to the brain — `BUILT + LIVE` · ✅ *(2026-06-17; owner chose B)*
+> **Increment 2 — BUILT + validated live (gate 605 passed/21 skipped):** backed up the brain (269
+> records) → `Neo4jBehavioralStore` (additive label `M_behavioral_use`, one MERGE'd node per
+> `(memory_id, session_id)` used-pair — idempotent, never touches `M_experiential`) → wired the
+> consolidation pass into the serve (after attribution-refresh, before usage-refresh) → **shadow-
+> validated** (brain `usage_weights()` == the file-derived weights, EXACTLY, 44 memories) →
+> **cut `_recompute_usage_weights` over to read the brain**. Live `thalamus dream`:
+> `behavioral-consolidation … 46 memory(ies)` then `usage-refresh … 46` reading from the brain. The
+> usage rung no longer recomputes from a file scan — the brain reads its own behavioral history.
+> Investigate mode stays read-only (in-memory store, no behavioral writes). **Serves need a restart.**
+
+- **Fork resolved (owner):** **(b) graph-native** — the brain accumulates its own behavioral usage as
+  durable state, consolidated from the log WAL by a dreaming pass; the rung reads it from the brain, not
+  a file scan; raw logs become a disposable write-ahead buffer. NOT (a) SQLite. Hot-write volume stays
+  out of Neo4j because consolidation is a periodic batched fold, not per-event writes.
+- **Design:** the brain is the **accumulator**. `record_usage` unions per-memory used-session SETS, so
+  it is idempotent — re-folding the same logs, or re-folding a *subset* after rotation drops old
+  segments, never double-counts and never loses signal. So a **durable** store makes logs disposable
+  with **no cursor needed for correctness** (a cursor is only a later efficiency optimization).
+- **Increment 1 — BUILT (additive, zero live-brain/schema change; gate 605 passed):**
+  `experiential/behavioral.py` — `BehavioralStore` protocol + `InMemoryBehavioralStore` +
+  `consolidate_usage`; `experiential/fate.py` — `usage_sessions_by_memory` (the session-set unit;
+  `reuse_by_memory` now delegates to it, behavior-preserving); `dreaming/behavioral_consolidation.py` —
+  `BehavioralConsolidationPass` (actor, injected seam, firewall-clean, mirrors the refresh passes).
+  8 tests incl. the disposability property (subset re-consolidation keeps prior signal). The swappable
+  seam everything plugs into; nothing wired live yet.
+- **Increment 2 — NEXT (the live/risky part; gated on a `thalamus backup`):** `Neo4jBehavioralStore`
+  (additive label, doesn't touch `M_experiential`), serve wiring, **shadow-validate** (brain weights ==
+  file-recomputed weights) before cutover, then repoint `_recompute_usage_weights` at the brain and let
+  I-2 rotation drop consolidated segments. Backup first (the Neo4j-wipe incident).
+- **Spec:** `experiential/behavioral.py`, `dreaming/behavioral_consolidation.py`; ties to L-R1 (the
+  consumer), I-1 (the sibling pass pattern), I-2 (disposability closes the loop).
+
 ---
 
 ## Track M — Measurement / eval
 
-### M-1. L3 brain-on vs brain-off ablation — `design` · **P2**
+### M-1. L3 brain-on vs brain-off ablation — `design EXAMINED (3-expert panel)` · **P2** *(2026-06-17; `retained:5023addb`)*
 - **What:** The only metric that validates the thesis: does a brain-informed actuator make fewer
   cross-cutting mistakes on real tasks? Hardest to measure; confounded by easier-tasks/changed-user.
-- **Do:** Design the ablation + fallback soft signals (time-to-resolution, dead-ends, L3 deltas at
-  intervals).
-- **Spec:** §16; planning.md; path-to-real-data.md.
+- **Panel verdict (convergent):** the naive "gotcha-avoidance ablation" is **NOT the thesis test** and
+  as-proposed is **circular** (if the memory is the warning, injecting it = injecting the answer;
+  curating cases the brain holds conditions on it winning; can't produce a negative result). Reframe it
+  as **M-1a — a conversion/delivery probe** (does surfacing the decisive memory cause an objective
+  behavior change *above salience*?) — a necessary-condition proof + regression guard for the §13.10
+  prohibitive-memory path, **not** the thesis.
+- **Hard gates (non-negotiable):** a held-out **negative-control set** (brain has no relevant memory →
+  brain-on must NOT win; clear *this* null, not zero); a **generic-salience arm**; a **content-ablation
+  arm** (strip only the relevant memory); memories must be **episodes/why** (reason-from, not
+  warning-shaped → no leakage); **programmatic blind judging** (a code detector, not an LLM grading
+  prose — firewall); **pre-registration**; **per-case** stats + anytime-valid CI / Beta-Binomial.
+- **Better primitive (build toward):** **within-task decision-point ablation** — at real dogfood
+  decision points, two next-actions (brain-context vs ablated/decoy), score the action by an external
+  check. Per-*decision* N (biggest power lever), uncurated (recovers external validity). M-1a is its
+  curated special case. **Task-replay** (real tasks, tests-as-judge) is closer to true M-1 but
+  thin/expensive here. **Per-recall IPS** is the right long-run ATE estimator but **blocked on R-7**
+  (`propensity=1.0` → no common support → IPS *undefined*); build the propensity **logging** now, defer
+  the estimator (needs stochastic serving + volume = likely multi-user). Soft signals = guardrails only.
+- **The real new construction (shared):** an **actuator-in-the-loop harness** (consumes the served set →
+  emits an action) + programmatic detectors. `harness.compare`/`NullRetriever` already give the
+  retrieval on/off switch. **Build order:** (a) actuator harness + detectors; (b) M-1a with all guards,
+  pre-registered; (c) graduate to decision-point ablation; (d) R-7 propensity logging in parallel.
+- **Spec:** §16; planning.md; path-to-real-data.md; `eval/harness.py`, `instrumentation/logging_retriever.py`.
 
-### M-2. `plan`-tool brief-quality eval (L1.5 gotcha-cases) — `design` · **P2**
-- **What:** Before L3 is feasible, a curated "gotcha-case" set: does the brief contain the relevant
-  constraint/gotcha when one is known to apply?
-- **Gate:** pairs with C-3.
-- **Spec:** planning.md open questions.
+### M-2. `plan`-tool brief-quality eval (L1.5 gotcha-cases) — `built (staged)` · ✅ *(2026-06-17)*
+- **What:** A curated "gotcha-case" set: does the brief surface the relevant constraint/gotcha/finding
+  when one is known to apply? Built as `plan-brief-eval` (CLI) + `eval.plan_brief` (harness): cases =
+  (target, expect_memory_id|expect_text); reports gather recall + misses. **Anti-circularity baked in**
+  (cases must be pre-existing, human-judged content — else it only measures a link round-trip).
+- **Spec:** `eval/plan_brief.py`, `cli/plan_brief_eval.py`; starter set `docs/eval/plan_brief_cases.json`.
+
+### M-4. Rung-validation eval — utility-join ablation — `built (staged)` · ✅ *(2026-06-17)* *(the L1 for the rungs)*
+- **What:** `rung-eval` — validates the retrieval rungs by the **right** metric: re-run each past
+  recall's cue through `brain-off/+usage/+structrel/+central/+full` and score recall@k/MRR/hit of the
+  memory **actually used** (label from the usage/attribution logs, joined by `eval.cases_from_usage`).
+  `--split` does a leak-free temporal split (weights from older recalls, test on newer *labeled* ones).
+  Reuses `serve_config` so a config-rich brain (sample-project SCIP/corpora/`data_dir`) builds as the live
+  tool does. **This is what M-1 needs at L1** — the surface metric (`probe-eval`) can't judge re-rankers.
+- **Verdict delivered:** see L-R1 (usage: real but recall tradeoff) and L-R2 (centrality: clean winner;
+  structrel: dropped). **Open follow-on:** more `record_usage`/attribution volume (L-1) for a larger,
+  multi-brain test set; the explicit `record_usage` signal is dead — attribution carries it (D-4).
+- **Spec:** `eval/benchmark.py` (`cases_from_usage`), `cli/rung_eval.py`, `cli/rung_arms.py`.
 
 ### M-3. Benchmark freeze-vs-refresh (Goodhart) — `idea` · **P3**
 - **What:** Thin live signal → over-reliance on the frozen benchmark. Manage the freeze/refresh
@@ -347,11 +598,14 @@ hardening, then the security workstream. Full detail below.
   dead config for the BGE path. Tidy.
 - **Spec:** `cli/{remember,dogfood}.py`.
 
-### D-4. Investigate the `used:true` rate — `partial` · **P2**
-- **What:** Usage is dominated by `used:false`. Confirm whether `record_usage` is genuinely
-  under-called or a write-path bug drops signals (trace `record_outcome` + the bounded pending-payload
-  FIFO eviction). Overlaps L-1.
-- **Spec:** `gateway/server.py:94-150`.
+### D-4. The `used:true` rate — `ANSWERED` · ✅ *(2026-06-17)*
+- **Answered (not a write-path bug):** explicit `record_usage` (the SECONDARY *citation* signal) is
+  genuinely low — sample project 0 / this repo ~6 `used:true` — because actuators rarely cite recalled
+  *content* strongly. The PRIMARY signal is footprint **attribution** (`usage_attributed.jsonl`: 261
+  sample project / 83 this repo `used:true`), which is durable and works — so the rungs + verdict are fed.
+- **The live signal worth pursuing instead → see R-9:** 52 of 75 memories surfaced ≥2× are reliably
+  *ignored* (only 2 reliably-used). That's a **recall-precision** question, not a capture bug.
+- **Spec:** `experiential/fate.reuse_by_memory`, `cli/attribute.py`; finding `retained:33fcc02a`.
 
 ---
 

@@ -24,7 +24,7 @@ irrelevant one.
 Firewall (§14.2 / §14.3, hard): the weight is computed **only** from the cross-link/graph topology
 (``CrossLinkIndex`` memory→nodes + ``StructuralGraph`` node degree) — a deterministic, external fact
 of how the brain's hemispheres are wired — and **never** from the memory's own text/embedding or any
-model judgment of its prose (the Polynoica self-reference trap). Each candidate keeps its native
+model judgment of its prose (the self-validation trap). Each candidate keeps its native
 ``score`` for the off-policy log, and the centrality rank/weight are recorded in ``features``. The
 weight is ablatable (``weight=0.0`` turns the layer off) and the rung is removable behind the seam.
 """

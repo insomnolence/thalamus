@@ -1,6 +1,6 @@
 """proxy↔truth monitor — keep ``utility@k`` honest against Tier-2 outcomes (OLR §13.12).
 
-Polynoica's actual failure was the *metric*: a proxy that read well while measuring
+An earlier project of ours failed on the *metric*: a proxy that read well while measuring
 nothing real. The guard is to hold the cheap trainable proxy (Tier-1 ``utility@k``)
 against the meaningful truth (Tier-2 task outcomes) and watch them move together. If
 utility is high but does not separate *successful* sessions from *failed* ones, the

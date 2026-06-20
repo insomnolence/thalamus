@@ -4,6 +4,91 @@
 numbers `§13.x` are used globally across the design notes; cross-references here to §1–§12, §14, §15
 point back to [`design-notes.md`](../design-notes.md).*
 
+> **Re-aimed 2026-06-15; rung verdict added 2026-06-17; Architecture B, R-9 diagnosis, R-7 build,
+> and M-1 panel findings added 2026-06-17.** This document was written around the **code-outcome**
+> direction (did committed work survive / tests pass). The credibility/learning track's **target
+> signal has moved** to **relevance credibility** — which memories are *current / used / important /
+> well-connected* — because outcome capture does not accrue in the primary workflow, whereas usage +
+> supersession + recency + structural centrality accrue every session. The **outcome loop** (churn /
+> `session_fate` / proxy↔truth-on-commits) is **PARKED** — built, gated, dormant; kept for if
+> instrumented coding ever resumes. What carries over unchanged: the **firewall** (§13.7 —
+> external/behavioral facts only, never the model grading its own prose), the **modularity seams**,
+> and the **research toolkit** (SNIPS / anytime-valid CIs / ranking), which re-target cleanly onto a
+> usage-based ranker. Authoritative plan for the current direction: [`learning-loop.md`](learning-loop.md).
+> ROADMAP.md Track L has the ranked build order.
+>
+> **Rung verdict (de-leaked utility-join, 2026-06-17 — on a code-rich sample-project brain and the
+> this-repo brain):**
+> - **L-R2 global — `StructuralCentralityRetriever` (structural-centrality): the clean winner.**
+>   Lifts recall AND MRR on both brains, no tradeoff; graph topology only, non-circular.
+>   Applied **outermost** (leads the live ranking). This is the rung whose signal is independent of
+>   usage labels and survives the de-leak cleanly.
+> - **L-R1 — `UsageWeightedRetriever` (usage): real signal, but an intrinsic recall@k tradeoff.**
+>   Past usage predicts future use and the lift survives de-leaking, but it over-promotes
+>   used-but-not-yet-popular memories at the cost of recall@k. Big win on the process-heavy brain
+>   (this repo); a recall wash on a code-rich sample project. RRF weight 0.5≈1.0 — not tunable away. Kept ON
+>   (applied **inner**, so centrality leads); disablable via `usage_weighting=False` where recall
+>   matters more than the top hit.
+> - **L-R2 query-local — `StructuralRelevanceRetriever` (structural-relevance): earns ~nothing on
+>   both brains → DROPPED from the live chain.** `structural_relevance=False` is the default;
+>   the rung is kept behind the flag as a removable §14 layer for a future rework, but it is not
+>   wired into the live ranking chain.
+>
+> **So the three rungs shipped, but the live default is: centrality (leads) + usage (inner, with
+> recall@k tradeoff); structrel off.**
+>
+> **Scope of the verdict (R-9 diagnosis, 2026-06-17):** The verdict is scoped to
+> *footprint-labelled* memories evaluated on *code-touching* sessions. The 52-of-75 "reliably
+> ignored" finding is ~87% a measurement artifact: footprint-empty curated memories (firewall,
+> vision, discipline) receive `used=False` by construction; the citation signal `|mem ∩ out| / |mem|
+> ≥ 0.5` penalizes long memories (only ~1.1% of live citation signals clear 0.5); plus stale
+> attribution. **Do not demote the "ignored" set** — it is dominated by architectural/orientation
+> memories, not junk (a Goodhart trap). The deeper open gap: there is no firewall-clean behavioral
+> credit signal for *conceptual* recall (an orientation memory that silently kept the actuator on
+> track but was never cited). The only clean path is an explicit `record_usage` declaration (the
+> actuator naming the memory used, independent of token overlap). The verdict stands for its scoped
+> domain; it is silent on conceptual and orientation recall.
+>
+> **Usage-signal reality:** explicit `record_usage` calls are effectively dead (this repo ~6 true,
+> the sample project 0). The **time-window attribution log** (`usage_attributed.jsonl`, via `attribute.py`)
+> carries the real usage signal — sample project 261 attributed, this repo 83. Attributed usage is
+> backward-looking: a recall is labeled "used" only once later commits touch its footprint, so the
+> newest recalls are unlabeled. Where the docs lean on `record_usage` as the usage signal, read
+> "attribution" instead.
+>
+> **Architecture B (Track I-3, 2026-06-17):** The usage rung previously recomputed weights from raw
+> JSONL log files at each maintenance tick. Now a `BehavioralConsolidationPass`
+> (`dreaming/behavioral_consolidation.py`) folds the log write-ahead buffer into a durable
+> `BehavioralStore` backed by `Neo4jBehavioralStore` (`experiential/neo4j_behavioral.py`) — one
+> MERGE'd node per `(memory_id, session_id)` used-pair, additive label `M_behavioral_use`,
+> idempotent. `UsageWeightedRetriever` now calls `behavioral_store.usage_weights()` **from the
+> brain**. Because the store is a set-union, re-folding any subset of the raw logs never
+> double-counts and never loses signal — the raw JSONL files demote to a disposable write-ahead
+> buffer with no cursor needed for correctness. The brain is now the system of record for its own
+> behavioral history. Shadow-validated before cutover (44 memories, exact match). See §13.8
+> (signal taxonomy) for where behavioral credit sits in the firewall.
+>
+> **Propensity logging (R-7, 2026-06-17):** `propensity=1.0` (deterministic top-k) made off-policy
+> estimation undefined (no common support). **Built:** `ExploringRetriever`
+> (`retrieval/exploring.py`) — a two-policy mixture (with prob 1−ε deterministic top-k; with prob ε
+> a uniform random k-subset of the top-pool) with an exact per-item marginal propensity stamped into
+> each shown item's `features["propensity"]`; `LoggingRetriever` now logs that. Off by default
+> (ε=0, live recall unchanged). The IPS/SNIPS estimator is **deferred** — this builds the logging
+> substrate (the irreversible-if-deferred half). See §13.9 and §13.11.
+>
+> **M-1 (brain-on/off ablation) — design examined (3-expert panel, 2026-06-17):** The naive
+> "gotcha-avoidance" ablation is circular as proposed (see §13.20). Reframed as **M-1a — a
+> conversion/delivery probe** (necessary-condition proof for the §13.10 prohibitive-memory path,
+> not the thesis itself). Hard gates: negative-control set, generic-salience arm, content-ablation
+> arm, episodes/why memories (not warning-shaped), programmatic blind judging, pre-registration.
+> Pre-registration protocol: `docs/eval/m1a_preregistration.md`. See §13.20 for full treatment.
+>
+> **Negative result to preserve:** `probe-eval --rungs` ablates rungs by the SURFACE metric
+> (top-1 cosine). That metric **saturates** and cannot discriminate re-rankers — it is not useful for
+> judging rung quality. `rung-eval` (utility-join: does the rung rank the *actually-used* memory
+> higher, scored by recall@k / MRR / hit@k against the attribution-labeled set, with `--split` for a
+> leak-free temporal split) is the right instrument for re-rankers.
+
 ---
 
 ## 13. Overview
@@ -21,7 +106,7 @@ and the measuring instrument, not the answer**: it provably cannot generalize to
 (cold start), model context/interaction effects, or fix a mis-organized space. Governing axis:
 **measured vs. unmeasured, not easy vs. hard** — build the boring baseline as the stick, then
 reach for the frontier and measure it against the stick. Symmetric trap: novelty-for-its-own-sake
-(difficulty as a proxy for quality) is what sank Polynoica — reach *with* the instrument, never blind.
+(difficulty as a proxy for quality) is what sank our predecessor project — reach *with* the instrument, never blind.
 
 ### 13.2 The disease: the recall ceiling
 
@@ -66,22 +151,22 @@ Different layers of one system:
 
 If the candidate pool is generated by the same space being trained, the space only sees pairs it
 already believes → self-reinforcement → a confident, self-consistent, possibly-wrong geometry
-(Polynoica's "it's learning!" illusion in respectable dense-retrieval clothes). **Exploration
+(our predecessor project's "it's learning!" illusion in respectable dense-retrieval clothes). **Exploration
 injects pairs the space wouldn't pick; the external outcome adjudicates them.** Exploration is
 therefore what keeps the loop non-self-referential — not merely a data-volume tactic.
 
-### 13.7 Anti-Polynoica invariants
+### 13.7 Anti-self-validation invariants
 
 - Every training label comes from a signal **independent of the optimized space** (deterministic
   overlap, frozen BGE, `pytest`, git, human) — never the learned geometry judging itself.
-- Cosine-in-the-learned-space is the **optimization target**, not the reward. (Polynoica's fatal
-  move was using cosine-in-its-own-space *as* the reward.)
+- Cosine-in-the-learned-space is the **optimization target**, not the reward. (Our predecessor project's
+  fatal move was using cosine-in-its-own-space *as* the reward.)
 - Removable + measurable: nested baselines (frozen top-k ⊂ +bandit reweighting ⊂ +bent geometry),
   each the stick for the next.
 - **Model-interpretation firewall:** model-generated content (inferred whys §13.17, actuator-as-judge
   §13.9, dreaming abstractions §13.18) may be *retrieved* and *proposed*, but only **external** outcomes
   (tests, kept-vs-reverted, human) may *validate* or *reweight* it. Never let a model's interpretation
-  become its own validation signal — that is the Polynoica self-reference trap in slow motion.
+  become its own validation signal — that is the self-validation trap in slow motion.
 
 ### 13.8 Signal taxonomy
 
@@ -97,6 +182,20 @@ the meaningful-noisy layer.**
 
 Every signal is an **external act**, never a distance in the retriever's space → self-reference
 (FM1) impossible by construction.
+
+**Tier-1 implementation note (Architecture B, 2026-06-17):** the Tier-1 behavioral usage signal
+is now durable in the brain itself. `BehavioralConsolidationPass` folds the Tier-1 log WAL into
+`Neo4jBehavioralStore` (`M_behavioral_use` nodes, one per `(memory_id, session_id)` used-pair,
+idempotent set-union), and the usage rung reads weights directly from that store. The raw log
+remains a write-ahead buffer. The Tier-0 propensity signal is now correctly stamped per item by
+`ExploringRetriever` (was a hardcoded placeholder 1.0 prior to 2026-06-17).
+
+**Known blind spot in Tier-1:** the footprint-attribution path (the primary `used` signal) is
+structurally blind to conceptual/orientation memories that carry no code footprint. Such memories
+receive `used=False` by construction, regardless of behavioral value. The citation signal
+(`|mem ∩ out| / |mem| ≥ 0.5`) is also blind to them (low hit rate on long memories). This is not
+a bug to fix with ranking; it is a measurement ceiling. The firewall-clean path to credit conceptual
+recall is an explicit `record_usage` declaration from the actuator.
 
 ### 13.9 The exploration hierarchy
 
@@ -118,6 +217,15 @@ cases — exploration in the *labeling* dimension). Keep novelty/under-observati
 explore* strictly separate from outcomes driving *usefulness* (saliency≠novelty, per §4).
 **Dreaming/consolidation is the offline home for the expensive Layers 2–3.** Stakes estimation
 prefers deterministic signals (file paths, dirty tree, tests green, mid-multi-step edit).
+
+**Layer-2/4 substrate status (R-7, 2026-06-17):** the propensity-stamping prerequisite for Layers
+2 and 4 is **built** (`retrieval/exploring.py` — `ExploringRetriever`, `explore_selection`). Prior
+to this, every logged event had `propensity=1.0` (deterministic top-k), which makes IPS estimation
+*undefined* (no common support), not merely noisy. The `ExploringRetriever` computes an exact
+per-item marginal propensity for a two-policy mixture (deterministic top-k with prob 1−ε; uniform
+random k-subset of the top-pool with prob ε), stamped into `features["propensity"]`. Off by default
+(ε=0). The IPS/SNIPS estimator over accrued stochastic-serving volume is deferred — this builds
+the logging substrate, the half that is irreversible if deferred.
 
 ### 13.10 Hindsight relabeling (the centerpiece)
 
@@ -167,6 +275,12 @@ query, M)** — bridge query→memory *before* any solution exists. The solution
 
 Two append-only logs. Decision-time features and propensities **cannot be reconstructed after the
 fact**; omit them at step 1 and off-policy learning is permanently impossible.
+
+**Propensity status (2026-06-17):** the per-item realized propensity is now correctly stamped by
+`ExploringRetriever` (R-7 build). The old `1.0` placeholder is retired for sessions running with
+ε>0. At ε=0 (the default) the logged propensity is still 1.0 — correct, but with no common
+support for IPS; the estimator therefore stays deferred until stochastic sessions accrue. The
+ranker-version field is also stamped, enabling free intervention-harvesting across reships.
 
 **(a) Retrieval-event log.** Per retrieval event: event/session/timestamp; cue (raw prompt+focus,
 embedding, intent label); **candidate set with each candidate's feature vector at decision time**;
@@ -306,7 +420,7 @@ rationale whys, which alone need capturing.
 
 **Keep it honest:** tag every why-component **evidenced** (trajectory/structural) vs **asserted**
 (narrative); confidence parallels §13.10. An *unmarked inferred why is the brain telling itself a
-story about its own past* — a historical-narrative cousin of the Polynoica self-reference trap.
+story about its own past* — a historical-narrative cousin of the self-validation trap.
 
 **The synthesis — why = belief, not fact.** Split Brain 1: **immutable episode history** (append-only
 facts) + **mutable belief layer** (the whys: time-stamped, assumption-bearing). Belief revision
@@ -335,7 +449,7 @@ async" are re-parsed by Brain 2 on demand (§4/§5), never stored to drift. The 
 
 **Backbone.** **R1** — versioned beliefs + **supersession edges carrying the reason** + valid-from/to
 timestamps; current-truth = the un-superseded frontier (*a view*); history traversable. Boring/proven
-temporal KG; Polynoica `TemporalKnowledgeGraph` (§11) is a seed. **R2** — bi-temporal (valid-time vs.
+temporal KG; the predecessor's `TemporalKnowledgeGraph` (§11) is a seed. **R2** — bi-temporal (valid-time vs.
 transaction-time): principled ("what we believed in March" vs. "what was true in March"), likely
 premature. **Never delete — supersede with reason** (preserves the rejected-alternatives jewels, §13.17).
 
@@ -416,17 +530,33 @@ mechanisms already depend on it** (§13.16 footprint-join, §13.18-D2 audit, str
 
 ### 13.20 Eval harness + pre-committed metrics (closes §12's last item; CLAUDE.md #4)
 
-**Polynoica's actual failure was the metric itself** (self-referential reward → false "it's learning"
+**Our predecessor project's actual failure was the metric itself** (self-referential reward → false "it's learning"
 story). So the harness decides whether §13 is real or narrative. The **§13.11 logs *are* the eval
 substrate** — log-obsessively and evaluate are two uses of one stream.
 
 **Three levels.** **L1 — component/offline proxy:** `utility@k`, recall, recall-of-useful-but-distant;
 needs labels we mostly lack → **hindsight relabels (§13.10) serve, on a held-out split** to avoid
 training/eval circularity; noisy → *directional proxy only.* **L2 — task-outcome (truth, confounded,
-slow):** pass/kept, time-to-resolution, dead- end count. **L3 — system ablation: brain-on vs.
-brain-off (top-line)** — most external, hardest to game, Polynoica's one supported result (+0.21–0.26);
+slow):** pass/kept, time-to-resolution, dead-end count. **L3 — system ablation: brain-on vs.
+brain-off (top-line)** — most external, hardest to game, our predecessor project's one supported result (+0.21–0.26);
 can't run the same instance both ways → matched pairs / interleaving / held-out benchmark. Relationship:
 **L3 truth-north, L2 per-task truth, L1 fast proxy; the proxy↔truth divergence monitor keeps L1 honest.**
+
+**M-1 brain-on/off ablation — design examined (3-expert panel, 2026-06-17).** The naive
+"gotcha-avoidance" ablation (L3 brain-on vs. brain-off) is **circular as first proposed**: if the
+curated memory IS the warning, injecting it injects the answer; curating the test set conditions on
+the brain having relevant content; no honest negative result is possible. The panel reframes it as
+**M-1a — a conversion/delivery probe** (does surfacing the decisive memory cause an objective
+behavior change, above generic salience?), which is a necessary-condition proof for the §13.10
+prohibitive-memory path and a regression guard — **not** the thesis. M-1a hard gates: held-out
+negative-control set (brain has no relevant memory → brain-on must NOT win — clear this null, not
+zero); a generic-salience arm; a content-ablation arm (strip only the relevant memory); memories
+must be episodes/why (reason-from, not warning-shaped, to prevent leakage); programmatic blind
+judging (a code detector, not an LLM grading prose — firewall); pre-registration; per-case
+anytime-valid stats (Beta-Binomial or equivalent). The better primitive to build toward is a
+**within-task decision-point ablation** (at real dogfood decision points, two next-actions scored
+by an external check — per-*decision* N, uncurated). Per-recall IPS is the right long-run ATE
+estimator but blocked on R-7 volume. Pre-registration protocol: `docs/eval/m1a_preregistration.md`.
 
 **Benchmark.** A frozen curated SWE-bench-style task set (poss. mined from project history) as the
 *regression guard* + live longitudinal metrics as the *real-world signal*. Unavoidable tension:

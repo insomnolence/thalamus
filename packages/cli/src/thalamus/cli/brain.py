@@ -131,7 +131,7 @@ def _code_files_for(code_language: str) -> Callable[[Path], list[Path]]:
 
 def _doc_corpus_label(root: Path) -> str:
     """A short, stable label for a doc root — its dir name, or the parent's when the dir is
-    a generic ``docs``/``doc`` (so a sibling ``mcp-server/docs`` and ``dollhouse/docs`` differ)."""
+    a generic ``docs``/``doc`` (so a sibling ``mcp-server/docs`` and ``sample-app/docs`` differ)."""
     generic = {"docs", "doc", "documentation"}
     return root.parent.name if root.name.lower() in generic else root.name
 
@@ -249,8 +249,9 @@ def build_two_hemisphere_gateway(
     structural_centrality: bool = True,
     centrality_weights: CentralityWeightsRef | None = None,
     # Off by default: the rung-eval utility-join (2026-06-17) found the query-local structural
-    # relevance rung earns ~nothing on both the dogfood and dollhouse brains. Kept behind the flag
-    # (removable layer, §14) for a future rework, not wired into the live chain.
+    # relevance rung earns ~nothing on both this repo's own brain and a code-rich sample
+    # brain. Kept behind the flag (removable layer, §14) for a future rework, not wired
+    # into the live chain.
     structural_relevance: bool = False,
     max_structural_items: int = 12,
     max_memory_chars: int = 1000,
@@ -369,9 +370,9 @@ def build_two_hemisphere_gateway(
     # Reads a refreshable holder (empty → identity for a cold brain; the dreaming UsageRefreshPass
     # swaps in fresh weights mid-serve as usage accrues).
     # Verdict (rung-eval utility-join, de-leaked, 2026-06-17): a strong MRR win but a recall@k
-    # tradeoff (over-promotes used-but-unpopular
-    # memories) — big on dogfood (process-heavy), a wash on dollhouse (code-rich). Applied INNER
-    # (centrality leads); disable via usage_weighting where recall matters more than the top hit.
+    # tradeoff (over-promotes used-but-unpopular memories) — big on this repo (process-heavy),
+    # a wash on a code-rich sample project. Applied INNER (centrality leads); disable via
+    # usage_weighting where recall matters more than the top hit.
     if usage_weighting and usage_weights is not None:
         base = UsageWeightedRetriever(base, usage_weights)
         policy += "+usage"

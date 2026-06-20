@@ -28,7 +28,7 @@ This is the *intended* order (§10 step 0 = "instrument first", before the basel
 measured from day one). But it means the green checkmarks are a statement about correctness of
 construction, not about value delivered. We have built the rulers; we have not yet measured anything real
 with them. Conflating the two is precisely the self-congratulatory failure mode §13.20 warns about (the
-Polynoica "it's learning!" story was a *metric* reading well on data that didn't mean what it seemed).
+predecessor project's "it's learning!" story was a *metric* reading well on data that didn't mean what it seemed).
 
 ## Two senses of "data in Brain 1" (they unlock different tests)
 
@@ -120,7 +120,7 @@ first arena, and it is available now with no external agent:
   trajectory → real episode → next time, real retrieval. That is R1+R2 happening on live data.
 
 Using the thing is also the fastest way to learn *what is actually missing* — far faster than building
-more framework speculatively. The §10/anti-Polynoica discipline ("use it daily") is satisfied by
+more framework speculatively. The §10/anti-self-validation discipline ("use it daily") is satisfied by
 dogfooding, and it converts the project from "framework" to "framework with real data flowing through it."
 
 ## Honest limits
@@ -137,13 +137,39 @@ dogfooding, and it converts the project from "framework" to "framework with real
   capture end-to-end on real logs, give the first honest *"surfacing helped"* anecdotes, and tell us what's
   broken. Cannot: deliver the "more use → more useful" slope cleanly (confounded — §13.20) or substitute
   for the volume the learned layers need.
+- **The M-1 ablation is not the thesis test (2026-06-17, 3-expert panel, `retained:5023addb`).** The
+  intuitive framing — build a "gotcha avoidance" ablation (brain-on vs brain-off on tasks the brain
+  holds warnings for) — is **circular**: if the remembered memory *is* the warning, injecting it
+  injects the answer; curating cases the brain holds conditions on the brain winning; a negative result
+  is structurally blocked. The correct reframe is **M-1a — a conversion/delivery probe**: *conditional
+  on the brain already holding the decisive memory, does surfacing it cause an objective behavior change
+  above generic salience?* That is a narrow necessary-condition proof and regression guard for the
+  §13.10 prohibitive-memory path, **not** the thesis. Hard gates (non-negotiable): a held-out
+  negative-control set (brain has no relevant memory → brain-on must not win); a generic-salience arm;
+  a content-ablation arm; memories must be **episodes/why** (reason-from, not warning-shaped — no
+  leakage); **programmatic blind judging** (a code detector, not an LLM grading prose — firewall);
+  **pre-registration** before any run; per-case stats with anytime-valid CI / Beta-Binomial. The
+  pre-registration lives at `docs/eval/m1a_preregistration.md`.
+
+  The **better primitive to build toward** is a within-task decision-point ablation: at real dogfood
+  decision points, compare two next-actions (brain-context vs ablated/decoy) scored by an external
+  check. Per-*decision* N is the biggest power lever; cases are uncurated (recovers external validity).
+  M-1a is its curated special case. Task-replay (real tasks, tests-as-judge) is closer to true M-1 but
+  thin and expensive here. **Per-recall IPS** is the right long-run ATE estimator but blocked on R-7
+  (`propensity=1.0` made off-policy estimation undefined — no common support) and on stochastic-serving
+  volume (likely multi-user). R-7 built the propensity-logging substrate (2026-06-17); the IPS
+  estimator is deferred.
 
 ## Status & next
 
 Current position on the ladder and the active build chunk are tracked in
-[`../STATUS.md`](../STATUS.md). In short: **R0 done; R2's ingestion spine is now built** (the
-`CommitBoundedSegmenter` + `EpisodeBuilder` + `ingest_episodes`, in the `experiential` package, with a live
-demo recalling a materialized episode through the gateway). **The remaining half of R2 is the dogfood**:
-generate *real* episodes by running the observers over real activity — blocked only by this repo having no
-commits yet (so `GitObserver` has nothing to read; committing is the user's call). A thin R1 (a few curated
-memories + a real recall against this repo) folds into the same arc.
+[`../STATUS.md`](../STATUS.md). In short: **R0 done; R2's ingestion spine is built and dogfooding is
+active.** The `CommitBoundedSegmenter` + `EpisodeBuilder` + `ingest_episodes` (in the `experiential`
+package) are live; real episodes accumulate from development activity. **Track I (2026-06-17)** has
+additionally made the brain the durable accumulator of its own behavioral usage: `Neo4jBehavioralStore`
+/ `BehavioralConsolidationPass` consolidate the log write-ahead buffer into the brain each maintenance
+tick; the flat event logs are now a rotatable, disposable WAL rather than the system of record for
+learning. The usage rung reads from the brain. **R-7 (2026-06-17)** built the off-policy propensity
+substrate so that if/when stochastic serving begins, the IPS estimator has common support. Active
+build direction: see ROADMAP.md (commit I-3, then M-1a per the pre-registration, then Track C
+capability work that also feeds Track L with dogfood volume).
