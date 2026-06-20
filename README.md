@@ -1,171 +1,144 @@
-# Project Thalamus
+# Thalamus
 
-A persistent **brain** for agentic LLMs — long-term memory, recall, and understanding
-that survives across sessions, updates itself, and gets more useful the more it is used.
+**A self-hosted, code-aware brain for coding agents.** Long-term memory that survives across
+sessions, learns your codebase *and* the decisions behind it, links *why you did something* to
+*where it lives in the code*, and ships with the instruments to prove it's actually helping.
+
+Runs locally on your machine (Neo4j + a local embedding model), exposed to your agent through a
+single MCP endpoint. No cloud, no account, no per-seat pricing.
+
+> **Status — honest version.** This is a working, daily-dogfooded **research system**, not a polished
+> product. Both hemispheres are live, the learning loop runs, and the measurement is real and
+> reproducible — but it's validated at single-user scale, the setup has rough edges, and the headline
+> "more use → more useful" thesis isn't *proven* yet (the instrument to prove it is built; see
+> [Does it actually work?](#does-it-actually-work)). If that framing appeals to you, read on.
 
 ## Why
 
-LLMs are predictive and stateless. They have no real memory or understanding. The current
-state of practice — frameworks and files used as "memory" — forgets, never updates stored
-knowledge, and is often ignored or useless. Thalamus models the thing that actually works
-for this: a brain with experiences and consolidated knowledge that an agent can lean on.
+LLM agents are stateless. Every task starts from scratch — they re-derive the same context, repeat
+the same mistakes, and forget *why* the code is the way it is. The common fix (frameworks and files
+used as "memory") forgets, never updates stored knowledge, and is usually ignored.
 
-## What it is *not*
+Thalamus models the thing that actually works: a brain with **experiences** (what you did and *why*)
+and a **structural map** of the code, that an agent leans on — and that gets more useful the more
+it's used.
 
-- It does **not** try to replace the LLM (that was an earlier project of ours' failed bet).
-- It does **not** put a JEPA / world model in the execution path. JEPA was explicitly dropped
-  for this project — see the design notes for the full reasoning.
-- It does **not** make an exotic model (JEPA, LNN, SNN, Hopfield, …) the *foundation*.
-  Novelty lives in a removable, measurable layer *on top of* a working base.
+## What makes it different
 
-## Status
+A wave of "agent memory" systems has arrived (Perplexity's Brain; the open-source mem0 / Zep / Letta).
+Most are *conversational / personal-knowledge* memory, cloud-locked or built from LLM-guessed graphs.
+Thalamus is differentiated on three things they don't do:
 
-The step-0/1 baseline is implemented and actively dogfooding. Brain 1 (experiential)
-and Brain 2 (structural) are both live in a long-running MCP serve:
+- **Code-aware.** A whole hemisphere is the **structural graph of your code** — AST / SCIP dependency
+  graph, call edges, a `plan` blast-radius tool ("change this → here's what breaks") — cross-linked to
+  the experiential memory of *why* it's that way. It's a brain for *coding*, not chat.
+- **Deterministic structure, not LLM-extraction.** The code graph is derived from parsers and
+  indexers — exact, not a language model's noisy guess at entities and relationships.
+- **Honest measurement, built in.** A proxy↔truth `verdict`, a rung-ablation eval, and calibrated
+  exploration — the apparatus to tell whether the brain is *really* helping, instead of a first-party
+  "it improves things by N%" claim. Every learning signal is an external behavioral act (used /
+  superseded / co-changed / graph-central), never the model grading its own output.
 
-- Scoped experiential storage, BGE retrieval, MCP `recall` / `remember` / `record_usage` / `plan`
-- Raw trajectory / retrieval / usage logs; explicit retained memories; evaluation harness
-- **Hybrid retrieval:** semantic (vector) fused with a BM25 lexical leg so exact identifiers and
-  rare terms surface; plus retrieval rungs ablated by a utility-join eval (centrality wins, usage ON
-  with tradeoff, structural-relevance off by default) and belief supersession-demotion, each ablatable
-  behind the retriever seam
-- **The `plan` impact tool:** resolve a target → an edge-typed, budget-bounded blast radius
-  (callers / subtypes / callees / git co-change / container, with a hub circuit-breaker) → the
-  cross-linked decisions/gotchas → one coverage-honest brief; validated by a git-derived eval
-- **Warm capture phase:** the serve perceives new git commits into Brain 1 on a periodic
-  background clock, reusing the warm encoder — no per-commit cold start, no external hook
-- **Brain 2 auto-refresh:** a `StructuralRederivePass` re-derives the code/doc graph from
-  current source on the same background clock — hash-gated (a no-change tick is ~free),
-  re-embeds only changed files, live, no restart needed
-- **Declarative `[[corpus]]` config:** Brain 2 corpora are declared per project in
-  `thalamus.toml` as `[[corpus]]` tables (`kind = python-ast | scip | docs | text | findings`,
-  `root`, `include` globs, optional `regen_command`); language-agnostic — any language with a
-  SCIP indexer works with no new ingestor code
-- **The learning loop (more use → more useful):** offline `dreaming` passes on the background
-  clock consolidate the brain's *own behavioral history into the brain itself* — which memories
-  were recalled-and-used, across which sessions — so a **usage-weighted recall rung** (fused with
-  **structural-centrality**) lifts the reliably-useful core, read from the brain, not a file scan.
-  Footprint usage-attribution and the cross-link graph are likewise refreshed in-loop. Every
-  learning signal is a behavioral *act* (used / superseded / recent / co-changed / graph-central),
-  never the model grading its own prose (the §14 firewall)
-- **Honest measurement, by design:** the append-only retrieval / usage / trajectory logs feed a
-  proxy↔truth `verdict` (does surfaced context map to real committed work?), a utility-join rung
-  ablation, and calibrated exploration with a logged propensity (off by default) so off-policy
-  evaluation has common support later. Instruments first, so the baseline is measured from day one
+- **Local, self-hosted, open.** Your code and decisions never leave your machine.
 
-Design notes and architecture live in [`docs/design-notes.md`](docs/design-notes.md).
+## How it works
 
-## Core shape
-
-- **Two hemispheres**, kept separate (a single polluted store caused real problems before):
-  - **Brain 1 — Experiential / autobiographical:** what we did and *why*, preferences,
-    history. Irreplaceable, append-mostly, consolidated over time.
-  - **Brain 2 — Structural / reference knowledge:** a re-derivable corpus graph — code
-    (AST + call graph), docs, arbitrary re-ingested material — declared per project via
-    `[[corpus]]` entries in `thalamus.toml`. Language-agnostic; auto-refreshed live.
-- **A single gateway conduit** (MCP / FastMCP) is the only interface the LLM agent touches.
-  Recall fuses both hemispheres: experiential memory plus the structural context it touched.
-- **The LLM is an actuator** working in a tight, constraint-rich window fed by the brain —
-  not an orchestrator. The brain gives it the whole-system picture so its local edits are
-  globally informed.
-- **One graph, two namespaced vector indexes** — separate vector spaces per hemisphere (no
-  retrieval pollution) with native cross-hemisphere edges linking "why we did X" to "where
-  X lives in the code."
+- **Two separated hemispheres** (a single polluted store caused real problems in an earlier project of
+  ours):
+  - **Brain 1 — Experiential:** what you did and *why* — decisions, gotchas, preferences, and episodes
+    mined from your commits. Append-mostly, consolidated over time.
+  - **Brain 2 — Structural:** a re-derivable corpus graph — code (AST / SCIP + call graph), docs,
+    text, external findings — declared per project via `[[corpus]]` entries in `thalamus.toml`.
+    Language-agnostic; auto-refreshed from current source.
+- **A single gateway (MCP)** is the only thing your agent touches. Recall *fuses* both hemispheres:
+  the relevant memory **plus** the structural context it's about.
+- **Cross-hemisphere links** connect "why we did X" → "where X lives in the code."
 - **It consolidates and learns from itself.** Like sleep, an offline *dreaming* phase runs on a
-  background clock: it re-derives Brain 2 from current code, re-links experiential memories to the
-  code they touched, demotes superseded beliefs, and folds the brain's own usage history into
-  durable state — so recall gets better over time without a restart. The raw logs are a disposable
-  write-ahead buffer; the brain is the system of record. Every adaptation is gated, removable, and
-  measured against a boring baseline (the §14 discipline), never a self-referential signal.
+  background clock: re-derives Brain 2 from current code, re-links memories to the code they touched,
+  demotes superseded beliefs, and folds the brain's own usage history into durable state — so recall
+  improves over time without a restart. Adaptations are removable and measured against a boring
+  baseline; the raw logs are a disposable write-ahead buffer, the brain is the system of record.
 
-See the design notes for the architecture, research map, open questions, and roadmap.
+Architecture, research map, and roadmap: [`docs/design-notes.md`](docs/design-notes.md),
+[`docs/deep-dives/`](docs/deep-dives/), [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-## Where we're going
+## Quickstart
 
-The near-term roadmap, in build order (most now shipped):
+**Requirements:** [`uv`](https://docs.astral.sh/uv/), Docker (for Neo4j), Python 3.12+. First run
+downloads a small local embedding model (BGE-small).
 
-1. ✓ **Hybrid retrieval** — combine semantic (vector) and BM25 lexical scoring so exact
-   identifiers, error strings, and rare terms are reliably surfaced (RRF-fused behind the
-   retriever seam, ablatable against the eval harness). **Shipped.**
-2. ✓ **Universal reference-knowledge ingestion** — the corpus/Ingestor model is a pluggable
-   producer registry: any source that emits structured nodes/edges or text chunks becomes a
-   Brain-2 corpus. Built-in producers today: `python-ast`, `scip`, `docs`, `text`, `findings`.
-   Adding a kind is a registration, not a build-dispatch edit. Guardrail: intentional curation,
-   not "ingest everything." **Shipped.**
-3. **Multi-language structural ingestion** — *partly shipped:* any language with a SCIP indexer
-   works today via the `scip` producer (TS / Rust / Go / C++ / …); a lightweight tree-sitter
-   ingestor for languages without a SCIP indexer is still future.
-4. ✓ **External analysis producers** — a `findings` producer ingests SARIF / generic-JSON
-   analysis results (linters, security scanners, deeper analyzers) as a derived,
-   regenerated-on-change Brain-2 corpus. Thalamus aggregates their output; it never runs the
-   analysis engine in the recall path. **Shipped** (retrievable corpus today; surfacing findings
-   inside the `plan` blast radius via finding→code edges is the next step).
-5. ✓ **`plan` / impact tool** — given a target, resolve the integration point (exact symbol-name
-   lookup, then semantic code-preferring fallback), compute the edge-typed blast radius (callers /
-   subtypes / callees / co-change logical coupling / container, budget-bounded with a hub
-   circuit-breaker), gather the decisions/constraints/gotchas cross-linked to everything in scope,
-   and return one fused brief with a coverage honesty report. Validated via a git-derived
-   `impact-eval` CLI. **Shipped.**
-6. **`research` tool** — a deeper cross-hemisphere "what do we know about X" synthesis.
-
-**Honest framing:** having the architecture does not guarantee the briefs are globally
-informed rather than stapled-together lists. Synthesis quality is the ongoing frontier,
-gated on capture discipline, retrieval quality, and the dogfood/verdict loop that measures
-whether the brain makes the LLM more accurate and efficient. The vision is buildable and
-measurable. See [`docs/design-notes.md`](docs/design-notes.md) §16 for the full roadmap.
-
-## Dogfood Workflow
-
-Run a durable local Brain 1 with Neo4j:
+**1. Start Neo4j** (a [`docker-compose.yml`](docker-compose.yml) is included):
 
 ```bash
-docker volume create thalamus-neo4j-data
-docker run -d --name thalamus-neo4j --restart unless-stopped \
-  -v thalamus-neo4j-data:/data \
-  -e NEO4J_AUTH=neo4j/thalamuspw -p 7687:7687 neo4j:5
+docker compose up -d
 export THALAMUS_NEO4J_URI=bolt://localhost:7687
 export THALAMUS_NEO4J_USER=neo4j
-export THALAMUS_NEO4J_PASSWORD=thalamuspw
+export THALAMUS_NEO4J_PASSWORD=thalamuspw      # local dev password; change it for anything real
 ```
 
-Commands default to real BGE embeddings. When invoking from the workspace, enable the
-routing package's optional encoder dependency:
+**2. Teach it something durable** about *this* repo, with a file footprint for structural context:
 
 ```bash
 uv run --package thalamus-routing --extra bge python -m thalamus.cli remember \
-  --repo . --kind decision \
-  --text "Memory and structural identities are scoped by tenant and repository." \
-  --why "Unscoped ids can overwrite another repository's facts." \
-  --file packages/core/src/thalamus/core/types.py
-
-uv run --package thalamus-routing --extra bge python -m thalamus.cli sync --repo .
-
-uv run --package thalamus-routing --extra bge python -m thalamus.cli serve --repo . \
-  --max-structural-items 12 --max-memory-chars 1000
+  --repo . --kind constraint \
+  --text "Changing the vector encoder requires rebuilding compatible indexes." \
+  --why "Embeddings from a different encoder aren't comparable; recall silently degrades." \
+  --file packages/store/src/thalamus/store/neo4j_store.py
 ```
 
-`remember` stores high-value explicit facts (`decision`, `constraint`, `gotcha`,
-`investigation`, or `preference`) and can attach file footprints for structural context.
-`sync` materializes derived commit episodes. `serve` exposes bounded MCP recall and logs
-retrieval and usage events beneath `.thalamus/logs/`.
-
-Claude Code can use the project-scoped [`.mcp.json`](.mcp.json) server configuration once
-Neo4j is running. On first use, approve the project MCP server when Claude prompts; verify
-it with `claude mcp get thalamus`. The MCP server exposes `recall`, `record_usage`, and
-`remember`; ask Claude to retain durable decisions or gotchas during a task, for example:
-
-```text
-Use the Thalamus remember tool to store this constraint: changing the vector encoder
-requires rebuilding compatible indexes. This applies to packages/store/src/thalamus/store/neo4j_store.py.
-```
-
-Memories written through MCP are semantically recallable immediately. Optional related-file
-structural links are resolved on the next background maintenance tick (the same clock that
-auto-refreshes Brain 2); a `remember` also triggers an immediate consolidation cycle.
-
-To attach a terminal test result to a real task session:
+**3. Materialize episodes from your git history**, then serve the brain over MCP:
 
 ```bash
-uv run python -m thalamus.cli capture-tests --repo . --junit report.xml \
-  --session-id <session-id> --terminal
+uv run --package thalamus-routing --extra bge python -m thalamus.cli sync  --repo .
+uv run --package thalamus-routing --extra bge python -m thalamus.cli serve --repo .
 ```
+
+**4. Point your agent at it.** A project-scoped [`.mcp.json`](.mcp.json) is included; in Claude Code,
+approve the `thalamus` MCP server (`claude mcp get thalamus` to verify). It exposes `recall`,
+`remember`, `record_usage`, and `plan`. Ask the agent to recall prior decisions, or to `plan` the
+blast radius of a change — and it answers from the brain.
+
+`remember` stores high-value facts (`decision` / `constraint` / `gotcha` / `investigation` /
+`preference`); `sync` derives commit episodes; `serve` exposes bounded MCP recall and logs retrieval +
+usage beneath `.thalamus/logs/`. For non-Python codebases, declare `[[corpus]]` tables in
+`thalamus.toml` (any language with a SCIP indexer works with no new code).
+
+## Does it actually work?
+
+The point of the measurement apparatus is to answer this honestly rather than assert it. On real
+dogfooding (this repo + a separate code-rich project), via the built-in `health` / `verdict` /
+`rung-eval` tools:
+
+- **Surfaced context maps to real committed work** ~65–70% of the time on the code-rich brain
+  (`utility@5`), and the proxy↔truth monitor shows the proxy **tracks** truth (positive alignment, no
+  reward-hacking flagged).
+- **A reliably-useful core forms with use** — dozens of memories recalled-and-used across multiple
+  distinct sessions.
+- **The structural-centrality retrieval rung is a clean win** (it ranks the memory the agent actually
+  used higher, on both recall and MRR) in a de-leaked ablation — that's *why* it's enabled by default.
+
+**Honest caveats** (the same instruments enforce them): this is single-user scale; the over-time
+"more use → more useful" *slope* is confounded (task drift, attribution lag) and is **not** cleanly
+measurable yet — proving it needs a controlled brain-on/off ablation, which is designed but not run
+(see [`docs/deep-dives/path-to-real-data.md`](docs/deep-dives/path-to-real-data.md) and the M-1
+pre-registration). Reproduce any of the above on your own repo:
+
+```bash
+uv run --package thalamus-cli python -m thalamus.cli health  --repo . --code-root .
+uv run --package thalamus-cli python -m thalamus.cli verdict --repo .
+```
+
+## Status & scope
+
+- **Is:** a memory/retrieval system that feeds an LLM **actuator** through one gateway. Built for
+  agentic *coding* on codebases you control.
+- **Is not:** a product, a hosted service, or an attempt to replace the LLM. The LLM stays the
+  actuator; Thalamus gives it the whole-system picture so its local edits are globally informed.
+- **Audience:** developers running coding agents who want a local, inspectable, measurable brain.
+- **Maturity:** research / dogfood. Expect setup friction and sharp edges; the design discipline is
+  "proven boring base + removable, measured novelty," and the docs are honest about what's unproven.
+
+## License & contributing
+
+See [`LICENSE`](LICENSE). Contributions, issues, and honest critique welcome — the measurement tools
+exist precisely so claims can be checked; if a number looks wrong, that's a bug worth filing.

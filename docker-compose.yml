@@ -1,0 +1,23 @@
+# Local Neo4j for Thalamus (the two-hemisphere brain's durable store).
+# Quickstart:  docker compose up -d
+# Browser UI:  http://localhost:7474   (user: neo4j, password: thalamuspw)
+# Then export THALAMUS_NEO4J_URI=bolt://localhost:7687 (see the README).
+#
+# This is a LOCAL DEV setup. The default password below is a placeholder — change it
+# (and THALAMUS_NEO4J_PASSWORD) before exposing this to anything but localhost.
+services:
+  neo4j:
+    image: neo4j:5
+    container_name: thalamus-neo4j
+    restart: unless-stopped
+    ports:
+      - "7687:7687"   # bolt (the driver connects here)
+      - "7474:7474"   # http browser UI (optional)
+    environment:
+      NEO4J_AUTH: neo4j/thalamuspw
+      # Vector indexes (used for recall) are built at runtime by Thalamus; no extra config needed.
+    volumes:
+      - thalamus-neo4j-data:/data
+
+volumes:
+  thalamus-neo4j-data:
