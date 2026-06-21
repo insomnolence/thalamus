@@ -23,11 +23,9 @@ Thalamus models the thing that actually works: a brain with **experiences** (wha
 and a **structural map** of the code, that an agent leans on — and that gets more useful the more
 it's used.
 
-## What makes it different
+## What it's built around
 
-A wave of "agent memory" systems has arrived (Perplexity's Brain; the open-source mem0 / Zep / Letta).
-Most are *conversational / personal-knowledge* memory, cloud-locked or built from LLM-guessed graphs.
-Thalamus is differentiated on three things they don't do:
+Four ideas hold the project together:
 
 - **Code-aware.** A whole hemisphere is the **structural graph of your code** — AST / SCIP dependency
   graph, call edges, a `plan` blast-radius tool ("change this → here's what breaks") — cross-linked to
@@ -35,10 +33,9 @@ Thalamus is differentiated on three things they don't do:
 - **Deterministic structure, not LLM-extraction.** The code graph is derived from parsers and
   indexers — exact, not a language model's noisy guess at entities and relationships.
 - **Honest measurement, built in.** A proxy↔truth `verdict`, a rung-ablation eval, and calibrated
-  exploration — the apparatus to tell whether the brain is *really* helping, instead of a first-party
+  exploration — the apparatus to tell whether the brain is *really* helping, instead of a self-reported
   "it improves things by N%" claim. Every learning signal is an external behavioral act (used /
   superseded / co-changed / graph-central), never the model grading its own output.
-
 - **Local, self-hosted, open.** Your code and decisions never leave your machine.
 
 ## How it works
