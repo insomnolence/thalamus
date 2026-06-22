@@ -2,6 +2,8 @@
 name = "thalamus-instrumentation"
 version = "0.1.0"
 description = "Instrumentation: logging contract + trajectory observers."
+license = "Apache-2.0"
+authors = [{ name = "The Thalamus Authors" }]
 requires-python = ">=3.12"
 dependencies = ["thalamus-core"]
 

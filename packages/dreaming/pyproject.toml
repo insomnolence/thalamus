@@ -2,6 +2,8 @@
 name = "thalamus-dreaming"
 version = "0.1.0"
 description = "Dreaming: the offline scheduler of gated, removable consolidation/refresh passes."
+license = "Apache-2.0"
+authors = [{ name = "The Thalamus Authors" }]
 requires-python = ">=3.12"
 # Framework modules (base/scheduler/log) use ``core`` only; the individual passes pull the
 # hemispheres they consolidate (structural staleness, the gateway refresh seam).

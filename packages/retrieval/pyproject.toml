@@ -2,6 +2,8 @@
 name = "thalamus-retrieval"
 version = "0.1.0"
 description = "Retrieval: Retriever protocol + baseline implementations."
+license = "Apache-2.0"
+authors = [{ name = "The Thalamus Authors" }]
 requires-python = ">=3.12"
 dependencies = ["thalamus-core"]
 

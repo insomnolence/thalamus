@@ -1,0 +1,85 @@
+name: gate
+
+# The project's gate: ruff + mypy --strict + pytest. This is the same sweep contributors run
+# locally (see CONTRIBUTING.md), enforced on every push and PR so "the measurement is reproducible"
+# is more than a claim.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  gate:
+    name: gate (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the advertised floor (requires-python >=3.12; ruff/mypy target py312);
+        # 3.14 is what the project is developed and dogfooded on. Test both ends.
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - name: Cache the fastembed (ONNX) model
+        uses: actions/cache@v4
+        with:
+          path: /tmp/fastembed_cache
+          key: fastembed-bge-small-en-v1.5
+      - name: Install the workspace
+        # --locked fails if uv.lock is stale, so the lockfile must be committed and current.
+        run: uv sync --locked --all-packages --all-extras
+      - name: ruff
+        run: uv run ruff check packages/
+      - name: mypy --strict
+        run: uv run mypy --strict packages/*/src
+      - name: pytest
+        # Neo4j integration tests skip here (THALAMUS_TEST_NEO4J_URI unset); see the neo4j job.
+        run: uv run pytest -q
+
+  neo4j-integration:
+    name: neo4j integration (py3.12)
+    runs-on: ubuntu-latest
+    # A DISPOSABLE Neo4j — the tests require THALAMUS_TEST_NEO4J_URI (never THALAMUS_NEO4J_URI) and
+    # scope their cleanup to a test tenant, so a real brain is never touched (the wipe-incident guard).
+    services:
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/testpassword
+        ports:
+          - 7687:7687
+    env:
+      THALAMUS_TEST_NEO4J_URI: bolt://localhost:7687
+      THALAMUS_TEST_NEO4J_USER: neo4j
+      THALAMUS_TEST_NEO4J_PASSWORD: testpassword
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Cache the fastembed (ONNX) model
+        uses: actions/cache@v4
+        with:
+          path: /tmp/fastembed_cache
+          key: fastembed-bge-small-en-v1.5
+      - name: Install the workspace
+        run: uv sync --locked --all-packages --all-extras
+      - name: Wait for Neo4j to accept connections
+        run: |
+          for i in $(seq 1 30); do
+            if uv run --no-sync python -c "from neo4j import GraphDatabase; d=GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j','testpassword')); d.verify_connectivity(); d.close()" 2>/dev/null; then
+              echo "neo4j is up"; exit 0
+            fi
+            echo "waiting for neo4j... ($i/30)"; sleep 3
+          done
+          echo "neo4j did not become ready"; exit 1
+      - name: pytest (incl. Neo4j integration)
+        run: uv run pytest -q

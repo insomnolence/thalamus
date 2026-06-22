@@ -2,6 +2,8 @@
 name = "thalamus-experiential"
 version = "0.1.0"
 description = "Brain 1 (experiential hemisphere): episodes, the why, beliefs."
+license = "Apache-2.0"
+authors = [{ name = "The Thalamus Authors" }]
 requires-python = ">=3.12"
 dependencies = ["thalamus-core", "thalamus-instrumentation"]
 

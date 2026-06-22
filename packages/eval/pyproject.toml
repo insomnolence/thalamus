@@ -2,6 +2,8 @@
 name = "thalamus-eval"
 version = "0.1.0"
 description = "Eval harness: curated benchmark + brain-on/off ablation."
+license = "Apache-2.0"
+authors = [{ name = "The Thalamus Authors" }]
 requires-python = ">=3.12"
 dependencies = ["thalamus-core", "thalamus-instrumentation"]
 
