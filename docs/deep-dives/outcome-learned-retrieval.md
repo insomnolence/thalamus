@@ -449,7 +449,7 @@ async" are re-parsed by Brain 2 on demand (§4/§5), never stored to drift. The 
 
 **Backbone.** **R1** — versioned beliefs + **supersession edges carrying the reason** + valid-from/to
 timestamps; current-truth = the un-superseded frontier (*a view*); history traversable. Boring/proven
-temporal KG; the predecessor's `TemporalKnowledgeGraph` (§11) is a seed. **R2** — bi-temporal (valid-time vs.
+temporal KG; the predecessor's temporal / memory-decay graph (§11) is a seed. **R2** — bi-temporal (valid-time vs.
 transaction-time): principled ("what we believed in March" vs. "what was true in March"), likely
 premature. **Never delete — supersede with reason** (preserves the rejected-alternatives jewels, §13.17).
 

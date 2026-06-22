@@ -64,19 +64,18 @@ Everything else is reuse; the gateway is the product surface (§4):
 | Brain 1 (episodic + why capture, vector retrieval) | **new** | the genuinely new build; start *coarse* (see below) |
 | Out-of-band observers (watcher, git hooks, **test-runner hook**) | **new** | test hook = the critical capture unlock (OLR §13.11) |
 
-**Reuse verified (2026-05-24)** against an earlier project of ours — uv workspace, `requires-python
->=3.12`, `src/<project>/<pkg>` src-layout, Pydantic `extra="forbid"` config + `core`
-protocols/exceptions. All §11 assets **present** at clear paths:
-- `memory/knowledge/code_ingestor.py` (+ bonus `treesitter_ingestor.py`, `trajectory_extractor.py`);
-- `memory/store/{in_memory,neo4j_store,neo4j_graph,knowledge_graph,experience_buffer}.py`;
-- `memory/temporal/{temporal_graph,node_memory,time_encoding}.py`;
-- `interfaces/graph_context/{renderer,source_excerpts}.py`; `interfaces/text/dispatcher.py`;
-- branch `wip/experience-weighted-retrieval` = 1 parked commit, 25 files incl. a 182-line design doc — the step-2 seed.
+**Reuse verified (2026-05-24)** against an earlier project of ours — same toolchain choices (uv
+workspace, `requires-python >=3.12`, a `src/<project>/<pkg>` src-layout, Pydantic `extra="forbid"`
+config + `core` protocols/exceptions). All §11 assets were **present and usable**: the AST
+code-ingestor (plus a tree-sitter ingestor and a trajectory extractor), the in-memory + Neo4j stores
+and knowledge graph, the temporal / memory-decay graph, the graph-context renderer + source-excerpt
+layer, the text dispatcher, and the parked experience-weighted-retrieval experiment (a small parked
+branch with a design doc — the step-2 seed).
 
-**Drifted:** `SentenceEncoder` is embedded in `app/text_bridge.py` / `interfaces/outcomes/outcome_scorer.py`
-(the latter is the self-referential reward we avoid) → extract a clean BGE wrapper. **Avoid (lesson only,
-§11):** `packages/{orchestrator,workers}`, `outcome_scorer.py`, and the JEPA/talker/slot config in
-`core/config.py`. **Verdict:** "boring base is mostly reuse, low-risk" holds — build estimate de-risked.
+**Drifted (needs cleanup on reuse):** the encoder was tangled into application + outcome-scoring code
+(the latter being the self-referential reward we avoid) → extract a clean BGE wrapper. **Avoid (lesson
+only, §11):** the JEPA orchestrator/worker layer, the self-referential outcome scorer, and the
+JEPA/talker/slot config. **Verdict:** "boring base is mostly reuse, low-risk" holds — build estimate de-risked.
 
 **Reuse method — reference, not copy.** Reuse the predecessor project heavily (don't reinvent the wheel), but for
 each asset: (1) read + assess *what it did well vs. its incurred tech debt* (JEPA/orchestrator coupling,
@@ -86,10 +85,10 @@ per-asset verdict here as we go. Likewise, don't mirror the predecessor's packag
 Thalamus's structure on its own merits (below).
 
 **Per-asset verdicts (filled as reused):**
-- `SentenceEncoder` (`app/text_bridge.py`) → **reimplemented** as `routing.BgeEncoder`. *Kept:* lazy
+- The predecessor's sentence-encoder → **reimplemented** as `routing.BgeEncoder`. *Kept:* lazy
   model load, `TYPE_CHECKING` import guard, BGE default. *Dropped:* torch in the public surface (returns
-  plain float lists), single-string API (now batch), `outcome_scorer` coupling.
-- `InMemoryStore` (`memory/store/in_memory.py`) → **reimplemented** as `store.InMemoryStore`. *Kept:*
+  plain float lists), single-string API (now batch), outcome-scorer coupling.
+- Its in-memory store → **reimplemented** as `store.InMemoryStore`. *Kept:*
   dim validation + structured error, defensive copies, top-k by similarity. *Dropped:* torch (pure
   Python), `dict[str,str]` metadata (now `MemoryRecord` + `Scope`), unit-norm assumption (true cosine).
   *Added:* scope filtering.

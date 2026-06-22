@@ -79,13 +79,13 @@ classical methods handle without an unmeasurable model in the path.
 1. **Provenance tagging at capture (foundation — do first, cheap).** Every node carries
    `trust: operator | derived | third-party` already implicit in *which corpus / which producer*
    emitted it. Make it explicit and persisted. This is the seam every other defense reads; it is
-   also near-free given the existing `[[corpus]]` model (a corpus declares its trust once). Mirrors
-   Dollhouse's trust-level idea but keyed on *producer*, not per-entry promotion.
+   also near-free given the existing `[[corpus]]` model (a corpus declares its trust once). A
+   classic trust-level model, but keyed on *producer*, not per-entry promotion.
 
 2. **Recall-path content fencing (T1).** When the payload renderer (`gateway/payload.py`) emits a
    node whose provenance is not `operator`, wrap it in a visible, non-instruction delimiter so the
    actuator treats it as *data about the world*, not *instructions to follow* — the same move as
-   Dollhouse's untrusted-content sandboxing on display. Deterministic, no model. The renderer is
+   standard untrusted-content sandboxing. Deterministic, no model. The renderer is
    already the single choke point for everything that reaches the actuator, so this is one
    well-placed change, not a sprinkle.
 
@@ -108,7 +108,7 @@ classical methods handle without an unmeasurable model in the path.
 ## 17.5 Gating — relative to the measurement loop
 
 **This workstream does NOT jump the queue ahead of credibility step B** (close the measurement loop,
-un-blind the proxy↔truth monitor — §13.8, STATUS "Next steps") **unless the threat model changes
+un-blind the proxy↔truth monitor — §13.8 roadmap) **unless the threat model changes
 first.** Security makes the brain *trustworthy and deployable*; it does not advance the *core thesis*
 (does the brain make the actuator measurably better) by one inch. The thesis is the lever; this is
 table-stakes for pointing the brain at content we don't control.

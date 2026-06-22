@@ -1,42 +1,11 @@
 # Thalamus — Outstanding Work & Ranked Roadmap
 
 *The single backlog of everything still to do, so nothing gets lost. Complements — does not
-replace — [`design-notes.md`](design-notes.md) §16 (the canonical capability roadmap), the
-deep-dives (per-area specs), and [`STATUS.md`](STATUS.md) (what's in-flight right now). This file
-is the **ranked, actionable superset**: every item carries a status, what it does, why, the
-concrete steps, its gate/dependency, and where it's spec'd.*
+replace — [`design-notes.md`](design-notes.md) §16 (the canonical capability roadmap) and the
+deep-dives (per-area specs). This file is the **ranked, actionable superset**: every item carries a status, what it
+does, why, the concrete steps, its gate/dependency, and where it's spec'd.*
 
 *Last updated 2026-06-16.*
-
-> **Session delta (2026-06-16):** the **`plan` tool (C-3) shipped** (built → live MCP tool → dogfooded
-> → fixed; gather module-rollup + co-change anti-flood committed in `5542954`), and the **findings
-> producer (C-1) v1** with it. Then a 3-agent parallel batch landed (staged, validated live, not yet
-> committed): **C-3a** gather ranking, **C-2 + C-7** cross-link layer (annotates edges + symbol
-> resolution), **L-R2** structural-centrality weighting. Gate green at **560 passed / 18 skipped**.
-> New backlog from this batch: **C-3b** (findings into the plan radius — now unblocked), **C-8**
-> (line-aware footprints — the keystone that upgrades C-7 + L-R2 to symbol granularity). The lost
-> **`research` tool (C-5)** design was recovered from a prior transcript → [`deep-dives/research.md`](deep-dives/research.md).
->
-> **Session delta (2026-06-17):** committed C-3b/C-8/M-2-v1 (`bc17a1e`); then built the **measurement
-> the learning track lacked** and acted on its verdict (all staged). `plan-brief-eval` (M-2), and the
-> decisive **`rung-eval`** utility-join ablation (M-4) — validated the rungs by recall@k/MRR of the
-> *actually-used* memory, leak-free temporal split, on the sample project. **Verdict: centrality = clean winner
-> (now leads); usage = real but a recall tradeoff (kept, disablable); structrel = dead → dropped from
-> live.** Plus: explicit `record_usage` is dead on both brains — *attribution* carries the usage signal.
->
-> **Session delta (2026-06-17, pt 2):** **R-9 diagnosed and its premise refuted** — the "52 reliably
-> ignored" is ~87% measurement artifact (footprint-empty curated memories + stale attribution + dead ids),
-> 0% demotable junk; do NOT rank against it (`retained:d23fd352`). Surfaced the deeper issue: the brain
-> *learns from its own behavioral history out of loose JSONL files outside the brain*, with no
-> consolidation, retention, or index → new **Track I** (attribution-as-a-pass, log retention, behavioral
-> events intrinsic to the brain). The shipped rung verdict is **scoped** (footprint-labelled), not invalid.
->
-> **Session delta (2026-06-17, pt 3):** **Track I COMPLETE + live-validated** (`retained:8232acbb`). **I-1**
-> attribution-as-a-pass, **I-2** log rotation/retention, **I-3** Architecture B — the brain now ACCUMULATES
-> its own behavioral usage (`Neo4jBehavioralStore` / `M_behavioral_use`, consolidated from the WAL by a
-> dreaming pass) and the usage rung reads weights FROM THE BRAIN, not a file scan. Backed up first;
-> shadow-validated (brain==file exactly); proven live (a recall surfaced the new module; the brain holds 80
-> pair-nodes / 46 memories). **Committed:** I-1+I-2 `dfdbe2e`, /health+fastmcp `15b504d`. **Uncommitted:** I-3.
 
 ---
 
@@ -83,17 +52,16 @@ counterfactual) is **parked** (no data source here). See Track L.*
 | # | Item | Track | Why this rank |
 |---|------|-------|---------------|
 | ✅1 | ~~Usage-weighted retrieval rung (L-R1)~~ | L | **SHIPPED** (`f5153a6`) + mid-serve refresh + a first cut of L-R2. |
-| ✅2 | ~~`plan` / impact tool (C-3)~~ | C | **SHIPPED + dogfooded + fixed** (committed; today's gather/co-change fixes uncommitted). |
-| ✅3 | ~~Findings producer v1 (C-1)~~ | C | **BUILT** (retrievable corpus; uncommitted). v2 = fuse into the plan radius (C-1/C-2/C-3b). |
+| ✅2 | ~~`plan` / impact tool (C-3)~~ | C | **SHIPPED + dogfooded + fixed**. |
+| ✅3 | ~~Findings producer v1 (C-1)~~ | C | **BUILT** (retrievable corpus). v2 = fuse into the plan radius (C-1/C-2/C-3b). |
 | ✅4 | ~~Today's plan fixes + findings producer~~ | C | **COMMITTED** `5542954` (gather blindness + co-change flood fixes + findings v1). |
-| ✅5 | ~~C-3a — gather ranking~~ | C | **BUILT + staged** (validated live: tight budget keeps the highest-value memories, constraints prioritized). |
-| ✅6 | ~~C-2 + C-7 — cross-link layer~~ | C | **BUILT + staged** (annotates edges + symbol-level resolution; validated live over 1,917 nodes). C-3b still open. |
-| ✅7 | ~~L-R2 — structural-centrality weighting~~ | L | **BUILT + staged** (validated live: 181/243 memories weighted, hubs float up). |
+| ✅5 | ~~C-3a — gather ranking~~ | C | **Built** (validated live: tight budget keeps the highest-value memories, constraints prioritized). |
+| ✅6 | ~~C-2 + C-7 — cross-link layer~~ | C | **Built** (annotates edges + symbol-level resolution; validated live over 1,917 nodes). C-3b still open. |
+| ✅7 | ~~L-R2 — structural-centrality weighting~~ | L | **Built** (validated live: 181/243 memories weighted, hubs float up). |
 | ✅8 | ~~C-3b findings-in-brief + C-8 line-aware footprints + M-2/M-4 eval~~ | C/M | **COMMITTED** `bc17a1e`/`a6ab5fd`; rung verdict acted on (centrality leads). |
-| ✅9 | ~~Track I (I-1 attribution-pass, I-2 retention, I-3 Architecture B)~~ | I | **DONE + live-validated** (`retained:8232acbb`). Brain reads its own usage from Neo4j, not files. |
-| **1** | **Commit I-3** (housekeeping) | I | Built, gated, live-proven, uncommitted (leave-it per the user). One clean commit when ready. |
-| **2** | **Finish B's loose ends** *(optional)* | I | Real log disposal (I-2 drops consolidated segments) + consolidate attribution/outcome into the brain the same way. Completes the architecture; non-blocking. |
-| **3** | **M-1 — brain-on/off thesis ablation** | M | The big unmeasured question: does a brain-informed actuator make fewer cross-cutting mistakes? Hardest; the project's central claim. |
+| ✅9 | ~~Track I (I-1 attribution-pass, I-2 retention, I-3 Architecture B)~~ | I | **DONE + live-validated**. Brain reads its own usage from Neo4j, not files. |
+| **1** | **Finish Architecture-B loose ends** *(optional)* | I | Real log disposal (I-2 drops consolidated segments) + consolidate attribution/outcome into the brain the same way. Completes the architecture; non-blocking. |
+| **2** | **M-1 — brain-on/off thesis ablation** | M | The big unmeasured question: does a brain-informed actuator make fewer cross-cutting mistakes? Hardest; the project's central claim. |
 | — | **PARKED:** the outcome loop (churn / monitor / counterfactual) | L | Built + gated but dormant — no captured code outcomes in this workflow. Kept for if instrumented coding resumes. |
 
 After these: the re-ranker (credibility C, gated on the parked outcome loop), multi-language
@@ -139,7 +107,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
 - **Residual (the real remaining gap):** **negatives are thin** — only 1 fate-negative, so
   `utility | failure` can't discriminate yet. That's the parked outcome-loop / negative-labeler
   (L-2), and negatives are scarce by nature in fix-forward dev → it *accrues with use*, not a build.
-- **Spec:** `cli/{verdict,attribute}.py`, `experiential/outcome.py`; finding `retained:33fcc02a`.
+- **Spec:** `cli/{verdict,attribute}.py`, `experiential/outcome.py`.
 
 ### L-2. The negative-signal labeler (survival-vs-overwrite) — `partial` · **P0** · *step 1, the real first build*
 - **What:** A region-level labeler over git diffs + the trajectory log that fills the stubbed
@@ -218,7 +186,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   `usage_weighting`** so recall-sensitive deployments can disable it. The lever is enable/disable per
   workload, not weight-tuning.
 
-### L-R2. Structural-centrality weighting + Brain-2 correlation — `built + validated (staged)` · ✅ *(2026-06-17)*
+### L-R2. Structural-centrality weighting + Brain-2 correlation — `built + validated` · ✅ *(2026-06-17)*
 - **What:** Lift memories well-connected to the structural graph (summed degree of cross-linked code
   nodes) — the query-independent relevance-credibility signal. Two legs shipped: a query-local
   `StructuralRelevanceRetriever` (`f5153a6`) and the global `StructuralCentralityRetriever`.
@@ -252,7 +220,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
 > The producer registry (just shipped) is the seam these plug into. §16 build order: hybrid ✅ →
 > universal ingestion ✅ → **#3 multi-language → #4 findings → #5 plan → #6 research**.
 
-### C-1. External-analysis findings producer — `built (v1, uncommitted)` · ✅ *(2026-06-16)*
+### C-1. External-analysis findings producer — `built (v1)` · ✅ *(2026-06-16)*
 - **What:** `FindingsIngestor` + `parse_findings` (structural pkg) accept **SARIF** and a **generic
   JSON** → one `finding` `StructuralNode` per result; `FindingsProducer` (kind `findings`) registered
   in the producer registry; surfaced under "## Related findings" in recall. Demo-confirmed live (BGE).
@@ -262,7 +230,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   **Depends on C-2.**
 - **Spec:** §16 step 4; structural-hemisphere.md (deferred producers list).
 
-### C-2. Anchor-based cross-linking of non-code nodes to code — `built (staged, uncommitted)` · ✅ *(2026-06-16)*
+### C-2. Anchor-based cross-linking of non-code nodes to code — `built` · ✅ *(2026-06-16)*
 - **What:** Today non-code corpora (docs, text, findings) surface only via *direct* retrieval,
   correctly tagged by corpus. To make a finding/doc *fuse* into a code node's context (and the `plan`
   brief), link non-code nodes to code by `SourceAnchor`. Only then does the `corpus="code"` default
@@ -287,7 +255,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   cluster; grep/reads for the rest."
 - **Spec:** [`planning.md`](deep-dives/planning.md); §16 step 5.
 
-### C-3a. Plan gather — relevance ranking before the memory budget — `built (staged, uncommitted)` · ✅ *(2026-06-16)*
+### C-3a. Plan gather — relevance ranking before the memory budget — `built` · ✅ *(2026-06-16)*
 - **What:** With the gather rollup working, the live brief hits `memory_budget=30` and **omits the
   rest with no ranking** (e.g. on `_compute_radius`: 30 surfaced, 40 omitted, trimmed in traversal
   order). Rank gathered memories before the cut — by recency, importance, usage (L-R1 weights),
@@ -341,7 +309,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   make per-node coverage real (symbol-level `nodes_with_context` instead of always ~0) and retire the
   rollup. Proven live: 797 cross-links, 100% on module nodes, 0 on symbols.
 - **Why:** The honest end-state for coverage; the rollup over-attributes a file's notes to every symbol.
-- **Status (2026-06-16):** the **seam is built + staged** — `link_by_footprint` accepts `(file, lines)`
+- **Status (2026-06-16):** the **seam is built** — `link_by_footprint` accepts `(file, lines)`
   and resolves to the smallest enclosing symbol via the new `SymbolResolver` (validated live: line
   410→`_lexical_resolve`, 470→`_blast_radius`, module fallback when no line). But it **stays module-level
   in practice** because live footprints carry no line data (see C-8). The machinery is proven correct
@@ -420,7 +388,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
 ### R-9. Recall precision — the reliably-ignored set — `DIAGNOSED → premise refuted` · ✅ *(2026-06-17)*
 - **What it was:** The live verdict shows **52 of 75** memories surfaced ≥2× are reliably *ignored*.
   R-9 assumed this was junk the rungs (centrality/usage) should demote.
-- **Diagnosis (read-only probe, dogfood brain; `retained:d23fd352`):** the "ignored" signal is **~87%
+- **Diagnosis (read-only probe, dogfood brain):** the "ignored" signal is **~87%
   measurement artifact, 0% demotable junk.** Decomposition of the 52: **5** stale not-in-store ids,
   **20** in-store but *footprint-empty* high-importance curated memories (vision roadmap, firewall
   constraint, dogfood discipline) — `used=bool(∅)=False` in `FootprintAttributor` **by construction**,
@@ -431,7 +399,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   **1.1%** of 534 live citation signals clear 0.5).
 - **Verdict:** **do NOT build a ranking fix** — demoting the "ignored" set would demote the firewall /
   vision / discipline (a Goodhart trap). R-9-as-framed is dead. The real work is measurement honesty
-  (Track I below) + a firewall-clean credit path for conceptual recall (`retained:24f64014`). The
+  (Track I below) + a firewall-clean credit path for conceptual recall. The
   shipped rung verdict ("centrality wins") is **scoped, not invalid**: it was struck on
   footprint-dominated labels on *both* brains (`cases_from_usage`), so it means "centrality best ranks
   *code-footprinted* memories for *code-touching* sessions" and is silent on conceptual recall.
@@ -439,7 +407,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
 
 ---
 
-## Track I — Instrumentation & event-store architecture  *(surfaced 2026-06-17, owner-driven)*
+## Track I — Instrumentation & event-store architecture  *(surfaced 2026-06-17)*
 
 > **The reframe:** the learning loop reads the brain's *own behavioral history* (recalls, usage,
 > outcomes) out of **loose append-only JSONL files outside the brain** — `retrieval.jsonl`,
@@ -467,7 +435,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   trap that once silently emptied co-change. Skipped in investigate mode (no log writes).
 - **Validated live (dogfood `thalamus dream`):** `attribution-refresh (actor): refreshed footprint
   attribution: 555 signal(s)` ran in DAG order; deterministic (same 555 as the manual run). The manual
-  refresh this session also moved the verdict: utility@5 0.15→0.28, reliably-used 1→15.
+  refresh also moved the verdict: utility@5 0.15→0.28, reliably-used 1→15.
 - **Deferred:** per-tick gating (recompute only when retrieval/trajectory logs grew) — matches the
   other refresh passes which recompute fully each tick; cheap on current brains.
 - **Spec:** `dreaming/attribution_refresh.py`, `instrumentation/usage.py` (`AttributedSignalsRef`),
@@ -491,7 +459,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   its observability reader stays on the live segment (archives preserved on disk).
 - **Spec:** `instrumentation/rotation.py`, `instrumentation/_jsonl.py`, `dreaming/runtime.py`, `cli/serve.py`.
 
-### I-3. Behavioral events intrinsic to the brain — `BUILT + LIVE` · ✅ *(2026-06-17; owner chose B)*
+### I-3. Behavioral events intrinsic to the brain — `BUILT + LIVE` · ✅ *(2026-06-17)*
 > **Increment 2 — BUILT + validated live (gate 605 passed/21 skipped):** backed up the brain (269
 > records) → `Neo4jBehavioralStore` (additive label `M_behavioral_use`, one MERGE'd node per
 > `(memory_id, session_id)` used-pair — idempotent, never touches `M_experiential`) → wired the
@@ -502,7 +470,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
 > usage rung no longer recomputes from a file scan — the brain reads its own behavioral history.
 > Investigate mode stays read-only (in-memory store, no behavioral writes). **Serves need a restart.**
 
-- **Fork resolved (owner):** **(b) graph-native** — the brain accumulates its own behavioral usage as
+- **Resolved — (b) graph-native** — the brain accumulates its own behavioral usage as
   durable state, consolidated from the log WAL by a dreaming pass; the rung reads it from the brain, not
   a file scan; raw logs become a disposable write-ahead buffer. NOT (a) SQLite. Hot-write volume stays
   out of Neo4j because consolidation is a periodic batched fold, not per-event writes.
@@ -528,7 +496,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
 
 ## Track M — Measurement / eval
 
-### M-1. L3 brain-on vs brain-off ablation — `design EXAMINED (3-expert panel)` · **P2** *(2026-06-17; `retained:5023addb`)*
+### M-1. L3 brain-on vs brain-off ablation — `design EXAMINED (3-expert panel)` · **P2** *(2026-06-17)*
 - **What:** The only metric that validates the thesis: does a brain-informed actuator make fewer
   cross-cutting mistakes on real tasks? Hardest to measure; confounded by easier-tasks/changed-user.
 - **Panel verdict (convergent):** the naive "gotcha-avoidance ablation" is **NOT the thesis test** and
@@ -555,14 +523,14 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   pre-registered; (c) graduate to decision-point ablation; (d) R-7 propensity logging in parallel.
 - **Spec:** §16; planning.md; path-to-real-data.md; `eval/harness.py`, `instrumentation/logging_retriever.py`.
 
-### M-2. `plan`-tool brief-quality eval (L1.5 gotcha-cases) — `built (staged)` · ✅ *(2026-06-17)*
+### M-2. `plan`-tool brief-quality eval (L1.5 gotcha-cases) — `built` · ✅ *(2026-06-17)*
 - **What:** A curated "gotcha-case" set: does the brief surface the relevant constraint/gotcha/finding
   when one is known to apply? Built as `plan-brief-eval` (CLI) + `eval.plan_brief` (harness): cases =
   (target, expect_memory_id|expect_text); reports gather recall + misses. **Anti-circularity baked in**
   (cases must be pre-existing, human-judged content — else it only measures a link round-trip).
 - **Spec:** `eval/plan_brief.py`, `cli/plan_brief_eval.py`; starter set `docs/eval/plan_brief_cases.json`.
 
-### M-4. Rung-validation eval — utility-join ablation — `built (staged)` · ✅ *(2026-06-17)* *(the L1 for the rungs)*
+### M-4. Rung-validation eval — utility-join ablation — `built` · ✅ *(2026-06-17)* *(the L1 for the rungs)*
 - **What:** `rung-eval` — validates the retrieval rungs by the **right** metric: re-run each past
   recall's cue through `brain-off/+usage/+structrel/+central/+full` and score recall@k/MRR/hit of the
   memory **actually used** (label from the usage/attribution logs, joined by `eval.cases_from_usage`).
@@ -605,7 +573,7 @@ ingestion (C-4), retrieval hardening (Track R), then the security workstream (Tr
   sample project / 83 this repo `used:true`), which is durable and works — so the rungs + verdict are fed.
 - **The live signal worth pursuing instead → see R-9:** 52 of 75 memories surfaced ≥2× are reliably
   *ignored* (only 2 reliably-used). That's a **recall-precision** question, not a capture bug.
-- **Spec:** `experiential/fate.reuse_by_memory`, `cli/attribute.py`; finding `retained:33fcc02a`.
+- **Spec:** `experiential/fate.reuse_by_memory`, `cli/attribute.py`.
 
 ---
 
@@ -654,11 +622,3 @@ scope is *namespacing*, not a security boundary), key rotation, network hardenin
 - **Is the thesis metric cleanly measurable at all** (M-1/M-3) — accept it may only be an
   interval-delta + soft-signal story at single-user scale.
 
----
-
-## Commit / housekeeping (immediate, mechanical)
-
-- Universal-ingestion code: **committed** (`449df4f`); `.mcp.json` untracked (`4c05df1`).
-- Uncommitted doc updates awaiting your review: `README.md`, `design-notes.md`,
-  `structural-hemisphere.md`, `planning.md`, `security.md`, and **this file**.
-- `scripts/` (codex.sh, serve-http.sh) intentionally left untracked for now.

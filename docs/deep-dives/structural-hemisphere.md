@@ -80,11 +80,12 @@ re-derivable structural graph over an external corpus — code first, others beh
 
 ## Reuse-as-reference verdict (predecessor project)
 
-- `PythonCodeIngestor` → **reimplemented** into the corpus-agnostic schema. *Kept:* stable qualified ids,
-  line-range anchors, defines/inherits/imports. *Dropped:* the GNN `KnowledgeNode`/`KnowledgeUpdate`
-  types. *Fixed:* a latent `_dotted` bug (joined the full filesystem path when no `root_package`).
-- `TreeSitterIngestor` → reference for the future multi-language ingestor.
-- `Neo4jKnowledgeGraph.query_subgraph` → reference for the future Neo4j-backed graph.
+- The predecessor's Python AST ingestor → **reimplemented** into the corpus-agnostic schema. *Kept:*
+  stable qualified ids, line-range anchors, defines/inherits/imports. *Dropped:* the GNN
+  `KnowledgeNode`/`KnowledgeUpdate` types. *Fixed:* a latent `_dotted` bug (joined the full filesystem
+  path when no `root_package`).
+- Its tree-sitter ingestor → reference for the future multi-language ingestor.
+- Its Neo4j subgraph query → reference for the future Neo4j-backed graph.
 
 ## Built since the initial writing (updating the deferred list)
 

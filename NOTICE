@@ -7,3 +7,12 @@ the LICENSE file, or at http://www.apache.org/licenses/LICENSE-2.0
 
 This NOTICE file is part of the License's attribution requirement: redistributions
 and derivative works must carry it forward.
+
+-------------------------------------------------------------------------------
+
+This product includes software developed by Sourcegraph, Inc.
+
+The SCIP (Source Code Intelligence Protocol) schema bundled at
+packages/structural/src/thalamus/structural/_scip/ — scip.proto and the
+generated scip_pb2.py — is derived from https://github.com/sourcegraph/scip,
+Copyright (c) Sourcegraph, Inc., licensed under the Apache License, Version 2.0.

@@ -272,7 +272,7 @@ all *removable, measurable layers on a working base*:
 2. **Retrieval that learns from real outcomes.** Close the loop with an *external* signal: "did
    the retrieved memory get cited / did the edit pass tests?" This is the exact idea that failed
    in our predecessor project's orchestrator (self-referential there) but is *observable* in a memory system.
-   **Our predecessor project has a parked branch — `wip/experience-weighted-retrieval` — that started this**
+   **Our predecessor project had a parked experiment that started this**
    (edge dedup, outcome tracking, outcome-aware ranking, GNN outcome features). Worth mining.
    **Worked through to depth in §13.**
 3. **Cross-hemisphere linking.** Tie experiential "why we did X" to structural "where X lives in
@@ -357,24 +357,25 @@ shipped; `research` tool next).
 
 ## 11. Reusable assets from the predecessor project
 
-The parts that earned their keep map almost one-to-one onto the structural hemisphere + routing.
-(Verify against current predecessor-project code before relying — paths drift.)
+This project descends from an earlier research project of ours. The parts of it that earned their
+keep map almost one-to-one onto the structural hemisphere + routing — carried over as *proven designs
+and lessons*, reimplemented cleanly here rather than lifted wholesale.
 
-| Thalamus need | Predecessor asset |
+| Thalamus need | Proven design carried over |
 |---|---|
-| AST → code graph | `packages/memory/.../knowledge/code_ingestor.py` (AST ingest w/ `source_path`/`line_start`/`line_end`) |
-| Dependency-tree queries | `Neo4jKnowledgeGraph` + `query_subgraph()` (BFS/Cypher k-hop) |
-| Context payload (code blocks + relations + excerpts) | graph-context renderer (`GRAPH RELATIONSHIPS:` / `SOURCE EXCERPTS:`, line-numbered) — weeks of tuning (aliases, excerpt ranking) transfer |
-| Prompt → symbol routing | code-search keyword/alias expansion (`before_request → preprocess_request`, …) |
-| Classical routing (BGE + classifier) | `SentenceEncoder` (BGE wrapper) + `PrototypeDispatcher` (or swap a labeled XGBoost) |
-| Vector store | `InMemoryStore`, `Neo4jStore` (native vector index) |
-| Recency/frequency weighting | `TemporalKnowledgeGraph` / `NodeMemoryStore` |
-| Outcome-learned retrieval seed | `wip/experience-weighted-retrieval` branch |
-| Engineering scaffolding | `core` protocols, strict typing, uv monorepo, package boundaries |
+| AST → code graph | An AST code-ingestor emitting a source path + line range per symbol |
+| Dependency-tree queries | A Neo4j knowledge graph with BFS/Cypher k-hop subgraph queries |
+| Context payload (code blocks + relations + excerpts) | A graph-context renderer (relationships + line-numbered source excerpts) — the alias / excerpt-ranking tuning is the part that transfers |
+| Prompt → symbol routing | Code-search keyword/alias expansion |
+| Classical routing (BGE + classifier) | A BGE sentence-encoder wrapper + a prototype dispatcher (or a labeled classifier) |
+| Vector store | In-memory + Neo4j vector stores (native vector index) |
+| Recency/frequency weighting | A temporal / memory-decay knowledge graph |
+| Outcome-learned retrieval seed | A parked experience-weighted-retrieval experiment |
+| Engineering scaffolding | Shared `core` protocols, strict typing, a uv monorepo with clean package boundaries |
 
-**Reuse the *lesson*, not the code, for:** the JEPA orchestrator (`packages/orchestrator/*`),
-the REINFORCE / `outcome_scorer.py` self-referential reward machinery, and the slot decoder /
-talker / instruction-refiner (served the orchestration path, irrelevant to an actuator model).
+**Reuse the *lesson*, not the code, for:** the JEPA orchestrator, the REINFORCE / self-referential
+reward machinery, and the slot decoder / talker / instruction-refiner — they served the orchestration
+path and are irrelevant to an actuator model.
 
 ---
 

@@ -162,8 +162,7 @@ dogfooding, and it converts the project from "framework" to "framework with real
 
 ## Status & next
 
-Current position on the ladder and the active build chunk are tracked in
-[`../STATUS.md`](../STATUS.md). In short: **R0 done; R2's ingestion spine is built and dogfooding is
+Current position on the ladder, in short: **R0 done; R2's ingestion spine is built and dogfooding is
 active.** The `CommitBoundedSegmenter` + `EpisodeBuilder` + `ingest_episodes` (in the `experiential`
 package) are live; real episodes accumulate from development activity. **Track I (2026-06-17)** has
 additionally made the brain the durable accumulator of its own behavioral usage: `Neo4jBehavioralStore`

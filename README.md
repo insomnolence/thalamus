@@ -1,5 +1,9 @@
 # Thalamus
 
+[![gate](https://github.com/insomnolence/thalamus/actions/workflows/gate.yml/badge.svg)](https://github.com/insomnolence/thalamus/actions/workflows/gate.yml)
+[![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![python: 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+
 **A self-hosted, code-aware brain for coding agents.** Long-term memory that survives across
 sessions, learns your codebase *and* the decisions behind it, links *why you did something* to
 *where it lives in the code*, and ships with the instruments to prove it's actually helping.
@@ -61,14 +65,17 @@ Architecture, research map, and roadmap: [`docs/design-notes.md`](docs/design-no
 
 ## Quickstart
 
-**Requirements:** [`uv`](https://docs.astral.sh/uv/), Docker (for Neo4j), Python 3.12+. First run
-downloads a small local embedding model (BGE-small).
+**Requirements:** [`uv`](https://docs.astral.sh/uv/), Docker (for Neo4j), Python 3.12+. The encoder
+runs locally via [`fastembed`](https://github.com/qdrant/fastembed) (ONNX Runtime — no PyTorch); first
+run downloads a small embedding model ([BGE-small](https://huggingface.co/BAAI/bge-small-en-v1.5),
+MIT-licensed) from the Hugging Face Hub. An offline, dependency-free fallback encoder ships for tests
+and air-gapped use.
 
 **1. Start Neo4j and install the workspace** (a [`docker-compose.yml`](docker-compose.yml) is included):
 
 ```bash
 docker compose up -d
-uv sync --all-packages --all-extras            # installs the CLI + the BGE encoder extra
+uv sync --all-packages --all-extras            # installs the CLI + the fastembed (ONNX) encoder
 export THALAMUS_NEO4J_URI=bolt://localhost:7687
 export THALAMUS_NEO4J_USER=neo4j
 export THALAMUS_NEO4J_PASSWORD=thalamuspw      # local dev password; change it for anything real
@@ -91,10 +98,13 @@ uv run python -m thalamus.cli sync  --repo .
 uv run python -m thalamus.cli serve --repo .
 ```
 
-**4. Point your agent at it.** A project-scoped [`.mcp.json`](.mcp.json) is included; in Claude Code,
-approve the `thalamus` MCP server (`claude mcp get thalamus` to verify). It exposes `recall`,
-`remember`, `record_usage`, and `plan`. Ask the agent to recall prior decisions, or to `plan` the
-blast radius of a change — and it answers from the brain.
+**4. Point your agent at it.** Copy a config template from [`examples/`](examples/) — Claude Code,
+Gemini CLI, and Codex are covered, with [`examples/README.md`](examples/README.md) explaining what to
+fill in. For Claude Code: copy [`examples/claude-code.mcp.json`](examples/claude-code.mcp.json) to a
+`.mcp.json` at your repo root, set `--repo-id`, then approve the `thalamus` server (`claude mcp get
+thalamus` to verify). The brain exposes `recall`, `remember`, `record_usage`, and `plan` — ask the
+agent to recall prior decisions, or to `plan` the blast radius of a change, and it answers from the
+brain.
 
 `remember` stores high-value facts (`decision` / `constraint` / `gotcha` / `investigation` /
 `preference`); `sync` derives commit episodes; `serve` exposes bounded MCP recall and logs retrieval +
@@ -138,5 +148,12 @@ uv run python -m thalamus.cli verdict --repo .
 
 ## License & contributing
 
-See [`LICENSE`](LICENSE). Contributions, issues, and honest critique welcome — the measurement tools
-exist precisely so claims can be checked; if a number looks wrong, that's a bug worth filing.
+Thalamus is licensed under [Apache-2.0](LICENSE). Contributions, issues, and honest critique welcome —
+the measurement tools exist precisely so claims can be checked; if a number looks wrong, that's a bug
+worth filing.
+
+**Acknowledgments.** Semantic recall uses the [BGE-small](https://huggingface.co/BAAI/bge-small-en-v1.5)
+embedding model (`BAAI/bge-small-en-v1.5`, MIT-licensed), downloaded from the Hugging Face Hub at
+runtime — it is **not** redistributed here. SCIP code-graph support derives from
+[`sourcegraph/scip`](https://github.com/sourcegraph/scip) (Apache-2.0; see [`NOTICE`](NOTICE)). A
+deterministic, offline encoder ships as a dependency-free fallback.
