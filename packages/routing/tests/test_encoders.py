@@ -5,7 +5,7 @@ import math
 
 import pytest
 from thalamus.core.exceptions import EncoderError
-from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.routing import BgeEncoder, DeterministicEncoder, FastEmbedEncoder, build_encoder
 
 
 def test_dim() -> None:
@@ -46,3 +46,23 @@ def test_invalid_dim() -> None:
 def test_bge_missing_extra_raises() -> None:
     with pytest.raises(EncoderError):
         BgeEncoder().encode(["hello"])
+
+
+def test_build_encoder_deterministic() -> None:
+    enc = build_encoder("deterministic", dim=64)
+    assert isinstance(enc, DeterministicEncoder)
+    assert enc.dim == 64
+
+
+def test_build_encoder_unknown_name_raises() -> None:
+    with pytest.raises(EncoderError):
+        build_encoder("nope")
+
+
+def test_build_encoder_bge_small_is_fastembed() -> None:
+    # Construction is lazy (no model download), so this maps the name without the extra installed.
+    assert isinstance(build_encoder("bge-small"), FastEmbedEncoder)
+
+
+def test_build_encoder_bge_small_st_is_sentence_transformers() -> None:
+    assert isinstance(build_encoder("bge-small-st"), BgeEncoder)

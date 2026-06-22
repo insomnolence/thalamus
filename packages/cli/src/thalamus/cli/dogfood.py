@@ -30,7 +30,7 @@ from thalamus.instrumentation import (
     default_session_path,
     read_trajectory_log,
 )
-from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.routing import build_encoder
 
 _DEFAULT_DIM = 128
 _DEFAULT_ENCODER = "bge-small"
@@ -112,11 +112,7 @@ def parse_args(argv: Sequence[str]) -> SyncConfig:
 
 def build_ingestor(config: SyncConfig) -> tuple[GitEpisodeIngestor, Store]:
     """Wire the concrete encoder/store/observer/checkpoint into an ingestor."""
-    encoder = (
-        BgeEncoder("BAAI/bge-small-en-v1.5")
-        if config.encoder == "bge-small"
-        else DeterministicEncoder(dim=config.dim)
-    )
+    encoder = build_encoder(config.encoder, dim=config.dim)
     store = build_store(
         dim=encoder.dim,
         neo4j_uri=config.neo4j_uri,

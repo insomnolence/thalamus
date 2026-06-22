@@ -53,7 +53,7 @@ from thalamus.retrieval import (
     CentralityWeightsRef,
     L0Retriever,
 )
-from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.routing import build_encoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import memory_centrality
 
@@ -192,9 +192,7 @@ def _render(report: ProbeEvalReport) -> str:
 
 def _encoder(config: ProbeEvalConfig) -> Encoder:
     """The embedding model for the eval — BGE (real) or deterministic (offline smoke)."""
-    if config.encoder == "bge-small":
-        return BgeEncoder("BAAI/bge-small-en-v1.5")
-    return DeterministicEncoder(dim=config.dim)
+    return build_encoder(config.encoder, dim=config.dim)
 
 
 def _build_brain_on(

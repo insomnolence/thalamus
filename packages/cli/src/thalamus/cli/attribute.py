@@ -36,7 +36,7 @@ from thalamus.instrumentation import (
     read_event_log,
     read_trajectory_log,
 )
-from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.routing import build_encoder
 from thalamus.structural import (
     FootprintAttributor,
     ShownMemory,
@@ -191,9 +191,7 @@ def compute_attribution(
 
 
 def _build_encoder(config: AttributeConfig) -> Encoder:
-    if config.encoder == "bge-small":
-        return BgeEncoder("BAAI/bge-small-en-v1.5")
-    return DeterministicEncoder(dim=config.dim)
+    return build_encoder(config.encoder, dim=config.dim)
 
 
 def run_attribute(

@@ -32,7 +32,7 @@ from thalamus.core.types import (
     Scope,
     TenantId,
 )
-from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.routing import build_encoder
 
 logger = logging.getLogger(__name__)
 
@@ -239,11 +239,7 @@ def run_remember(
             "set THALAMUS_NEO4J_URI before writing a memory"
         )
     record = build_retained_record(config)
-    encoder = encoder or (
-        BgeEncoder("BAAI/bge-small-en-v1.5")
-        if config.encoder == "bge-small"
-        else DeterministicEncoder(dim=config.dim)
-    )
+    encoder = encoder or build_encoder(config.encoder, dim=config.dim)
     owned_store = store is None
     if store is None:
         store = build_store(

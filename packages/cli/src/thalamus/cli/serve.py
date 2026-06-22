@@ -101,7 +101,7 @@ from thalamus.retrieval import (
     render_recent,
     select_recent,
 )
-from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.routing import build_encoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import (
     CoChangeIndex,
@@ -421,11 +421,7 @@ def build_serve_gateway(
     then uses its own ephemeral index), and a :class:`StructuralRederivePass` that re-derives
     Brain 2 live into the same durable handles (``None`` for the in-memory shell, which re-derives
     at start). ``store`` may be injected (tests); otherwise it is built from the Neo4j config."""
-    encoder = encoder or (
-        BgeEncoder("BAAI/bge-small-en-v1.5")
-        if config.encoder == "bge-small"
-        else DeterministicEncoder(dim=config.dim)
-    )
+    encoder = encoder or build_encoder(config.encoder, dim=config.dim)
     scope = Scope(tenant_id=TenantId(config.tenant), repo_id=RepoId(config.repo_id))
     # Persist Brain 2 (so restarts rebuild incrementally) when Neo4j is configured: one shared
     # driver backs the store, the structural graph + per-corpus indexes, the cross-links, and the
@@ -880,11 +876,7 @@ def run_serve(config: ServeConfig) -> None:
     """Build the brain from durable state and serve ``recall`` over MCP (blocking)."""
     from thalamus.gateway import build_server  # lazy: the 'mcp' extra
 
-    encoder: Encoder = (
-        BgeEncoder("BAAI/bge-small-en-v1.5")
-        if config.encoder == "bge-small"
-        else DeterministicEncoder(dim=config.dim)
-    )
+    encoder: Encoder = build_encoder(config.encoder, dim=config.dim)
     (
         gateway,
         store,

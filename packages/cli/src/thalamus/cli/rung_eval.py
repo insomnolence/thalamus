@@ -30,7 +30,7 @@ from thalamus.eval import EvalReport, cases_from_usage, compare
 from thalamus.experiential import Neo4jSupersessionIndex, reuse_by_memory
 from thalamus.instrumentation import RetrievalEvent, UsageSignal, read_event_log, read_usage_log
 from thalamus.retrieval import CentralityWeightsRef, L0Retriever
-from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.routing import build_encoder
 from thalamus.store import connect
 from thalamus.structural import memory_centrality
 
@@ -62,9 +62,7 @@ def rung_eval_config(args: argparse.Namespace) -> RungEvalConfig:
 
 
 def _encoder(serve: ServeConfig) -> Encoder:
-    if serve.encoder == "bge-small":
-        return BgeEncoder("BAAI/bge-small-en-v1.5")
-    return DeterministicEncoder(dim=serve.dim)
+    return build_encoder(serve.encoder, dim=serve.dim)
 
 
 def _load_logs(data_dir: Path) -> tuple[list[RetrievalEvent], list[UsageSignal]]:

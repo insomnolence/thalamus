@@ -9,7 +9,7 @@ from thalamus.routing import BgeEncoder
 
 pytestmark = pytest.mark.skipif(
     importlib.util.find_spec("sentence_transformers") is None,
-    reason="sentence-transformers not installed (the 'bge' extra)",
+    reason="sentence-transformers not installed (optional torch encoder; fastembed is the default)",
 )
 
 # Small model keeps the download light; dim 384.

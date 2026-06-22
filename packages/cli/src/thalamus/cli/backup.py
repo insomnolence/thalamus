@@ -26,7 +26,7 @@ from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import EmbeddingStore, Encoder, Store
 from thalamus.core.serde import deserialize_memory_record, serialize_memory_record
 from thalamus.core.types import Hemisphere, RepoId, Scope, TenantId, Vector
-from thalamus.routing import BgeEncoder, DeterministicEncoder
+from thalamus.routing import build_encoder
 
 _CURATED_KINDS = frozenset({"decision", "constraint", "gotcha", "investigation", "preference"})
 _DEFAULT_DIM = 128
@@ -48,9 +48,7 @@ class BackupConfig:
 
 
 def _build_encoder(name: str, dim: int) -> Encoder:
-    if name == "bge-small":
-        return BgeEncoder("BAAI/bge-small-en-v1.5")
-    return DeterministicEncoder(dim=dim)
+    return build_encoder(name, dim=dim)
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
