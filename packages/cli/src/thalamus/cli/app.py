@@ -30,6 +30,8 @@ from thalamus.cli.impact_eval import (
     impact_eval_config,
     run_impact_eval,
 )
+from thalamus.cli.m1a_draft import add_m1a_draft_arguments, m1a_draft_config, run_m1a_draft
+from thalamus.cli.m1a_eval import add_m1a_eval_arguments, m1a_eval_config, run_m1a_eval
 from thalamus.cli.plan_brief_eval import (
     add_plan_brief_eval_arguments,
     plan_brief_eval_config,
@@ -126,6 +128,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "dream", help="run one dreaming cycle (refresh views + audit beliefs)"
     )
     add_dream_arguments(parsers["dream"])
+    parsers["m1a-eval"] = sub.add_parser(
+        "m1a-eval", help="L3 gotcha-conversion probe (actuator-in-the-loop)"
+    )
+    add_m1a_eval_arguments(parsers["m1a-eval"])
+    parsers["m1a-draft"] = sub.add_parser(
+        "m1a-draft", help="draft an M-1a case from a running brain (the brain->cases bridge)"
+    )
+    add_m1a_draft_arguments(parsers["m1a-draft"])
 
     # Apply a project thalamus.toml (if any) as the chosen subcommand's defaults BEFORE parsing,
     # so precedence is: explicit CLI flag > thalamus.toml > built-in default.
@@ -172,4 +182,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_rung_eval(rung_eval_config(args))
     elif args.command == "dream":
         run_dream(dream_config(args))
+    elif args.command == "m1a-eval":
+        return run_m1a_eval(m1a_eval_config(args))
+    elif args.command == "m1a-draft":
+        return run_m1a_draft(m1a_draft_config(args))
     return 0

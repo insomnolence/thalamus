@@ -1,0 +1,48 @@
+[
+  {
+    "id": "example-encoder-index-rebuild",
+    "set": "positive",
+    "memory_id": "retained:example",
+    "task": "We are switching the embedding encoder to a different model. Describe the migration step you would take before deploying the change.",
+    "arms": {
+      "off": "Context: the project stores text embeddings in a vector index for semantic recall.",
+      "salience": "Context: the project stores text embeddings in a vector index for semantic recall. Watch out for known gotchas and edge cases.",
+      "content_ablation": "Context: the project stores text embeddings in a vector index for semantic recall. The index is built from the current encoder's output at startup and on a background refresh.",
+      "full": "Context: the project stores text embeddings in a vector index for semantic recall. The index is built from the current encoder's output. We previously learned the hard way that embeddings from a different encoder are not comparable to the stored vectors, so recall silently degrades unless the index is rebuilt."
+    },
+    "oracle": {
+      "required": ["re-?build|re-?index|re-?embed|regenerat"]
+    }
+  },
+  {
+    "id": "example-no-eval-untrusted",
+    "set": "positive",
+    "memory_id": "retained:example",
+    "task": "Write a small Python snippet that loads a user-provided configuration string into a dictionary.",
+    "arms": {
+      "off": "Context: the config arrives as a string from an external source.",
+      "salience": "Context: the config arrives as a string from an external source. Watch out for known gotchas and security edge cases.",
+      "content_ablation": "Context: the config arrives as a string from an external source and is expected to be a small mapping of keys to values.",
+      "full": "Context: the config arrives as a string from an UNTRUSTED external source. A past incident showed that evaluating untrusted input as code is a remote-code-execution risk; structured parsing must be used instead of any dynamic evaluation."
+    },
+    "oracle": {
+      "required": ["json|ast\\.literal_eval|safe"],
+      "forbidden": ["\\beval\\(|\\bexec\\("]
+    }
+  },
+  {
+    "id": "example-negative-control-logging",
+    "set": "negative_control",
+    "memory_id": null,
+    "task": "Add a log line when a request completes. Describe the change.",
+    "arms": {
+      "off": "Context: the service handles HTTP requests and already has a logger configured.",
+      "salience": "Context: the service handles HTTP requests and already has a logger configured. Watch out for known gotchas and edge cases.",
+      "content_ablation": "Context: the service handles HTTP requests and already has a logger configured; handlers return a response object when done.",
+      "full": "Context: the service handles HTTP requests and already has a logger configured; handlers return a response object when done. General style notes apply about clarity and consistency."
+    },
+    "oracle": {
+      "required": ["re-?build|re-?index|re-?embed|regenerat"]
+    }
+  }
+]
