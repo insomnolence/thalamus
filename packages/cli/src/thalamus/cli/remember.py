@@ -22,6 +22,7 @@ from pathlib import Path
 from thalamus.cli.brain import build_store, close_store
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
+from thalamus.core.redaction import RedactionEvent, merge_redaction_events, redact_secrets
 from thalamus.core.taxonomy import ACCEPTED_KINDS, normalize_kind
 from thalamus.core.types import (
     Hemisphere,
@@ -57,6 +58,7 @@ class RememberConfig:
     neo4j_uri: str | None
     neo4j_user: str
     neo4j_password: str | None
+    redact: bool = True  # scrub secrets before embed/store (§17.4 T2); --no-secret-redaction off
 
 
 def add_remember_arguments(parser: argparse.ArgumentParser) -> None:
@@ -95,6 +97,11 @@ def add_remember_arguments(parser: argparse.ArgumentParser) -> None:
         "old belief is demoted below current truth but kept, surfaced with this fact's why/text "
         "as the reason. Never deletes the old memory.",
     )
+    parser.add_argument(
+        "--secret-redaction", dest="redact", action=argparse.BooleanOptionalAction, default=True,
+        help="scrub credential-shaped text (tokens/keys/passwords) before embed/store (§17.4 T2); "
+        "on by default — pass --no-secret-redaction to disable",
+    )
 
 
 def remember_config(args: argparse.Namespace) -> RememberConfig:
@@ -115,6 +122,7 @@ def remember_config(args: argparse.Namespace) -> RememberConfig:
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
         neo4j_user=os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
+        redact=bool(args.redact),
     )
 
 
@@ -141,18 +149,45 @@ def _footprint(config: RememberConfig) -> list[str]:
 
 
 def build_retained_record(
-    config: RememberConfig, *, now: Callable[[], datetime] = lambda: datetime.now(UTC)
+    config: RememberConfig,
+    *,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    redact: bool = True,
 ) -> MemoryRecord:
-    """Build an idempotently-addressed curated memory for storage."""
+    """Build an idempotently-addressed curated memory for storage.
+
+    Secrets in the text/why are scrubbed at this boundary (§17.4 T2) **before** the record is built,
+    so a token or password an agent saw never reaches the embedding or the store — far easier than
+    expunging it after the fact. The memory id keys on the *redacted* text so it stays stable across
+    re-remembers. ``redact=False`` is for tests only. Footprint paths are not scrubbed (not secrets,
+    and redaction would corrupt the path → its cross-link)."""
     kind = normalize_kind(config.kind)  # synonyms (e.g. project→decision) map to the canonical set
     if not config.text.strip():
         raise ThalamusError("retained memory text must not be empty")
     if not math.isfinite(config.importance):
         raise ThalamusError("importance must be a finite number")
+    events: list[RedactionEvent] = []
+    text = config.text
+    why = config.why
+    if redact:
+        text_result = redact_secrets(text)
+        text = text_result.text
+        events.extend(text_result.events)
+        if why is not None:
+            why_result = redact_secrets(why)
+            why = why_result.text
+            events.extend(why_result.events)
+        events = list(merge_redaction_events(events))  # one entry per kind
+        if events:
+            logger.warning(
+                "redacted %d secret(s) from the memory before storing: %s",
+                sum(event.count for event in events),
+                ", ".join(event.kind for event in events),
+            )
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     raw_id = config.memory_id
     if raw_id is None:
-        digest = hashlib.sha256(f"{kind}\n{config.text}".encode()).hexdigest()[:16]
+        digest = hashlib.sha256(f"{kind}\n{text}".encode()).hexdigest()[:16]
         raw_id = f"retained:{digest}"
     elif not raw_id.startswith("retained:"):
         raw_id = f"retained:{raw_id}"
@@ -163,13 +198,15 @@ def build_retained_record(
     }
     if kind != config.kind:
         metadata["requested_kind"] = config.kind  # audit trail: what the caller actually asked for
-    if config.why is not None:
-        metadata["why"] = config.why
+    if why is not None:
+        metadata["why"] = why
+    if events:  # auditable coverage — kind+count only, never the redacted secret itself
+        metadata["redacted"] = [{"kind": e.kind, "count": e.count} for e in events]
     return MemoryRecord(
         memory_id=MemoryId(raw_id),
         hemisphere=Hemisphere.EXPERIENTIAL,
         kind=kind,
-        content=config.text,
+        content=text,
         scope=scope,
         created_at=now(),
         metadata=metadata,
@@ -238,7 +275,7 @@ def run_remember(
             "remember requires durable Brain 1 storage; "
             "set THALAMUS_NEO4J_URI before writing a memory"
         )
-    record = build_retained_record(config)
+    record = build_retained_record(config, redact=config.redact)
     encoder = encoder or build_encoder(config.encoder, dim=config.dim)
     owned_store = store is None
     if store is None:
@@ -251,9 +288,12 @@ def run_remember(
         )
     footprint = record.metadata["footprint"]
     assert isinstance(footprint, list)
+    # Embed from the (already-redacted) record, never the raw config — otherwise a scrubbed secret
+    # would still reach the vector index via the embedding text (§17.4 T2).
+    record_why = record.metadata.get("why")
     embedding_text = " ".join(
         value
-        for value in (config.kind, config.text, config.why, " ".join(footprint))
+        for value in (config.kind, record.content, record_why, " ".join(footprint))
         if value
     )
     superseded: MemoryRef | None = None

@@ -8,9 +8,12 @@ consumers — ``verdict``, the attribution time-join, the L-6 training log — s
 *retained* history transparently; rotation is invisible to them.
 
 ``keep`` is the retention window: the maximum number of archive segments kept, older ones dropped.
-That bound is an explicit, deliberate data-retention choice (the "no silent caps" honesty), and a
-**stopgap** — it is what holds until Architecture B consolidates events into the brain and makes the
-raw log disposable (then old segments are redundant, not lost signal).
+For the **usage** signal this is now safe-to-drop, *not* a stopgap: Architecture B (Track I)
+consolidates usage into the brain each maintenance tick, reading the **full retained history**
+(:func:`jsonl_segments`) — so every retained segment is re-folded into the durable behavioral store
+before it can age out, making a dropped usage segment redundant, not lost signal. For the
+**retrieval-event and trajectory** logs — not yet brain-consolidated — ``keep`` stays a real
+retention bound (the offline ``verdict`` / attribution read their history from these files).
 
 Rotation is concurrency-safe with :func:`append_jsonl`'s reopen-per-append pattern: a ``rename``
 leaves any in-flight append on the now-archived inode (preserved) and the next append, which reopens

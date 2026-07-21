@@ -1,6 +1,6 @@
 # Security Policy
 
-Thalamus is a research/dogfood project at single-user scale, but it touches things worth handling
+Thalamus is a research/dogfood project at single-operator scale, but it touches things worth handling
 carefully: it runs an MCP server, connects to a Neo4j database, and ingests source code and
 developer notes. If you find a vulnerability, thank you — please report it responsibly.
 

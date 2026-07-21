@@ -19,6 +19,7 @@ weights/
 
 # Local agent/editor config
 .claude/
+.agents/
 .mcp.json
 AGENTS.md
 CLAUDE.md

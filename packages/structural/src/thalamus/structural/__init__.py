@@ -99,6 +99,7 @@ from thalamus.structural.text_ingestor import (
     TextIngestor,
     chunk_lines,
 )
+from thalamus.structural.trust_stamp import TrustStampingIngestor
 
 __all__ = [
     "ANNOTATES",
@@ -146,6 +147,7 @@ __all__ = [
     "StructuralRetriever",
     "SymbolResolver",
     "TextIngestor",
+    "TrustStampingIngestor",
     "UsageAttributor",
     "anchor_nodes",
     "chunk_lines",

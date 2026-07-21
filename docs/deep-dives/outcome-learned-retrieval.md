@@ -10,8 +10,12 @@ point back to [`design-notes.md`](../design-notes.md).*
 > signal has moved** to **relevance credibility** — which memories are *current / used / important /
 > well-connected* — because outcome capture does not accrue in the primary workflow, whereas usage +
 > supersession + recency + structural centrality accrue every session. The **outcome loop** (churn /
-> `session_fate` / proxy↔truth-on-commits) is **PARKED** — built, gated, dormant; kept for if
-> instrumented coding ever resumes. What carries over unchanged: the **firewall** (§13.7 —
+> `session_fate` / proxy↔truth-on-commits) is **PARKED** — built, gated, dormant; kept as a design
+> record. **Sharpened 2026-06-23: parked by nature, likely permanently** — clean *terminal* negatives
+> are intrinsically scarce (competent fix-forward work resolves its failures), so they don't accrue
+> regardless of volume/devs/capture, and even instrumented coding is unlikely to resurrect this. The
+> honest thesis proof is the **M-1a delivery probe** (ran positive), not outcome-discrimination. What
+> carries over unchanged: the **firewall** (§13.7 —
 > external/behavioral facts only, never the model grading its own prose), the **modularity seams**,
 > and the **research toolkit** (SNIPS / anytime-valid CIs / ranking), which re-target cleanly onto a
 > usage-based ranker. Authoritative plan for the current direction: [`learning-loop.md`](learning-loop.md).
@@ -99,7 +103,7 @@ mechanism → exploration → hindsight relabeling → logging/eval → honest l
 ### 13.1 Stance
 
 "Outcome-learned retrieval" is **not** a synonym for "train a neural retriever." Near-term —
-possibly for years at single-user scale — it cashes out as **outcome-weighted ranking with
+at single-operator scale — it cashes out as **outcome-weighted ranking with
 calibrated exploration** (an online, non-parametric usefulness estimate). The trained retrieval
 *geometry* (§13.4) is the high-ceiling, gated bet on top. The per-memory statistic is the **floor
 and the measuring instrument, not the answer**: it provably cannot generalize to unseen memories
@@ -329,12 +333,13 @@ segmentation (→ §12) and human-vs-agent attribution.
 
 ### 13.13 Honest open problems / risks
 
-- **Data volume (the likely silent killer):** a single dev produces ≈ hundreds of clean outcomes/month;
-  learned rankers want thousands. The cheap exploration layers (esp. hindsight) are what make
-  single-user viable at all. **Validating exploration's long-term payoff may be impossible at
-  single-user scale** → the exploration policy is probably what drags the **multi-user question from
-  "later" to "sooner."** Multi-user trades data-starvation for a **transfer/contamination** problem
-  (is "useful in repo A" predictive in repo B?).
+- **Data volume (the likely silent killer):** a single operator produces ≈ hundreds of clean
+  outcomes/month; learned rankers want thousands. **Validating an outcome-learned ranker's long-term
+  payoff may be impossible at single-operator scale.** Note this is *accepted*, not a trigger to scale
+  up: the brain is **single-operator by design** (first-person experiential memory —
+  [`foundation.md`](foundation.md) Decision 2), and this whole outcome-learned direction is parked by
+  nature anyway (terminal negatives are intrinsically scarce — see the re-aim banner above). The
+  live, feedable learning is *relevance* credibility, which accrues fine at single-operator scale.
 - **Credit assignment is bounded, not solved** (gated by §13.12, not proven per-instance).
 - Hindsight residue: survivorship + constraint-coverage + distillation-collapse (mitigated, §13.10).
 
@@ -425,8 +430,8 @@ story about its own past* — a historical-narrative cousin of the self-validati
 **The synthesis — why = belief, not fact.** Split Brain 1: **immutable episode history** (append-only
 facts) + **mutable belief layer** (the whys: time-stamped, assumption-bearing). Belief revision
 (§9.1) lives in the why layer — never rewrite history, supersede *beliefs*. A why carries the
-**assumptions it held under**; assumption-violation (e.g. single-user → multi-user) flags the
-justified decision for review. Outcomes also validate whys: credibility = **longevity-without-
+**assumptions it held under**; assumption-violation (e.g. a dependency swap, or a constraint that no
+longer holds) flags the justified decision for review. Outcomes also validate whys: credibility = **longevity-without-
 supersession + downstream success** (the external-outcome discipline, applied to rationale).
 
 **Leaning stance — the why as a derived *view*, not a stored narrative** (parallel to §13.16): store
@@ -570,8 +575,8 @@ harness **must run brain-off / each-rung / full**, so removable-and-measurable i
 proxy↔truth divergence (§13.12), exploration regret (§13.9), segmentation footprint-coherence (§13.16),
 belief false-supersession rate (§13.18).
 
-**Honest problems:** single-user low-traffic → thin live L2/L3 → over-reliance on the benchmark →
-**Goodhart on the benchmark** (multi-user resurfaces as the unlock); actuator non-determinism →
+**Honest problems:** single-operator low-traffic → thin live L2/L3 → over-reliance on the benchmark →
+**Goodhart on the benchmark** (accepted at single-operator scale, not a scale-up trigger); actuator non-determinism →
 high-variance deltas → many runs → **expensive** (budget it); the thesis metric ("more use → more
 useful") is **likely unmeasurable cleanly** (a positive slope confounds learning with easier-tasks /
 changed-user) → fallback: measure the **L3 delta at intervals**, accept the confounds; track **soft

@@ -94,7 +94,9 @@ class DocsProducer:
 
     def build(self, cfg: CorpusConfig, *, ctx: ProducerContext) -> ProducerBuild:
         files = glob_files(*cfg.include) if cfg.include else markdown_files
-        return ProducerBuild(ingestor=DocIngestor(id_namespace=cfg.name), files=files)
+        return ProducerBuild(
+            ingestor=DocIngestor(id_namespace=cfg.name, redact=ctx.redact), files=files
+        )
 
 
 class TextProducer:
@@ -118,6 +120,7 @@ class TextProducer:
             id_namespace=cfg.name,
             chunk_chars=chunk_chars,
             overlap_chars=overlap_chars,
+            redact=ctx.redact,
         )
         return ProducerBuild(ingestor=ingestor, files=files)
 

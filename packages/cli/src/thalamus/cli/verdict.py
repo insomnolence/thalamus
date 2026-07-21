@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -48,6 +48,7 @@ from thalamus.experiential import (
     region_fate,
 )
 from thalamus.instrumentation import (
+    RedactionSummary,
     RetrievalEvent,
     TrajectoryEvent,
     TrajectoryEventKind,
@@ -56,6 +57,7 @@ from thalamus.instrumentation import (
     read_trajectory_log,
     read_usage_log,
     reverted_shas,
+    summarize_redaction_log,
 )
 
 _DEFAULT_WINDOW = timedelta(hours=2)
@@ -69,6 +71,7 @@ class VerdictConfig:
     usage_log: Path  # raw citation signals (record_usage, append-only)
     attributed_log: Path  # derived footprint signals (thalamus attribute, overwritten)
     trajectory_log: Path
+    redaction_log: Path  # secret-redaction events (§17.4 T2; kind+count, never the secret)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +85,7 @@ class VerdictReport:
     n_negative_sessions: int  # sessions whose work fated negative (reverted or overwritten)
     monitor_without_fate: ProxyTruthReport  # classify (test path) alone — usually empty
     usage: UsageStabilityReport  # per-memory usefulness: is "used vs. ignored" stable, not noise?
+    redaction: RedactionSummary = field(default_factory=RedactionSummary)  # §17.4 T2 coverage
 
 
 def add_verdict_arguments(parser: argparse.ArgumentParser) -> None:
@@ -94,6 +98,7 @@ def add_verdict_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--usage-log", type=Path, default=None, help="override path")
     parser.add_argument("--attributed-log", type=Path, default=None, help="override path")
     parser.add_argument("--trajectory-log", type=Path, default=None, help="override path")
+    parser.add_argument("--redaction-log", type=Path, default=None, help="override path")
 
 
 def verdict_config(args: argparse.Namespace) -> VerdictConfig:
@@ -109,6 +114,9 @@ def verdict_config(args: argparse.Namespace) -> VerdictConfig:
         ),
         trajectory_log=(
             Path(args.trajectory_log) if args.trajectory_log else logs / "trajectory.jsonl"
+        ),
+        redaction_log=(
+            Path(args.redaction_log) if args.redaction_log else logs / "redaction.jsonl"
         ),
     )
 
@@ -337,6 +345,15 @@ def _render(report: VerdictReport) -> str:
             f"  cross-session reuse: {s.n_reused} memory(ies) used in >=2 sessions "
             f"(max {s.max_reuse}) — the reliably-useful core",
         ]
+    r = report.redaction
+    if r.total:
+        by_kind = ", ".join(f"{kind} ×{count}" for kind, count in r.by_kind.items())
+        lines.append(
+            f"Secret redaction (§17.4): {r.total} secret(s) scrubbed at ingest across "
+            f"{r.events} write(s) — {by_kind}"
+        )
+    else:
+        lines.append("Secret redaction (§17.4): 0 secrets scrubbed (none seen, or redaction off)")
     return "\n".join(lines)
 
 
@@ -360,5 +377,7 @@ def run_verdict(config: VerdictConfig) -> VerdictReport:
         events, signals, trajectory, k=config.k, reverted=reverted_shas(config.repo),
         commit_lines=commit_lines,
     )
+    # Secret-redaction coverage (§17.4 T2) — read from the redaction telemetry log.
+    report = replace(report, redaction=summarize_redaction_log(config.redaction_log))
     print(_render(report))
     return report

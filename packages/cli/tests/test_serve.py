@@ -52,6 +52,16 @@ def test_serve_config_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert config.neo4j_uri is None
     assert config.session is True  # session tagging on by default
     assert config.session_id is None  # minted per process unless overridden
+    assert config.redact_secrets is True  # secret redaction on by default (§17.4 T2)
+
+
+def test_serve_config_secret_redaction_flag(tmp_path: Path) -> None:
+    parser = argparse.ArgumentParser()
+    add_serve_arguments(parser)
+    on = serve_config(parser.parse_args(["--repo", str(tmp_path)]))
+    off = serve_config(parser.parse_args(["--repo", str(tmp_path), "--no-secret-redaction"]))
+    assert on.redact_secrets is True
+    assert off.redact_secrets is False
 
 
 def test_serve_config_transport_flags(tmp_path: Path) -> None:

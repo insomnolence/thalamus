@@ -17,6 +17,7 @@ import logging
 import re
 from pathlib import Path
 
+from thalamus.core.redaction import redact_secrets
 from thalamus.core.types import Scope
 from thalamus.structural.schema import IngestResult, SourceAnchor, StructuralEdge, StructuralNode
 from thalamus.structural.sources import IGNORE_DIRS, _rel, markdown_files
@@ -36,12 +37,19 @@ class DocIngestor:
         ignore_dirs: frozenset[str] = IGNORE_DIRS,
         max_section_chars: int = _DEFAULT_MAX_SECTION_CHARS,
         id_namespace: str | None = None,
+        redact: bool = True,
     ) -> None:
         self._ignore_dirs = ignore_dirs
         self._max_section_chars = max_section_chars
         # Prefixes node ids when set, so multiple doc roots (e.g. design docs + project docs)
         # can't collide on a shared relative path (both having a ``README.md``) in the one graph.
         self._id_prefix = f"{id_namespace}:" if id_namespace else ""
+        # Docs can quote a secret (a config snippet, an example with a real key); scrub the
+        # embeddable text at ingest before it enters the index/store (§17.4 T2).
+        self._redact = redact
+
+    def _scrub(self, text: str) -> str:
+        return redact_secrets(text).text if self._redact else text
 
     def ingest_path(self, root: Path, scope: Scope) -> IngestResult:
         nodes: list[StructuralNode] = []
@@ -66,7 +74,7 @@ class DocIngestor:
 
         rel = _rel(path, root)
         doc_id = f"document:{self._id_prefix}{rel}"
-        intro = "\n".join(lines).strip()[: self._max_section_chars]
+        intro = self._scrub("\n".join(lines).strip()[: self._max_section_chars])
         nodes.append(
             StructuralNode(
                 node_id=doc_id,
@@ -95,7 +103,7 @@ class DocIngestor:
                     label=text,
                     scope=scope,
                     anchor=SourceAnchor(path=str(path), line_start=lineno, line_end=end),
-                    metadata={"text": body[: self._max_section_chars]},
+                    metadata={"text": self._scrub(body[: self._max_section_chars])},
                 )
             )
             while stack and stack[-1][0] >= level:

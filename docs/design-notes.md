@@ -295,7 +295,8 @@ that train on *real* logs and are gated against the boring baseline. (§13 is th
 options, not a build mandate** — most of it stays unbuilt unless its gate opens.)
 
 0. ✓ **Instrument first.** Eval harness + curated benchmark (§13.20), the §13.11 logging contract,
-   deterministic cross-hemisphere links (§13.19), and **tenant/repo-scoped schema & logs** (foundation).
+   deterministic cross-hemisphere links (§13.19), and **per-project (`tenant_id`, `repo_id`) namespacing
+   on schema & logs** (foundation).
 1. ✓ **Measured baseline:** one graph / two namespaces / separate vector indexes + plain semantic
    retrieval + trajectory capture + experiential ingestion spine + durable Brain 1 (Neo4j) +
    MCP gateway (`recall` / `remember` / `record_usage`). Dogfooding active.
@@ -307,14 +308,18 @@ options, not a build mandate** — most of it stays unbuilt unless its gate open
    - ✓ **Declarative `[[corpus]]` config:** `thalamus.toml` `[[corpus]]` tables (`kind =
      python-ast | scip | docs | text | findings`) make Brain 2 language-agnostic and project-declarative.
    - ✓ **Dreaming scheduler** (offline DAG of gated passes): `LinkResolutionPass`, `BeliefAuditPass`,
-     `StructuralRefreshPass`, `CredibilityPass` (fate-based — inert until step B below), plus the
+     `StructuralRefreshPass`, `CredibilityPass` (fate-based — logs only; parked by nature, see (B)/(C)), plus the
      relevance-refresh actors `UsageRefreshPass`, `CoChangeRefreshPass`, `CentralityRefreshPass`,
      `AttributionRefreshPass`, and `BehavioralConsolidationPass` (Track I — see below).
    - ✓ **Belief supersession (D1):** durable `SUPERSEDES` edges; demoting retriever; recall surfaces
      superseded items annotated, never silently drops them.
-   - Credibility roadmap: **(A) ✓ computed automatically** in the maintenance loop; **(B) unblind the
-     proxy↔truth monitor** (accrue negatives via deliberate serve restart + supersession); **(C, gated on
-     B) recall re-ranks by credibility** — the "brain reorganizes itself" feature.
+   - Credibility roadmap: **(A) ✓ computed automatically** in the maintenance loop. **(B) unblind the
+     proxy↔truth monitor / (C) recall re-ranks by *outcome* credibility** — both **PARKED BY NATURE**
+     (settled 2026-06-23): they need clean terminal negatives, which are intrinsically scarce in
+     fix-forward work, so (B)/(C) are unlikely ever to ship. What *did* ship is **relevance**
+     credibility — recall already re-ranks by usage / centrality / supersession / recency (the L-R1/L-R2
+     rungs below), the feedable form of "the brain reorganizes itself." The outcome-trained re-ranker
+     is a design record, not a roadmap item.
 2. **Log what gets used / what succeeds.** Hybrid retrieval (semantic + BM25 lexical) shipped as the
    first independent, measurable improvement. Three retrieval rungs built and ablated (all ablatable,
    all firewall-clean); rung verdict (de-leaked utility-join, 2026-06-17): **L-R2 global**
@@ -383,9 +388,11 @@ path and are irrelevant to an actuator model.
 
 - ~~Physical two-store vs. one namespaced store~~ → **resolved**: one graph + **separate vector indexes
   per hemisphere** + native links (what broke = index pollution, not storage). See [`deep-dives/foundation.md`](deep-dives/foundation.md).
-- **Multi-user** → **resolved (scope-now, defer-features)**: tenant/repo-scope the schema & logs from
-  day 1 (cheap; irreversible-if-deferred), operate single-tenant, defer cross-tenant learning/privacy.
-  See [`deep-dives/foundation.md`](deep-dives/foundation.md) and §14.
+- **Single-operator vs. multi-user** → **resolved: single-operator by design (not deferred).**
+  Experiential memory is first-person, so an isolated multi-user deployment is just N copies and a
+  shared one is a different product (team memory) that breaks the firewall — neither advances this
+  thesis. The `(tenant_id, repo_id)` scope is *per-project namespacing*, not multi-tenant readiness.
+  Full reasoning: [`deep-dives/foundation.md`](deep-dives/foundation.md) Decision 2. Not tracked further.
 - What exactly constitutes an "episode" and its "why" (schema for Brain 1 nodes/edges)? The
   trajectory log (§13.11b) forces this; start with coarse deterministic boundaries
   (request-to-request or commit-to-commit), refine with data. → **being built as the experiential
@@ -459,10 +466,6 @@ which is the strongest coherence signal we have. Check any new piece against the
 out-of-band, actuator-agnostic observation (file watcher / git hooks / test hook). Treat actuator
 self-report as graceful enrichment that degrades to nothing — or forfeit "works with any editor."
 
-**Recurring strategic thread — multi-user.** The cheap/deterministic layers work single-user; the
-*differentiating learned* layers may be un-validatable without multi-user volume. It keeps surfacing as
-the unlock — treat it as a first-class open decision, not a footnote.
-
 ---
 
 ## 15. Deep dives (index)
@@ -480,7 +483,8 @@ boring base — a *map of options, not a build mandate*.
   passes; the DAG; safe-to-rerun; fate-based credibility; automatic vs. manual distinction;
   `MaintenanceTicker` perceive→consolidate cycle). **Done (first pass; auto-refresh and credibility built).**
 - [Foundation](deep-dives/foundation.md) — the boring base: the two resolved decisions (one-graph +
-  separate indexes; multi-user scope-now), the gateway contract, the concrete **step-0/1 build spec**. **Done.**
+  separate indexes; single-operator by design + per-project namespacing), the gateway contract, the
+  concrete **step-0/1 build spec**. **Done.**
 - [Structural hemisphere (Brain 2)](deep-dives/structural-hemisphere.md) — re-derivable corpus graph;
   corpus-agnostic `Ingestor` seam; Python AST + jedi calls + SCIP multi-language ingestor built;
   `[[corpus]]` declarative config; `StructuralRederivePass` live auto-refresh; document / text /
@@ -501,9 +505,9 @@ boring base — a *map of options, not a build mandate*.
   cross-hemisphere brief assembly, coverage honesty, and git-derived `impact-eval`. **Built and
   dogfood-validated.**
 - [Threat model & content-trust](deep-dives/security.md) — §17. What a *single-operator* brain actually
-  needs: provenance tagging, recall-path content fencing, secret redaction at ingest, poison-resistance
-  (gated behind credibility C); and the explicit non-goal (multi-tenant RLS/role gates). **Design; gated
-  on threat-model trigger — do-anytime hardening vs. step-B-gated re-ranking defense.**
+  needs: provenance tagging, recall-path content fencing, secret redaction at ingest (all **built**),
+  and poison-resistance (deferred on a threat trigger, not a milestone). **Provenance + fencing +
+  redaction shipped; poison-resistance is the one remaining slice, gated on the threat surface.**
 - **Instrumentation & event-store architecture (Track I)** — not a separate deep-dive file; fully spec'd
   and built (ROADMAP.md Track I). The motivating insight: the learning loop was reading the brain's own
   behavioral history from loose JSONL files *outside* the brain, with no consolidation or index. Track I
@@ -530,7 +534,8 @@ the actuator the forest, not just the tree it is currently touching).
 
 This is buildable and measurable. The verdict/dogfood loop is the instrument: it measures whether the
 brain *actually* makes the LLM more accurate and efficient, rather than just producing plausible-looking
-briefs. Multi-project ready: scope = tenant + repo; a `thalamus.toml` per project.
+briefs. Multi-*project* ready (one operator, many repos): scope = (`tenant_id`, `repo_id`), a
+`thalamus.toml` per project.
 
 **Honest limit:** having the architecture does not guarantee the briefs are forest-level rather than
 stapled-together lists. Synthesis quality is the ongoing frontier, gated on capture discipline, retrieval

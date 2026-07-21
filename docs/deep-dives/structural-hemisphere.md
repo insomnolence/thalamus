@@ -19,7 +19,7 @@ re-derivable structural graph over an external corpus — code first, others beh
   `node_id` is a **stable identity** surviving re-ingestion (e.g. `function:pkg.mod.func`).
 - **Per-corpus index/namespace** (the no-pollution principle, same as separate per-hemisphere vector
   indexes): a docs corpus and a code corpus don't muddy each other's retrieval — effectively a third
-  scoping axis alongside tenant/repo.
+  scoping axis alongside the per-project `(tenant_id, repo_id)` scope.
 
 ## Built
 

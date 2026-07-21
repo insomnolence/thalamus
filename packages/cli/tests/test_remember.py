@@ -52,6 +52,27 @@ def test_build_retained_record_has_stable_id_and_curated_metadata(tmp_path: Path
     )
 
 
+def test_secrets_are_redacted_from_text_and_why_before_storage(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        text="Set DB_PASSWORD=hunter2supersecret in the deploy env",
+        why="we rotated the key AKIAIOSFODNN7EXAMPLE last week",
+    )
+    record = build_retained_record(config, now=lambda: NOW)
+    assert "hunter2supersecret" not in record.content
+    assert "[REDACTED:env-assignment]" in record.content
+    assert "AKIAIOSFODNN7EXAMPLE" not in str(record.metadata["why"])
+    # auditable coverage is recorded as kind+count, never the secret itself
+    redacted = record.metadata["redacted"]
+    assert {entry["kind"] for entry in redacted} == {"env-assignment", "aws-access-key"}
+
+
+def test_redaction_can_be_disabled_for_tests(tmp_path: Path) -> None:
+    config = _config(tmp_path, text="token=longlivedsecret9 value")
+    assert "longlivedsecret9" in build_retained_record(config, redact=False).content
+    assert "redacted" not in build_retained_record(config, redact=False).metadata
+
+
 def test_remembered_fact_is_recallable_and_linked_to_focused_code(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "pkg").mkdir(parents=True)

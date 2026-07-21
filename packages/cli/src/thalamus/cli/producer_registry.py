@@ -32,11 +32,13 @@ if TYPE_CHECKING:
 class ProducerContext:
     """Cross-cutting build inputs shared by every producer.
 
-    Today just ``resolve_calls`` (jedi call resolution for the Python AST corpus). The corpus'
-    vector index is *not* here — it stays the caller's concern (``build_corpora_from_configs``
-    wires it via ``index_factory``), keeping the :class:`Producer` interface narrow."""
+    Today ``resolve_calls`` (jedi call resolution for the Python AST corpus) and ``redact`` (the
+    §17.4 secret scrubber, on by default — passed to the doc/text ingestors that embed free text).
+    The corpus' vector index is *not* here — it stays the caller's concern (the index_factory in
+    ``build_corpora_from_configs`` wires it), keeping the interface narrow."""
 
     resolve_calls: bool
+    redact: bool = True
 
 
 @dataclass(frozen=True, slots=True)

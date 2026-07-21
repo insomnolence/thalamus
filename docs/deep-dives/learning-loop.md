@@ -12,8 +12,14 @@ and M-1 panel findings woven in 2026-06-17.*
 > *current / used / important / well-connected*). Reason: outcome capture **doesn't accrue in this
 > workflow** (tests run via plain `npm test`, no capture; much work is non-code), whereas
 > **usage + supersession + recency + structure accrue every session**. So everything below about the
-> *outcome* loop (churn / struggle / proxy↔truth on commits) is **PARKED** — built, dormant, kept for
-> if heavy instrumented coding ever happens. What **carries over**: the **firewall** (elevate by
+> *outcome* loop (churn / struggle / proxy↔truth on commits) is **PARKED** — built, dormant, kept as
+> a design record. **Sharpened 2026-06-23:** this is parked **by nature, likely permanently** — clean
+> *terminal* negatives are intrinsically scarce because competent fix-forward work *resolves* its
+> failures, so they're rare in the brain AND git regardless of volume, more devs, or capture tooling
+> (a commit-anchored dollhouse scan collapsed ~28 candidate "rejections" to ~0–2 real). So even heavy
+> instrumented coding is unlikely to resurrect it — do not treat it as "pending capture." The honest
+> thesis proof is the **M-1a delivery probe** (ran positive); the *feedable* learning is relevance
+> credibility (shipped). What **carries over**: the **firewall** (elevate by
 > external/behavioral facts — used / superseded / recent / central — never the model grading its own
 > prose), the **modularity seams**, and the **research toolkit** (SNIPS / anytime-valid CIs / ranking),
 > which re-target cleanly onto a *usage-based retrieval ranker*. New direction tracked in `ROADMAP.md`
@@ -30,7 +36,7 @@ Credibility/learning is the next track. Two inputs forced a reshape of the spec'
 1. An outside review that cleanly separated the **useful tool now** (the structural hemisphere,
    real today) from the **unproven thesis** ("more use → more useful"), and decomposed "close the
    loop" into four stacked blockers — mechanical (join keys), statistical (no negatives), **causal**
-   (observational logs can't show causation), and scale (single-user n=1).
+   (observational logs can't show causation), and scale (single-operator n=1).
 2. The operator's correction: fix-forward dev produces ~no `git revert`s, so **revert-as-negative
    was the wrong signal** (which is why it was never built).
 
@@ -180,7 +186,7 @@ re-ranker is last.
 
 ## The pre-registered win condition  *(LOCKED 2026-06-15; M-1a scoped 2026-06-17)*
 
-Framed as **experiment design at n=1**, not "pick a meaningful number." At single-user scale the
+Framed as **experiment design at n=1**, not "pick a meaningful number." At single-operator scale the
 binding constraints are **statistical power** (the metric must move often enough to test) and
 **Goodhart-resistance** — so the lessons are: *no composite primary* (a composite hides which part
 moved and hands you two knobs to rationalize with), and *a sensitive decision metric and an aligned
@@ -209,7 +215,7 @@ decision-point ablation (per-decision N, uncurated). Per-recall IPS is the true-
   state, not a fudge). A proxy gain whose alignment is flat/negative, or whose sequence brackets 0
   once it tightens, is **reward-hacking → cut**.
 - **Unit of analysis:** **per-edit / per-recall**, never per-session — the single biggest power lever
-  at single-user scale.
+  at single-operator scale.
 - **Guardrails (secondary, logged, never the win condition):** time-to-green, raw edit-survival rate,
   redundant-re-investigation rate.
 
@@ -275,15 +281,15 @@ lesson is precisely that they come apart.**
 ## Decision rules (stopping / escalation)  *(provisional — needs ratification)*
 
 The single biggest risk to this whole track is **perpetual gating**: waiting forever for a signal
-single-user volume may never produce. So we pre-commit an exit. *Provisional* default (recommended,
+single-operator volume may never produce. So we pre-commit an exit. *Provisional* default (recommended,
 pending sign-off):
 
 - **Stop rule:** after **M pre-registered per-edit units** (or T elapsed) with the Step-3 alignment CI
   still spanning 0, declare the loop **unprovable at this volume** — do not keep iterating on it.
 - **Escalation branch (on "unprovable"):** **ship credibility as an explicitly-labeled *unvalidated
   prior*** behind the firewall — useful as a soft signal, **not claimed as validated learning** — and
-  revisit only if multi-repo / multi-user volume arrives. *(Alternatives: keep it off until volume; or
-  recruit more repos to force variance. To be ratified.)*
+  revisit only if far more volume accrues over time (e.g. many more repos). *(Alternatives: keep it
+  off until volume; or work across more repos to force variance. To be ratified.)*
 - The reward-hacking flag stays the hard guard throughout: a proxy gain without causal corroboration
   is never shipped *as learning*, whatever the stop rule says.
 
@@ -416,7 +422,7 @@ is the strongest signal we have for L-R1.
 - Unit of analysis (per-edit vs per-session) for powering a statistical test sooner.
 - More repos (more variance) vs depth on one — which buys discrimination faster.
 - How aggressively to explore (Step 3) without degrading the live brain's usefulness.
-- Whether the thesis slope is cleanly measurable at single-user scale at all, or only as
+- Whether the thesis slope is cleanly measurable at single-operator scale at all, or only as
   interval-deltas + soft signals.
 - **Low-volume causal attribution is a genuine open frontier** — the literature solves it only with
   many subjects or many events; nobody has cracked it at single-dev scale. Our realistic stance:

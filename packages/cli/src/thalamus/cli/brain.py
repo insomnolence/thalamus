@@ -69,6 +69,7 @@ from thalamus.structural import (
     StructuralIndex,
     StructuralNode,
     StructuralRetriever,
+    TrustStampingIngestor,
     code_files,
     footprint_from_metadata,
     footprint_staleness,
@@ -148,6 +149,7 @@ def build_corpora(
     scip_index: Path | None = None,
     resolve_calls: bool = True,
     resolve_docs: bool = True,
+    redact: bool = True,
 ) -> list[CorpusSpec]:
     """The Brain-2 corpora: code (Python AST + jedi, or SCIP for TS/others) and docs (Markdown).
 
@@ -175,12 +177,16 @@ def build_corpora(
             )
             corpora.append(
                 CorpusSpec(
-                    DocIngestor(id_namespace=label), index, markdown_files, corpus, root=root
+                    DocIngestor(id_namespace=label, redact=redact),
+                    index,
+                    markdown_files,
+                    corpus,
+                    root=root,
                 )
             )
     elif resolve_docs:
         doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
-        corpora.append(CorpusSpec(DocIngestor(), doc_index, markdown_files, "docs"))
+        corpora.append(CorpusSpec(DocIngestor(redact=redact), doc_index, markdown_files, "docs"))
     return corpora
 
 
@@ -190,6 +196,7 @@ def build_corpora_from_configs(
     encoder: Encoder,
     index_factory: Callable[[str], StructuralIndex] | None = None,
     resolve_calls: bool = True,
+    redact: bool = True,
 ) -> list[CorpusSpec]:
     """Build Brain-2 corpora from declarative ``[[corpus]]`` configs — the language-agnostic path.
 
@@ -208,12 +215,18 @@ def build_corpora_from_configs(
             return index_factory(name)
         return InMemoryStructuralIndex(dim=encoder.dim)
 
-    ctx = ProducerContext(resolve_calls=resolve_calls)
+    ctx = ProducerContext(resolve_calls=resolve_calls, redact=redact)
     specs: list[CorpusSpec] = []
     for cfg in configs:
         built = get_producer(cfg.kind).build(cfg, ctx=ctx)
+        # Stamp non-operator corpora so their nodes carry provenance for the recall-path fence
+        # (§17.4 T1/T3). Operator corpora (the default) are left unstamped — operator is the
+        # payload's implicit default, so this is a no-op on the single-operator configuration.
+        ingestor = built.ingestor
+        if cfg.trust.is_untrusted:
+            ingestor = TrustStampingIngestor(ingestor, cfg.trust)
         specs.append(
-            CorpusSpec(built.ingestor, make_index(cfg.name), built.files, cfg.name, root=cfg.root)
+            CorpusSpec(ingestor, make_index(cfg.name), built.files, cfg.name, root=cfg.root)
         )
     return specs
 

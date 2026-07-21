@@ -24,7 +24,14 @@ from thalamus.core.types import (
     StructuralRef,
     Supersession,
 )
-from thalamus.gateway.payload import CallRelation, ContextPayload, MemoryItem, StructuralItem
+from thalamus.gateway.payload import (
+    CallRelation,
+    ContextPayload,
+    MemoryItem,
+    StructuralItem,
+    fence_untrusted,
+    node_trust,
+)
 from thalamus.gateway.views import DerivedViews, DerivedViewsRef
 from thalamus.instrumentation import UsageSignal, UsageSink, attribute_overlap
 from thalamus.structural import (
@@ -385,11 +392,19 @@ class Gateway:
             callees = graph.neighbors(node.ref, edge_types=("calls",), direction="out")
             if not callers and not callees:
                 continue
+            # Fence every symbol name by its own node's provenance (§17.4 T1): a third-party code
+            # corpus' symbol (caller/callee or focal) is wrapped as data, not instructions.
             relations.append(
                 CallRelation(
-                    label=node.label,
-                    callers=tuple(n.label for n in callers[:_MAX_CALL_NEIGHBORS]),
-                    callees=tuple(n.label for n in callees[:_MAX_CALL_NEIGHBORS]),
+                    label=fence_untrusted(node.label, node_trust(node)),
+                    callers=tuple(
+                        fence_untrusted(n.label, node_trust(n))
+                        for n in callers[:_MAX_CALL_NEIGHBORS]
+                    ),
+                    callees=tuple(
+                        fence_untrusted(n.label, node_trust(n))
+                        for n in callees[:_MAX_CALL_NEIGHBORS]
+                    ),
                 )
             )
             if len(relations) >= _MAX_CALL_RELATIONS:

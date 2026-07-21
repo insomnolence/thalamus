@@ -21,6 +21,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+from thalamus.core.redaction import redact_secrets
 from thalamus.core.types import Scope
 from thalamus.structural.schema import IngestResult, SourceAnchor, StructuralEdge, StructuralNode
 from thalamus.structural.sources import _rel, text_files
@@ -96,6 +97,7 @@ class TextIngestor:
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
         overlap_chars: int = DEFAULT_OVERLAP_CHARS,
         max_intro_chars: int = _INTRO_CHARS,
+        redact: bool = True,
     ) -> None:
         # ``files`` MUST enumerate exactly what this ingestor reads — the producer hands the same
         # enumerator to both the ingestor and the corpus' change detection, so incremental
@@ -106,6 +108,12 @@ class TextIngestor:
         self._chunk_chars = chunk_chars
         self._overlap_chars = overlap_chars
         self._max_intro_chars = max_intro_chars
+        # Arbitrary text (notes, logs, exported chat) can carry secrets; scrub the embeddable text
+        # at ingest before it enters the index/store (§17.4 T2). ``redact=False`` is for tests.
+        self._redact = redact
+
+    def _scrub(self, text: str) -> str:
+        return redact_secrets(text).text if self._redact else text
 
     def ingest_path(self, root: Path, scope: Scope) -> IngestResult:
         nodes: list[StructuralNode] = []
@@ -130,7 +138,7 @@ class TextIngestor:
 
         rel = _rel(path, root)
         doc_id = f"document:{self._id_prefix}{rel}"
-        intro = "\n".join(lines).strip()[: self._max_intro_chars]
+        intro = self._scrub("\n".join(lines).strip()[: self._max_intro_chars])
         nodes.append(
             StructuralNode(
                 node_id=doc_id,
@@ -141,9 +149,10 @@ class TextIngestor:
                 metadata={"text": intro} if intro else {},
             )
         )
-        for line_start, line_end, text in chunk_lines(
+        for line_start, line_end, raw_text in chunk_lines(
             lines, chunk_chars=self._chunk_chars, overlap_chars=self._overlap_chars
         ):
+            text = self._scrub(raw_text)
             chunk_id = f"chunk:{self._id_prefix}{rel}:{line_start}"
             nodes.append(
                 StructuralNode(

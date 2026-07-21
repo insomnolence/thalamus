@@ -112,8 +112,8 @@ gets it for free from capture-raw/derive-views.
    credibility bounce and segmentation flip run-to-run. Needs damping / hysteresis / stability
    thresholds. Not designed yet.
 3. **Evaluating dreaming.** A/B with-vs-without consolidation (the OLR §13.20 L3 ablation, applied to
-   dreaming) + held-out edge-prediction for connection discovery. Payoff is long-horizon; single-user
-   signal is thin → multi-user resurfaces (design-notes §14).
+   dreaming) + held-out edge-prediction for connection discovery. Payoff is long-horizon; the
+   single-operator signal is thin — an accepted limit (single-operator by design, foundation.md Decision 2).
 4. **Novel framing** (vs. conventional consolidation = monolithic LLM rewrite): an offline **DAG of
    mostly-deterministic, individually-gated, removable passes** over an immutable log, **LLM passes
    fenced to propose-only**, **cadence from the det/LLM split**, **safe-to-rerun**. The *discipline* is
@@ -124,8 +124,11 @@ gets it for free from capture-raw/derive-views.
 > **Re-aimed 2026-06-15.** The credibility/learning track's target signal has moved from code
 > outcomes (did committed work survive / tests pass) to **relevance credibility** (which memories are
 > *current / used / important / well-connected*). The outcome loop below — churn /
-> proxy↔truth-on-commits — is **PARKED**: built, gated, dormant; kept for if instrumented coding
-> resumes. The **firewall is unchanged**. Five dreaming actors shipped under this direction:
+> proxy↔truth-on-commits — is **PARKED**: built, gated, dormant; a design record. **Sharpened
+> 2026-06-23 — parked by nature, likely permanently:** clean *terminal* negatives are intrinsically
+> scarce (competent fix-forward work resolves its failures), so they don't accrue regardless of
+> volume/devs/capture; even instrumented coding is unlikely to resurrect this. The **firewall is
+> unchanged**. Five dreaming actors shipped under this direction:
 > **`AttributionRefreshPass`** — re-derives footprint usage attribution from the live graph + logs
 > each tick and swaps it into the `AttributedSignalsRef` holder + rewrites `usage_attributed.jsonl`
 > (fixed a silent month-scale staleness bug; see dedicated section below);
@@ -286,9 +289,16 @@ A long session got confused here, so, plainly:
 - **A ✓ — credibility computed in the automatic loop.** The `CredibilityPass` runs on the
   `MaintenanceTicker`'s consolidation phase, so the brain continuously scores each memory's fate.
   **Inert on its own** — nothing acts on the score yet (no recall change).
+> **⛔ B and C are PARKED BY NATURE (2026-06-23) — a design record, not a live sequence.** Both need
+> clean terminal negatives to discriminate, and those are intrinsically scarce in fix-forward work, so
+> the monitor stays starved regardless of volume. What shipped instead is **relevance** credibility:
+> recall already re-ranks by usage / centrality / supersession / recency (the L-R1/L-R2 rungs), the
+> feedable form of "the brain reorganizes itself." Read B/C below as the *outcome-credibility* design
+> that would apply only if negatives ever became plentiful (a very different workflow).
+
 - **B — un-blind the proxy↔truth monitor.** Restart the serve (the supersede fix then lets
   supersessions actually *record* → fate **negatives** accrue) + accrue use → the monitor gets real,
-  *discriminating* data (today it's starved: few units, ~all positive).
+  *discriminating* data (today it's starved: few units, ~all positive). *(Parked by nature — see above.)*
 - **C — recall re-ranks by credibility (the goal: the brain reorganizes itself).** Recall surfaces
   high-credibility memories and demotes low-credibility ones. **Gated on B** — you do not deploy a
   feedback layer you cannot measure (§13.12: "if starved, *don't deploy a learned layer* — flying
@@ -410,7 +420,7 @@ hiccup never skips perceive or consolidate on the same tick.
 ## Open questions remaining
 
 - Damping/hysteresis design for cross-cycle stability (hard part #2).
-- Concrete eval of consolidation at single-user scale (hard part #3).
+- Concrete eval of consolidation at single-operator scale (hard part #3).
 - The reflection pass's exact gate and representation (semantic-principle node schema).
 - Interaction with belief credibility decay (does decay touch beliefs, or only episodes?).
 - Fate-combiner thresholds (survival horizon, churn ratio, reuse count) — tune on the settled backlog;

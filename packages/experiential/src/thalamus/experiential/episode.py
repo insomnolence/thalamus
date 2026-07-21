@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from thalamus.core.redaction import RedactionEvent, merge_redaction_events, redact_secrets
 from thalamus.core.types import Hemisphere, MemoryId, MemoryRecord
 from thalamus.experiential.outcome import classify_outcome
 from thalamus.experiential.segmentation import EpisodeSpan
@@ -94,6 +95,12 @@ def _render_content(
 class EpisodeBuilder:
     """Builds an episode ``MemoryRecord`` from an :class:`EpisodeSpan`."""
 
+    def __init__(self, *, redact: bool = True) -> None:
+        # Commit subjects and error/test messages are free text that can carry a pasted secret;
+        # scrub them at this capture boundary before they are embedded/stored (§17.4 T2).
+        # ``redact=False`` is for tests only.
+        self._redact = redact
+
     def build(self, span: EpisodeSpan) -> MemoryRecord | None:
         events = tuple(span.events)
         if not events:
@@ -103,10 +110,23 @@ class EpisodeBuilder:
         terminal = commits[-1] if commits else None
         footprint = sorted({f for c in commits for f in c.payload.get("files", [])})
         footprint_lines = _merge_footprint_lines(commits)  # C-8: per-file touched line numbers
+
+        redaction_events: list[RedactionEvent] = []
+
+        def scrub(text: str) -> str:
+            if not self._redact:
+                return text
+            result = redact_secrets(text)
+            redaction_events.extend(result.events)
+            return result.text
+
         dead_ends = _dead_ends(events)
+        for dead_end in dead_ends:  # scrub free-text failure messages before embed/store
+            dead_end["message"] = scrub(dead_end["message"])
 
         why: list[WhyComponent] = []
-        subject = str(terminal.payload.get("subject", "")) if terminal is not None else None
+        subject_raw = str(terminal.payload.get("subject", "")) if terminal is not None else None
+        subject = scrub(subject_raw) if subject_raw else subject_raw
         if subject:
             why.append(WhyComponent("goal", subject, WhyProvenance.ASSERTED))
         why.extend(
@@ -144,6 +164,10 @@ class EpisodeBuilder:
                 {"kind": w.kind, "text": w.text, "provenance": w.provenance.value} for w in why
             ],
         }
+        if redaction_events:  # auditable secret-redaction coverage (§17.4); kind+count, no secret
+            metadata["redacted"] = [
+                {"kind": e.kind, "count": e.count} for e in merge_redaction_events(redaction_events)
+            ]
         return MemoryRecord(
             memory_id=memory_id,
             hemisphere=Hemisphere.EXPERIENTIAL,

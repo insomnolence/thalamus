@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Any
 
 from thalamus.core.exceptions import ThalamusError
+from thalamus.core.trust import Trust
 
 # Friendly TOML key -> argparse dest (serve/sync/health share these dests).
 _KEY_TO_DEST: dict[str, str] = {
@@ -73,6 +74,7 @@ _KEY_TO_DEST: dict[str, str] = {
     "resolve_calls": "resolve_calls",
     "structural_min_relevance": "structural_min_relevance",
     "hybrid_retrieval": "hybrid_retrieval",
+    "secret_redaction": "redact_secrets",
     "dream_tick": "dream_tick",
     "dream_tick_minutes": "dream_tick_minutes",
     "checkpoint": "checkpoint",
@@ -167,7 +169,10 @@ class CorpusConfig:
     ``regen_command`` (optional) is the shell command that rebuilds the artifact (e.g.
     ``scip-rust-analyzer …``), run by the re-derive pass when the source changes. ``root_package``
     optionally prefixes module ids. ``options`` are forward-compatible per-producer params (values
-    coerced to ``str``) — e.g. ``chunk_chars`` for the text producer."""
+    coerced to ``str``) — e.g. ``chunk_chars`` for the text producer. ``trust`` (§17.4) declares the
+    corpus' provenance (``operator`` default / ``derived`` / ``third-party``); a non-operator
+    corpus' nodes are stamped + fenced on recall so ingested instruction-shaped text can't steer
+    the actuator."""
 
     name: str
     root: Path
@@ -177,6 +182,7 @@ class CorpusConfig:
     regen_command: str | None = None
     root_package: str | None = None
     options: Mapping[str, str] = field(default_factory=dict)
+    trust: Trust = Trust.OPERATOR
 
 
 def parse_corpora(raw: dict[str, Any], base: Path) -> list[CorpusConfig]:
@@ -210,6 +216,11 @@ def parse_corpora(raw: dict[str, Any], base: Path) -> list[CorpusConfig]:
             )
         scip = entry.get("scip_index")
         pkg = entry.get("root_package")
+        raw_trust = entry.get("trust")
+        try:
+            trust = Trust.parse(str(raw_trust)) if raw_trust is not None else Trust.OPERATOR
+        except ValueError as exc:
+            raise ThalamusError(f"[[corpus]] '{label}': {exc}") from None
         cfg = CorpusConfig(
             name=str(entry.get("name") or entry["root"]),
             root=_resolve(base, entry["root"]),
@@ -219,6 +230,7 @@ def parse_corpora(raw: dict[str, Any], base: Path) -> list[CorpusConfig]:
             regen_command=str(regen) if regen else None,
             root_package=str(pkg) if pkg else None,
             options=_parse_options(label, entry.get("options", {})),
+            trust=trust,
         )
         # Producer owns kind validity (unknown kind → known-kinds list) + kind-specific config
         # (e.g. scip needs an index, text's chunk options parse + range-check).

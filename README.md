@@ -13,7 +13,7 @@ single MCP endpoint. No cloud, no account, no per-seat pricing.
 
 > **Status — honest version.** This is a working, daily-dogfooded **research system**, not a polished
 > product. Both hemispheres are live, the learning loop runs, and the measurement is real and
-> reproducible — but it's validated at single-user scale, the setup has rough edges, and the headline
+> reproducible — but it's validated at single-operator scale, the setup has rough edges, and the headline
 > "more use → more useful" thesis isn't *proven* yet (the instrument to prove it is built; see
 > [Does it actually work?](#does-it-actually-work)). If that framing appeals to you, read on.
 
@@ -125,10 +125,13 @@ dogfooding (this repo + a separate code-rich project), via the built-in `health`
 - **The structural-centrality retrieval rung is a clean win** (it ranks the memory the agent actually
   used higher, on both recall and MRR) in a de-leaked ablation — that's *why* it's enabled by default.
 
-**Honest caveats** (the same instruments enforce them): this is single-user scale; the over-time
-"more use → more useful" *slope* is confounded (task drift, attribution lag) and is **not** cleanly
-measurable yet — proving it needs a controlled brain-on/off ablation, which is designed but not run
-(see [`docs/deep-dives/path-to-real-data.md`](docs/deep-dives/path-to-real-data.md) and the M-1
+**Honest caveats** (the same instruments enforce them): this is single-operator scale (by design). The retrieval→actuator
+*delivery link* — does surfacing the decisive memory actually change the action? — has a **first
+positive read**: the pre-registered M-1a probe came out positive and control-validated, but at small
+scale (one actuator, curated cases), so it proves the link, **not** the thesis. The over-time "more use
+→ more useful" *slope* is confounded (task drift, attribution lag) and **not** cleanly measurable yet —
+the full uncurated brain-on/off ablation is still unrun (see
+[`docs/deep-dives/path-to-real-data.md`](docs/deep-dives/path-to-real-data.md) and the M-1
 pre-registration). Reproduce any of the above on your own repo:
 
 ```bash

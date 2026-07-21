@@ -77,9 +77,11 @@ ablation) it serves:
 - **R3 — Tier-2 outcome capture.** Join terminal outcomes (commit kept, test fail→pass) to episodes →
   the truth signal + the proxy↔truth divergence monitor (§13.12). Eval: **L2 truth.** Gates learned
   layers honestly.
-- **R4 — The learning thesis.** Outcome-weighted ranking → bent geometry (§13.4), each gated against the
-  baseline; "more use → more useful." Eval: **L3 ablation** + the thesis slope. Needs volume → likely
-  drags **multi-user** (§13.13) from "later" to "now".
+- **R4 — The learning thesis.** "More use → more useful." The *outcome-weighted* form (→ bent geometry
+  §13.4) is **parked by nature** (terminal negatives are intrinsically scarce; see ROADMAP Track L).
+  The live form is **relevance credibility** (shipped) + the **M-1a delivery proof** (positive) and the
+  uncurated decision-point ablation. The brain is **single-operator by design** ([`foundation.md`](foundation.md)
+  Decision 2) — thin volume is an accepted limit, not a scale-up trigger.
 
 So: **ready to start generating real data (R1/R2); not ready to render the verdict (R3/R4).** The verdict
 cannot be faked or hand-built into existence — it requires accumulated real use, by design.
@@ -125,10 +127,12 @@ dogfooding, and it converts the project from "framework" to "framework with real
 
 ## Honest limits
 
-- **Single-user, low-traffic volume (§13.13).** Dogfooding one project produces a trickle of clean
-  outcomes — enough to *exercise and debug* the pipeline and compute directional `utility@k`, likely **not
-  enough to validate a learned ranker**. The thesis-level verdict (R4) probably still waits on multi-user
-  volume. Dogfood proves the machinery runs on real data; it does not, alone, prove the thesis.
+- **Single-operator, low-traffic volume.** Dogfooding produces a trickle of clean outcomes — enough to
+  *exercise and debug* the pipeline and compute directional `utility@k`, likely **not enough to validate
+  an outcome-trained ranker** (which is parked by nature anyway). This is an **accepted** limit of a
+  single-operator brain (by design — [`foundation.md`](foundation.md) Decision 2), not something more
+  users would fix. The thesis evidence is the M-1a delivery proof + the relevance signals that accrue
+  fine at this scale. Dogfood proves the machinery runs on real data; it does not, alone, prove the slope.
 - **The double-role bias.** When we are both the authors of the brain *and* its users, we will
   unconsciously feed it what it handles well. Treat dogfood metrics as *plumbing validation and anecdote*,
   not as the L3 verdict; the §13.20 integrity layer (proxy↔truth divergence, etc.) still arbitrates, and a
@@ -157,8 +161,8 @@ dogfooding, and it converts the project from "framework" to "framework with real
   M-1a is its curated special case. Task-replay (real tasks, tests-as-judge) is closer to true M-1 but
   thin and expensive here. **Per-recall IPS** is the right long-run ATE estimator but blocked on R-7
   (`propensity=1.0` made off-policy estimation undefined — no common support) and on stochastic-serving
-  volume (likely multi-user). R-7 built the propensity-logging substrate (2026-06-17); the IPS
-  estimator is deferred.
+  volume (which accrues slowly at single-operator scale). R-7 built the propensity-logging substrate
+  (2026-06-17) and exploration is now on (ε=0.05, 2026-06-26); the IPS estimator is deferred on volume.
 
 ## Status & next
 

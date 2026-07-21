@@ -20,6 +20,12 @@ from thalamus.core.protocols import (
     Store,
     SupersessionIndex,
 )
+from thalamus.core.redaction import (
+    RedactionEvent,
+    RedactionResult,
+    merge_redaction_events,
+    redact_secrets,
+)
 from thalamus.core.serde import deserialize_memory_record, serialize_memory_record
 from thalamus.core.taxonomy import (
     ACCEPTED_KINDS,
@@ -29,6 +35,7 @@ from thalamus.core.taxonomy import (
     RetainedKind,
     normalize_kind,
 )
+from thalamus.core.trust import Trust
 from thalamus.core.types import (
     Cue,
     EpisodeId,
@@ -64,6 +71,8 @@ __all__ = [
     "MemoryRef",
     "MemoryRecord",
     "RETAINED_KINDS",
+    "RedactionEvent",
+    "RedactionResult",
     "RememberKindInput",
     "RepoId",
     "RetainedKind",
@@ -80,8 +89,11 @@ __all__ = [
     "SupersessionIndex",
     "TenantId",
     "ThalamusError",
+    "Trust",
     "Vector",
     "deserialize_memory_record",
+    "merge_redaction_events",
     "normalize_kind",
+    "redact_secrets",
     "serialize_memory_record",
 ]

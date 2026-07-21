@@ -88,6 +88,19 @@ def test_toml_defaults_flow_into_serve_config_and_cli_overrides(tmp_path: Path) 
     assert cfg2.repo_id == "sample-app"  # untouched keys still from the toml
 
 
+def test_secret_redaction_toml_key_flows_to_serve_config(tmp_path: Path) -> None:
+    path = tmp_path / "thalamus.toml"
+    path.write_text('repo_id = "x"\nsecret_redaction = false\n', encoding="utf-8")
+    arg_defaults, _, _ = load_project_config(path)
+    parser = argparse.ArgumentParser()
+    add_serve_arguments(parser)
+    valid = {a.dest for a in parser._actions}
+    parser.set_defaults(**{k: v for k, v in arg_defaults.items() if k in valid})
+    assert serve_config(parser.parse_args([])).redact_secrets is False
+    # an explicit CLI flag still wins over the toml
+    assert serve_config(parser.parse_args(["--secret-redaction"])).redact_secrets is True
+
+
 # ── declarative [[corpus]] config ────────────────────────────────────────────────────────────
 
 _CORPUS_TOML = """
@@ -131,6 +144,27 @@ def test_parse_corpora_reads_mixed_languages_and_resolves_paths(tmp_path: Path) 
 def test_flat_config_has_no_explicit_corpora(tmp_path: Path) -> None:
     _, _, corpora = load_project_config(_write_toml(tmp_path))
     assert corpora == []  # flat keys drive the build; [[corpus]] is opt-in
+
+
+def test_corpus_trust_defaults_operator_and_parses_declared(tmp_path: Path) -> None:
+    from thalamus.core.trust import Trust
+
+    path = tmp_path / "thalamus.toml"
+    path.write_text(
+        '[[corpus]]\nname="own"\nroot="src"\nkind="docs"\n\n'
+        '[[corpus]]\nname="vendored"\nroot="vendor"\nkind="docs"\ntrust="third-party"\n',
+        encoding="utf-8",
+    )
+    _, _, corpora = load_project_config(path)
+    assert corpora[0].trust is Trust.OPERATOR  # default when unset
+    assert corpora[1].trust is Trust.THIRD_PARTY
+
+
+def test_corpus_trust_rejects_unknown_value(tmp_path: Path) -> None:
+    from thalamus.core.exceptions import ThalamusError
+
+    with pytest.raises(ThalamusError, match="unknown trust level"):
+        _parse(tmp_path, '[[corpus]]\nname="x"\nroot="."\nkind="docs"\ntrust="public"\n')
 
 
 def _parse(tmp_path: Path, body: str) -> None:

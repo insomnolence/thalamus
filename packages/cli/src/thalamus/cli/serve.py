@@ -68,6 +68,7 @@ from thalamus.dreaming import (
 )
 from thalamus.experiential import (
     BehavioralStore,
+    EpisodeBuilder,
     FileCheckpoint,
     GitEpisodeIngestor,
     InMemoryBehavioralStore,
@@ -88,11 +89,13 @@ from thalamus.instrumentation import (
     JsonlUsageSink,
     SessionContext,
     UsageSignal,
+    append_redaction,
     default_session_path,
     mint_session_id,
     read_event_log,
     read_trajectory_log,
     read_usage_log,
+    redaction_events_from_metadata,
     rotate_log,
 )
 from thalamus.retrieval import (
@@ -198,6 +201,9 @@ class ServeConfig:
     # non-empty these REPLACE the flat code_language/scip_index/doc_roots build — the project
     # describes its own corpora, so Brain 2 isn't bespoke to one language. Empty = the flat path.
     corpora: tuple[CorpusConfig, ...] = ()
+    # Scrub credential-shaped text (tokens/keys/passwords) at every ingest boundary before embed/
+    # store (§17.4 T2). On by default; --no-secret-redaction disables it (the removable layer).
+    redact_secrets: bool = True
 
 
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
@@ -321,6 +327,12 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "rare terms still surface (--no-hybrid-retrieval falls back to semantic-only L0)",
     )
     parser.add_argument(
+        "--secret-redaction", dest="redact_secrets", action=argparse.BooleanOptionalAction,
+        default=True,
+        help="scrub credential-shaped text (tokens/keys/passwords) at every ingest boundary before "
+        "embed/store (§17.4 T2); on by default — --no-secret-redaction disables it",
+    )
+    parser.add_argument(
         "--data-dir", type=Path, default=None,
         help="directory under which the brain's .thalamus data (logs/session/checkpoints) lives "
         "(default: --repo). Set it to keep brain data out of the code root — e.g. serve "
@@ -372,6 +384,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         investigate=bool(args.investigate),
         data_dir=Path(args.data_dir).resolve() if args.data_dir else None,
         resolve_calls=bool(args.resolve_calls),
+        redact_secrets=bool(args.redact_secrets),
         structural_min_relevance=float(args.structural_min_relevance),
         max_structural_items=int(args.max_structural_items),
         max_memory_chars=int(args.max_memory_chars),
@@ -479,6 +492,7 @@ def build_serve_gateway(
             encoder=encoder,
             index_factory=doc_index_factory,
             resolve_calls=config.resolve_calls,
+            redact=config.redact_secrets,
         )
     elif graph is not None and manifest is not None:
         corpora = build_corpora(
@@ -490,6 +504,7 @@ def build_serve_gateway(
             code_language=config.code_language,
             scip_index=config.scip_index,
             resolve_calls=config.resolve_calls,
+            redact=config.redact_secrets,
         )
     # L-R1 usage-weighted rung holder — created empty here so it can be passed into the gateway,
     # then SEEDED below once the gateway's live graph and the attribution the rung feeds on
@@ -731,6 +746,8 @@ def build_remember_writer(
     current truth. ``on_write`` (the dream-tick trigger) is signalled after each write so a
     live ``remember --supersedes`` refreshes the served views promptly, not only on the next
     periodic cycle."""
+    redaction_path = (config.data_dir or config.repo) / ".thalamus" / "logs" / "redaction.jsonl"
+
     def write(
         kind: str,
         text: str,
@@ -756,9 +773,14 @@ def build_remember_writer(
             neo4j_uri=config.neo4j_uri,
             neo4j_user=config.neo4j_user,
             neo4j_password=config.neo4j_password,
+            redact=config.redact_secrets,
         )
         record = run_remember(
             request, store=store, encoder=encoder, supersession=supersession, announce=False
+        )
+        # Auditable redaction coverage (§17.4): record kind+count of any secret scrubbed, no secret.
+        append_redaction(
+            redaction_path, "remember", redaction_events_from_metadata(record.metadata)
         )
         if on_write is not None:
             on_write()  # write-trigger: dream a refresh soon so the new belief takes effect
@@ -848,6 +870,7 @@ def build_capture_phase(
         return None
     logs = data_dir / ".thalamus" / "logs"
     trajectory_path = logs / "trajectory.jsonl"
+    redaction_path = logs / "redaction.jsonl"
     ingestor = GitEpisodeIngestor(
         SessionStampingSource(
             GitObserver(config.repo, scope),
@@ -859,11 +882,17 @@ def build_capture_phase(
         trajectory_sink=JsonlTrajectorySink(trajectory_path),
         raw_events=lambda: list(read_trajectory_log(trajectory_path)),
         known_ids=known_ids,
+        # Scrub secrets from commit subjects / failure messages before they're embedded (§17.4 T2).
+        builder=EpisodeBuilder(redact=config.redact_secrets),
     )
 
     def capture() -> None:
         records = ingestor.sync()
         if records:
+            for record in records:  # auditable redaction coverage (§17.4) — kind+count, no secret
+                append_redaction(
+                    redaction_path, "episode", redaction_events_from_metadata(record.metadata)
+                )
             print(
                 f"thalamus: captured {len(records)} new episode(s) into Brain 1 [{config.repo_id}]",
                 file=sys.stderr,

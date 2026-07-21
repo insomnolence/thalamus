@@ -44,7 +44,7 @@ from thalamus.core.types import (
     StructuralRef,
     Supersession,
 )
-from thalamus.gateway.payload import FindingItem, MemoryItem, StructuralItem
+from thalamus.gateway.payload import FindingItem, MemoryItem, StructuralItem, fence_untrusted
 from thalamus.gateway.views import DerivedViews, DerivedViewsRef
 from thalamus.structural import (
     CoChangeIndex,
@@ -214,9 +214,12 @@ class PlanBrief:
         ip = self.integration_point
         loc = f" — {ip.location}" if ip.location else ""
         rel = f" [relevance {self.resolution_relevance:.2f}]" if self.resolution_relevance else ""
-        lines += ["", "## Integration point", f"- ({ip.kind}) {ip.label}{loc}{rel}"]
+        # Fence symbol names from non-operator corpora (§17.4 T1) — a plan over third-party code
+        # surfaces its symbols here; they reach the actuator as data, not instructions.
+        ip_label = fence_untrusted(ip.label, ip.trust)
+        lines += ["", "## Integration point", f"- ({ip.kind}) {ip_label}{loc}{rel}"]
         if self.resolution_ambiguous and self.alternatives:
-            alts = ", ".join(f"{a.label}" for a in self.alternatives)
+            alts = ", ".join(fence_untrusted(a.label, a.trust) for a in self.alternatives)
             lines.append(f"  ⚠ ambiguous target — also plausible: {alts}")
 
         lines += ["", "## Blast radius — what depends on this"]
@@ -245,7 +248,8 @@ class PlanBrief:
                         else "no recorded context"
                     )
                     loc = f" — {rn.item.location}" if rn.item.location else ""
-                    lines.append(f"  - ({rn.item.kind}) {rn.item.label}{loc}  [{notes}]")
+                    label = fence_untrusted(rn.item.label, rn.item.trust)
+                    lines.append(f"  - ({rn.item.kind}) {label}{loc}  [{notes}]")
         elif not self.high_fanout:
             lines.append("  (no direct callers/callees recorded in Brain 2)")
         if self.radius_omitted:
@@ -256,7 +260,7 @@ class PlanBrief:
             lines.append("  external analysis already flags these on the in-scope code:")
             for f in self.findings:
                 loc = f" [{f.location}]" if f.location else ""
-                lines.append(f"  - {f.label}{loc}")
+                lines.append(f"  - {fence_untrusted(f.label, f.trust)}{loc}")
             if self.findings_omitted:
                 lines.append(f"  - ... {self.findings_omitted} further finding(s) omitted")
 
@@ -288,9 +292,10 @@ class PlanBrief:
         lines += ["", f"## {heading} ({len(items)})"]
         for item in items:
             superseded = " [superseded]" if item.superseded else ""
-            lines.append(f"- ({item.kind}){superseded} {item.content}")
+            content = fence_untrusted(item.content, item.trust)
+            lines.append(f"- ({item.kind}){superseded} {content}")
             if item.why:
-                lines.append(f"  why: {item.why}")
+                lines.append(f"  why: {fence_untrusted(item.why, item.trust)}")
             if item.superseded is not None:
                 note = item.superseded
                 lines.append(f"  ⊘ superseded by {note.superseded_by} on {note.at}: {note.reason}")

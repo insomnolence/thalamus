@@ -35,6 +35,34 @@ def _failing_test(eid: str, second: int, test_id: str, message: str) -> Trajecto
     )
 
 
+def test_episode_redacts_secrets_in_subject_and_dead_ends() -> None:
+    span = EpisodeSpan(
+        events=(
+            _failing_test(
+                "e1", 10, "tests/test_auth.py::test_login",
+                "failed with key sk-abcdefghijklmnopqrstuvwx",
+            ),
+            _commit("e2", 20, "abc123", "rotate token ghp_" + "a" * 36, ["auth.py"]),
+        ),
+        closed=True,
+    )
+    record = EpisodeBuilder().build(span)
+    assert record is not None
+    assert "ghp_" + "a" * 36 not in record.content
+    assert "[REDACTED:github-token]" in record.content
+    assert "sk-abcdefghijklmnopqrstuvwx" not in str(record.metadata["dead_ends"])
+    # the subject feeds the asserted "goal" why and the terminal outcome — both scrubbed
+    assert "ghp_" not in str(record.metadata["why"])
+    assert "ghp_" not in str(record.metadata["terminal_outcome"])
+    # auditable coverage stamped on the record (kind+count, no secret) for the verdict counter
+    kinds = {entry["kind"] for entry in record.metadata["redacted"]}
+    assert kinds == {"github-token", "api-key"}
+    # opt-out leaves the raw text (tests only)
+    raw = EpisodeBuilder(redact=False).build(span)
+    assert raw is not None
+    assert "ghp_" + "a" * 36 in raw.content
+
+
 def test_commit_span_becomes_episode_with_tagged_why() -> None:
     span = EpisodeSpan(
         events=(

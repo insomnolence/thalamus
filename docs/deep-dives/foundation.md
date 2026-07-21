@@ -27,18 +27,30 @@ storage.** That precision gives the resolution:
 - **Fits the reusable asset:** Neo4j gives typed nodes (labels), native edges, and per-label vector
   indexes out of the box (§11).
 
-## Decision 2 — multi-user: promote it cheaply (resolves the §14 strategic thread)
+## Decision 2 — single-operator by design (and what the scope tuple actually buys)
 
-Multi-user keeps surfacing as the unlock for the *learned* layers (OLR §13.13). Real multi-tenancy now
-would bloat a boring foundation; ignoring it bakes in single-tenant assumptions that are painful to
-retrofit. Apply the irreversible-if-deferred lens:
+**The brain is single-operator — permanently and deliberately, not "single-user for now."** This is
+the canonical statement; other docs point here rather than re-litigating it. The reasoning is
+architectural, not a matter of scale or maturity:
 
-> **Tenant/repo-scope the schema and every log event from day 1 (cheap); operate single-tenant; defer
-> all cross-tenant *features* (pooling, transfer, privacy).**
+The experiential hemisphere is **first-person**. Episodes are *this* agent's work; curated memories
+are *its* decisions; usage signals are what *it* recalled-and-used; and the firewall (OLR §13.7)
+elevates by *its own* behavioral facts. There is no coherent "shared experience" without deciding
+whose judgment counts — so "multi-user" is not a deferred frontier, it's a non-question:
 
-A tenant/project ID on every node, episode, and log row costs ~nothing now and is painful later — same
-logic as the logging contract. Cross-tenant transfer stays a gated frontier item; the identifiers and
-isolation boundaries land now so nothing blocks it. **First-class in the data model, deferred in features.**
+- **Isolate users** for the security and workflow reasons you must → you have **N independent
+  single-operator brains**, i.e. N copies, not a multi-user system. The lone shareable part, Brain 2,
+  is a *re-derivable* function of the corpus — sharing it is a cache, not shared knowledge.
+- **Don't isolate them** (cross-user experiential sharing — "learn from your teammates' gotchas") →
+  that's a **different product** (team/org memory) that breaks the firewall and the per-user trust
+  model, and it isn't this thesis. Out of scope.
+
+So there is no multi-user shape that advances *this* project; the question is closed.
+
+What the `(tenant_id, repo_id)` scope on every node / episode / log row **does** buy is
+**multi-*project*** namespacing: one operator across many repos, repo A's facts never colliding with
+repo B's. That's real and used — it is *namespacing, not multi-tenancy*. No RLS, auth, or cross-tenant
+pooling exists or is planned (security.md §17.3).
 
 ## The gateway — the one foundation piece that needs real care
 
@@ -105,7 +117,7 @@ evaluable — so Brain 1's open schema questions refine later in dreaming, not n
   hooks + **test-runner hook**, OLR §13.11b).
 - Eval harness + a small curated benchmark (OLR §13.20).
 - Deterministic cross-hemisphere link substrate (native edges, symbol-identity resolution, §13.19).
-- Tenant/repo-scoped schema & logs (Decision 2).
+- Per-project (`tenant_id`, `repo_id`) namespacing on the schema & logs (Decision 2).
 
 **Step 1 — measured baseline:**
 - One Neo4j-style graph; two namespaces (Brain 1 / Brain 2 typed nodes); separate vector indexes; native
