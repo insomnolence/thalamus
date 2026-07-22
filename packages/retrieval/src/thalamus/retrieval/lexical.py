@@ -16,10 +16,18 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
+from collections.abc import Sequence
 
 from thalamus.core.protocols import Store
-from thalamus.core.types import Cue, MemoryId, RetrievalResult, ScoredMemory
+from thalamus.core.types import (
+    Cue,
+    MemoryId,
+    MemoryRecord,
+    RetrievalResult,
+    Scope,
+    ScoredMemory,
+)
 
 _WORD = re.compile(r"\w+")
 # A small, deliberately conservative stop list — common function words carry no retrieval signal
@@ -70,6 +78,17 @@ def bm25_scores(
     return scores
 
 
+_MAX_SCOPE_INDEXES = 32
+
+
+class _ScopeIndex:
+    """Pre-tokenized document index for a single scope."""
+
+    def __init__(self, records: Sequence[MemoryRecord]) -> None:
+        self.records_by_id = {r.memory_id: r for r in records}
+        self.documents = [(r.memory_id, tokenize(r.content)) for r in records]
+
+
 class LexicalRetriever:
     """BM25 keyword retrieval over a scope's records — the lexical leg behind ``core.Retriever``."""
 
@@ -80,16 +99,35 @@ class LexicalRetriever:
         self._k_candidates = k_candidates
         self._k1 = k1
         self._b = b
+        self._index_cache: OrderedDict[Scope, _ScopeIndex] = OrderedDict()
+        if hasattr(store, "add_listener"):
+            store.add_listener(self.invalidate)
+
+    def invalidate(self, scope: Scope | None = None) -> None:
+        """Invalidate cached BM25 index when writes occur."""
+        if scope is None:
+            self._index_cache.clear()
+        else:
+            self._index_cache.pop(scope, None)
 
     def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
-        records = self._store.scan(cue.scope)
+        index = self._index_cache.get(cue.scope)
+        if index is None:
+            records = self._store.scan(cue.scope)
+            index = _ScopeIndex(records)
+            self._index_cache[cue.scope] = index
+            if len(self._index_cache) > _MAX_SCOPE_INDEXES:
+                self._index_cache.popitem(last=False)
+        else:
+            self._index_cache.move_to_end(cue.scope)
+
         query = tokenize(cue.text)
-        by_id = {record.memory_id: record for record in records}
-        documents = [(record.memory_id, tokenize(record.content)) for record in records]
-        scores = bm25_scores(query, documents, k1=self._k1, b=self._b)
+        scores = bm25_scores(query, index.documents, k1=self._k1, b=self._b)
         ranked = sorted(
             (
-                ScoredMemory(record=by_id[mid], score=score, features={"lexical": score})
+                ScoredMemory(
+                    record=index.records_by_id[mid], score=score, features={"lexical": score}
+                )
                 for mid, score in scores.items()
             ),
             key=lambda scored: scored.score,

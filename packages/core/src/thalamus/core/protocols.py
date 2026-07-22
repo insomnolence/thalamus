@@ -61,6 +61,10 @@ class Store(Protocol):
         """Fetch a record by scoped identity, or ``None`` if absent."""
         ...
 
+    def get_many(self, refs: Sequence[MemoryRef]) -> dict[MemoryRef, MemoryRecord]:
+        """Fetch multiple records by scoped identity."""
+        ...
+
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredMemory]:
         """Return the ``k`` nearest records within ``scope`` by vector similarity."""
         ...

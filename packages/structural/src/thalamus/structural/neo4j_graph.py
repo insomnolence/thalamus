@@ -86,6 +86,27 @@ def _to_node(props: Mapping[str, Any]) -> StructuralNode:
     )
 
 
+def _ensure_snode_schema(driver: Driver, database: str = "neo4j") -> None:
+    _run(
+        driver,
+        database,
+        f"CREATE CONSTRAINT snode_scope IF NOT EXISTS "
+        f"FOR (m:{_NODE}) REQUIRE (m.tenant_id, m.repo_id, m.node_id) IS UNIQUE",
+    )
+    _run(
+        driver,
+        database,
+        f"CREATE INDEX snode_scope_lookup IF NOT EXISTS "
+        f"FOR (m:{_NODE}) ON (m.tenant_id, m.repo_id)",
+    )
+    _run(
+        driver,
+        database,
+        f"CREATE INDEX snode_kind_lookup IF NOT EXISTS "
+        f"FOR (m:{_NODE}) ON (m.tenant_id, m.repo_id, m.kind)",
+    )
+
+
 class Neo4jStructuralGraph:
     """``StructuralGraph`` over Neo4j: persisted nodes/edges + Cypher k-hop traversal.
 
@@ -97,19 +118,7 @@ class Neo4jStructuralGraph:
         self._driver = driver
         self._scope = scope
         self._database = database
-        self._ensure_schema()
-
-    def _ensure_schema(self) -> None:
-        # A uniqueness constraint on the node key backs every MERGE-by-key (add/edges/remove)
-        # with an index. WITHOUT it each MERGE is a full SNode label scan — O(nodes) per merge,
-        # i.e. quadratic over a build's edges (it wedged a real 16k-node / 21k-edge ingest for
-        # minutes). Mirrors the experiential store's memory_scope constraint.
-        _run(
-            self._driver,
-            self._database,
-            f"CREATE CONSTRAINT snode_scope IF NOT EXISTS "
-            f"FOR (m:{_NODE}) REQUIRE (m.tenant_id, m.repo_id, m.node_id) IS UNIQUE",
-        )
+        _ensure_snode_schema(self._driver, self._database)
 
     def add(self, result: IngestResult) -> None:
         nodes = [_node_props(node) for node in result.nodes]
@@ -217,6 +226,41 @@ class Neo4jStructuralGraph:
         )
         return [_to_node(dict(row["m"])) for row in rows]
 
+    def neighbors_many(
+        self,
+        refs: Sequence[StructuralRef],
+        *,
+        edge_types: Sequence[str] | None = None,
+        direction: Direction = "both",
+    ) -> dict[StructuralRef, list[StructuralNode]]:
+        if not refs:
+            return {}
+        nids = [ref.node_id for ref in refs if ref.scope == self._scope]
+        if not nids:
+            return {ref: [] for ref in refs}
+        left, right = _arrows(direction)
+        type_filter = "AND r.type IN $types " if edge_types is not None else ""
+        rows = _run(
+            self._driver,
+            self._database,
+            f"UNWIND $nids AS nid "
+            f"MATCH (n:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id, node_id: nid}})"
+            f"{left}[r:{_EDGE}]{right}(m:{_NODE}) "
+            f"WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
+            f"AND m.kind IS NOT NULL {type_filter}RETURN DISTINCT nid, m",
+            nids=nids,
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
+            types=list(edge_types) if edge_types is not None else None,
+        )
+        result: dict[StructuralRef, list[StructuralNode]] = {ref: [] for ref in refs}
+        for row in rows:
+            sref = StructuralRef(self._scope, str(row["nid"]))
+            node = _to_node(dict(row["m"]))
+            if sref in result:
+                result[sref].append(node)
+        return result
+
     def k_hop(
         self,
         ref: StructuralRef,
@@ -273,21 +317,33 @@ class Neo4jCrossLinkIndex:
         self._scope = scope
         self._database = database
         self._memory_label = memory_label
+        _ensure_snode_schema(self._driver, self._database)
 
     def link(self, memory: MemoryRef, node: StructuralRef) -> None:
-        if memory.scope != self._scope or node.scope != self._scope:
-            raise ValueError("cross-link endpoints must match index scope")
+        self.link_many([(memory, node)])
+
+    def link_many(self, pairs: Iterable[tuple[MemoryRef, StructuralRef]]) -> None:
+        rows = [
+            {
+                "mid": str(memory.memory_id),
+                "nid": node.node_id,
+                "tenant_id": str(self._scope.tenant_id),
+                "repo_id": str(self._scope.repo_id),
+            }
+            for memory, node in pairs
+            if memory.scope == self._scope and node.scope == self._scope
+        ]
+        if not rows:
+            return
         _run(
             self._driver,
             self._database,
+            f"UNWIND $rows AS r "
             f"MATCH (m:{self._memory_label} "
-            "{tenant_id: $tenant_id, repo_id: $repo_id, memory_id: $mid}), "
-            f"(s:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id, node_id: $nid}}) "
+            "{tenant_id: r.tenant_id, repo_id: r.repo_id, memory_id: r.mid}), "
+            f"(s:{_NODE} {{tenant_id: r.tenant_id, repo_id: r.repo_id, node_id: r.nid}}) "
             f"MERGE (m)-[:{_TOUCHES}]->(s)",
-            mid=str(memory.memory_id),
-            nid=node.node_id,
-            tenant_id=str(self._scope.tenant_id),
-            repo_id=str(self._scope.repo_id),
+            rows=rows,
         )
 
     def nodes_for(self, memory: MemoryRef) -> list[StructuralRef]:
@@ -306,6 +362,34 @@ class Neo4jCrossLinkIndex:
         )
         return [StructuralRef(self._scope, str(row["node_id"])) for row in rows]
 
+    def nodes_for_many(
+        self, memories: Sequence[MemoryRef]
+    ) -> dict[MemoryRef, list[StructuralRef]]:
+        if not memories:
+            return {}
+        mids = [str(m.memory_id) for m in memories if m.scope == self._scope]
+        if not mids:
+            return {memory: [] for memory in memories}
+        rows = _run(
+            self._driver,
+            self._database,
+            f"UNWIND $mids AS mid "
+            f"MATCH (m:{self._memory_label} "
+            "{tenant_id: $tenant_id, repo_id: $repo_id, memory_id: mid})"
+            f"-[:{_TOUCHES}]->(s:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id}}) "
+            "RETURN mid, s.node_id AS node_id ORDER BY node_id",
+            mids=mids,
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
+        )
+        result: dict[MemoryRef, list[StructuralRef]] = {memory: [] for memory in memories}
+        for row in rows:
+            mref = MemoryRef(self._scope, MemoryId(str(row["mid"])))
+            sref = StructuralRef(self._scope, str(row["node_id"]))
+            if mref in result:
+                result[mref].append(sref)
+        return result
+
     def memories_for(self, node: StructuralRef) -> list[MemoryRef]:
         if node.scope != self._scope:
             return []
@@ -322,6 +406,33 @@ class Neo4jCrossLinkIndex:
             repo_id=str(self._scope.repo_id),
         )
         return [MemoryRef(self._scope, MemoryId(str(row["memory_id"]))) for row in rows]
+
+    def memories_for_many(
+        self, nodes: Sequence[StructuralRef]
+    ) -> dict[StructuralRef, list[MemoryRef]]:
+        if not nodes:
+            return {}
+        nids = [node.node_id for node in nodes if node.scope == self._scope]
+        if not nids:
+            return {node: [] for node in nodes}
+        rows = _run(
+            self._driver,
+            self._database,
+            f"UNWIND $nids AS nid "
+            f"MATCH (m:{self._memory_label} {{tenant_id: $tenant_id, repo_id: $repo_id}})-[:"
+            f"{_TOUCHES}]->(s:{_NODE} {{tenant_id: $tenant_id, repo_id: $repo_id, node_id: nid}}) "
+            "RETURN nid, m.memory_id AS memory_id ORDER BY memory_id",
+            nids=nids,
+            tenant_id=str(self._scope.tenant_id),
+            repo_id=str(self._scope.repo_id),
+        )
+        result: dict[StructuralRef, list[MemoryRef]] = {node: [] for node in nodes}
+        for row in rows:
+            sref = StructuralRef(self._scope, str(row["nid"]))
+            mref = MemoryRef(self._scope, MemoryId(str(row["memory_id"])))
+            if sref in result:
+                result[sref].append(mref)
+        return result
 
     def close(self) -> None:
         self._driver.close()

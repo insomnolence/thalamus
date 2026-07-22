@@ -97,3 +97,25 @@ def test_curated_memory_renders_separately_and_is_bounded() -> None:
     text = payload.render()
     assert "## Retained memory" in text
     assert "## Prior episodes" not in text
+
+
+def test_gateway_eagerly_encodes_cue_embedding_once() -> None:
+    class CountingEncoder:
+        def __init__(self, base: DeterministicEncoder) -> None:
+            self._base = base
+            self.dim = base.dim
+            self.count = 0
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            self.count += len(texts)
+            return self._base.encode(texts)
+
+    encoder = CountingEncoder(DeterministicEncoder(dim=32))
+    store = InMemoryStore(dim=32)
+    l0 = L0Retriever(encoder, store, now=lambda: NOW)
+    gateway = Gateway(l0, encoder=encoder, k=2)
+
+    assert encoder.count == 0
+    gateway.recall(prompt="test prompt", scope=SCOPE)
+    # Encoded exactly once during recall entry, reused across all downstream legs
+    assert encoder.count == 1

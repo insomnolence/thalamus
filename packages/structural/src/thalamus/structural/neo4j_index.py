@@ -50,16 +50,17 @@ class Neo4jStructuralIndex:
         self._dim = dim
         self._corpus = corpus
         self._database = database
+        self._index_name = f"vec_struct_{corpus}"
         self._ensure_index()
         if encoder_id is not None:
             self._ensure_encoder_config(encoder_id)
 
     def _ensure_index(self) -> None:
-        # dim/label are trusted internal values; all content flows through parameters.
+        # dim/label/index are trusted internal values; all content flows through parameters.
         _run(
             self._driver,
             self._database,
-            f"CREATE VECTOR INDEX {_VECTOR_INDEX} IF NOT EXISTS "
+            f"CREATE VECTOR INDEX {self._index_name} IF NOT EXISTS "
             f"FOR (m:{_NODE}) ON (m.embedding) "
             f"OPTIONS {{indexConfig: {{`vector.dimensions`: {self._dim}, "
             f"`vector.similarity_function`: 'cosine'}}}}",
@@ -136,21 +137,42 @@ class Neo4jStructuralIndex:
         vec = self._checked_vector(query, "Neo4jStructuralIndex.search")
         if k <= 0 or scope != self._scope:
             return []
-        # Scope + corpus filter before ranking (no-pollution + isolation), then cosine.
-        rows = _run(
-            self._driver,
-            self._database,
-            f"MATCH (m:{_NODE}) "
-            "WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
-            "AND m.corpus = $corpus AND m.embedding IS NOT NULL "
-            "WITH m, vector.similarity.cosine(m.embedding, $vec) AS score "
-            "RETURN m, score ORDER BY score DESC LIMIT $k",
-            vec=vec,
-            tenant_id=str(scope.tenant_id),
-            repo_id=str(scope.repo_id),
-            corpus=self._corpus,
-            k=k,
-        )
+        fetch_k = max(k * 20, 200)
+        # HNSW vector index search via db.index.vector.queryNodes
+        try:
+            rows = _run(
+                self._driver,
+                self._database,
+                f"CALL db.index.vector.queryNodes('{self._index_name}', $fetch_k, $vec) "
+                "YIELD node AS m, score "
+                "WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
+                "AND m.corpus = $corpus AND m.embedding IS NOT NULL "
+                "RETURN m, score ORDER BY score DESC LIMIT $k",
+                vec=vec,
+                fetch_k=fetch_k,
+                tenant_id=str(scope.tenant_id),
+                repo_id=str(scope.repo_id),
+                corpus=self._corpus,
+                k=k,
+            )
+        except Exception:
+            rows = []
+        if not rows:
+            # Fallback scan for un-indexed or newly added nodes
+            rows = _run(
+                self._driver,
+                self._database,
+                f"MATCH (m:{_NODE}) "
+                "WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
+                "AND m.corpus = $corpus AND m.embedding IS NOT NULL "
+                "WITH m, vector.similarity.cosine(m.embedding, $vec) AS score "
+                "RETURN m, score ORDER BY score DESC LIMIT $k",
+                vec=vec,
+                tenant_id=str(scope.tenant_id),
+                repo_id=str(scope.repo_id),
+                corpus=self._corpus,
+                k=k,
+            )
         return [
             ScoredNode(
                 node=_to_node(dict(row["m"])),

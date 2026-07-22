@@ -597,8 +597,6 @@ def build_serve_gateway(
         return signals
 
     attributed_ref = AttributedSignalsRef()
-    if not config.investigate:
-        attributed_ref.refresh(_recompute_attributed_signals())
     attribution_refresh = AttributionRefreshPass(
         _recompute_attributed_signals, attributed_ref.refresh
     )
@@ -612,8 +610,6 @@ def build_serve_gateway(
         signals = list(read_usage_log(logs / "usage.jsonl")) + list(attributed_ref.signals)
         return consolidate_usage(behavioral_store, events, signals)
 
-    if not config.investigate:
-        _consolidate_behavioral()
     behavioral_consolidation = BehavioralConsolidationPass(_consolidate_behavioral)
 
     # L-R1 step 3 — the usage rung's weights, now read FROM THE BRAIN (the consolidated behavioral
@@ -622,8 +618,6 @@ def build_serve_gateway(
     def _recompute_usage_weights() -> dict[MemoryId, float]:
         return dict(behavioral_store.usage_weights())
 
-    if not config.investigate:
-        usage_ref.refresh(_recompute_usage_weights())
     usage_refresh = UsageRefreshPass(_recompute_usage_weights, usage_ref.refresh)
 
     # Now the gateway holds the live graph + links (built inside for the in-memory shell, or the
@@ -638,8 +632,6 @@ def build_serve_gateway(
             (episode.ref for episode in episodes), live_graph, live_links
         )
 
-    if not config.investigate:
-        centrality_ref.refresh(_recompute_centrality_weights())
     centrality_refresh = CentralityRefreshPass(
         _recompute_centrality_weights, centrality_ref.refresh
     )
@@ -1081,7 +1073,7 @@ def run_serve(config: ServeConfig) -> None:
             file=sys.stderr,
         )
         if ticker is not None:
-            ticker.start()
+            ticker.start(run_initial=True)
         if config.transport == "http":
             host_is_local = config.host in ("127.0.0.1", "localhost", "::1")
             if not host_is_local and config.http_token is None:

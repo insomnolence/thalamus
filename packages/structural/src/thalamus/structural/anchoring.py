@@ -114,11 +114,19 @@ def memory_centrality(
     the result (weight 0 → the rung leaves it on relevance alone). Stale links (node gone from the
     current graph) contribute only their ``1`` breadth term (degree 0), not a phantom hub weight.
     """
+    mem_list = list(memories)
+    if not mem_list:
+        return {}
+    if hasattr(links, "nodes_for_many"):
+        nodes_map = links.nodes_for_many(mem_list)
+    else:
+        nodes_map = {m: links.nodes_for(m) for m in mem_list}
+
     weights: dict[MemoryRef, float] = {}
     degree_cache: dict[StructuralRef, int] = {}
-    for memory in memories:
+    for memory in mem_list:
         total = 0.0
-        for node_ref in links.nodes_for(memory):
+        for node_ref in nodes_map.get(memory, []):
             degree = degree_cache.get(node_ref)
             if degree is None:
                 degree = node_degree(graph, node_ref)
@@ -141,10 +149,18 @@ def linked_nodes_for(
     For each memory, its cross-linked node refs (``links.nodes_for``) are resolved and
     k-hop-expanded, deduplicated by ``node_id`` in first-seen order across the input.
     """
+    mem_list = list(memories)
+    if not mem_list:
+        return []
+    if hasattr(links, "nodes_for_many"):
+        nodes_map = links.nodes_for_many(mem_list)
+    else:
+        nodes_map = {m: links.nodes_for(m) for m in mem_list}
+
     seen: set[str] = set()
     out: list[StructuralNode] = []
-    for memory in memories:
-        for node_ref in links.nodes_for(memory):
+    for memory in mem_list:
+        for node_ref in nodes_map.get(memory, []):
             for node in resolve_and_expand(graph, node_ref, k_hop=k_hop):
                 if node.node_id not in seen:
                     seen.add(node.node_id)

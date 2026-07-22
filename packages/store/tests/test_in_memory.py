@@ -39,6 +39,20 @@ def test_add_get() -> None:
     assert len(store) == 1
 
 
+def test_get_many() -> None:
+    store = InMemoryStore(dim=3)
+    r1, r2 = _record("m1"), _record("m2")
+    store.add(r1, [1.0, 0.0, 0.0])
+    store.add(r2, [0.0, 1.0, 0.0])
+    refs = [
+        MemoryRef(SCOPE, MemoryId("m1")),
+        MemoryRef(SCOPE, MemoryId("m2")),
+        MemoryRef(SCOPE, MemoryId("m3")),
+    ]
+    res = store.get_many(refs)
+    assert res == {MemoryRef(SCOPE, MemoryId("m1")): r1, MemoryRef(SCOPE, MemoryId("m2")): r2}
+
+
 def test_search_orders_by_similarity() -> None:
     store = InMemoryStore(dim=3)
     store.add(_record("near"), [1.0, 0.0, 0.0])

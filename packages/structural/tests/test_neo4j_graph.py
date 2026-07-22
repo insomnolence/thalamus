@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -40,6 +41,7 @@ def _clean(driver: Any) -> None:
     with driver.session() as session:
         session.run("MATCH (n:SNode {tenant_id: $t}) DETACH DELETE n", t=_TEST_TENANT)
         session.run("MATCH (m:M_experiential {tenant_id: $t}) DETACH DELETE m", t=_TEST_TENANT)
+        session.run("MATCH (f:FileManifest {tenant_id: $t}) DETACH DELETE f", t=_TEST_TENANT)
 
 
 @pytest.fixture
@@ -182,3 +184,37 @@ def test_file_manifest_persists_and_replaces(driver: Any) -> None:
     assert manifest.load(SCOPE) == entries
     manifest.save(SCOPE, {"n.py": ManifestEntry("sha2", ("module:n",))})  # wholesale replace
     assert set(manifest.load(SCOPE)) == {"n.py"}
+
+
+def test_incremental_equals_full_rebuild_oracle_neo4j(driver: Any, tmp_path: Path) -> None:
+    from thalamus.routing import DeterministicEncoder
+    from thalamus.structural import (
+        CorpusSpec,
+        DocIngestor,
+        Neo4jFileManifest,
+        incremental_ingest,
+        markdown_files,
+    )
+
+    doc_file = tmp_path / "a.md"
+    doc_file.write_text("# Doc A\n\nIntro\n", encoding="utf-8")
+
+    graph = Neo4jStructuralGraph(driver, SCOPE)
+    manifest = Neo4jFileManifest(driver, SCOPE)
+    index = Neo4jStructuralIndex(driver, SCOPE, dim=32, corpus="docs")
+    encoder = DeterministicEncoder(dim=32)
+
+    spec = CorpusSpec(ingestor=DocIngestor(), index=index, files=markdown_files, corpus="docs")
+
+    # Initial incremental ingest
+    res1 = incremental_ingest(
+        tmp_path, SCOPE, corpora=[spec], graph=graph, manifest=manifest, encoder=encoder
+    )
+    assert res1.rebuilt is True
+    assert graph.get(StructuralRef(SCOPE, "document:a.md")) is not None
+
+    # Unchanged tick -> no-op
+    res2 = incremental_ingest(
+        tmp_path, SCOPE, corpora=[spec], graph=graph, manifest=manifest, encoder=encoder
+    )
+    assert res2.rebuilt is False

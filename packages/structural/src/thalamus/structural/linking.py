@@ -105,6 +105,7 @@ def link_by_footprint(
     idempotent: it keys on stable node ids, so re-running over the same AST yields the same links
     (``CrossLinkIndex`` dedups)."""
     resolver = SymbolResolver(nodes, repo_root=repo_root)
+    to_link: list[tuple[MemoryRef, StructuralRef]] = []
     created = 0
     for memory, footprint in items:
         linked: set[StructuralRef] = set()
@@ -117,9 +118,11 @@ def link_by_footprint(
             )
             for node in targets:
                 if node is not None and node.ref not in linked:
-                    links.link(memory, node.ref)
+                    to_link.append((memory, node.ref))
                     linked.add(node.ref)
                     created += 1
+    if to_link:
+        links.link_many(to_link)
     return created
 
 

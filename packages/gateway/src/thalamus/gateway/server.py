@@ -102,6 +102,9 @@ def build_server(
     # path 404s — a health probe or LAN scanner hitting GET /health is the most common source of
     # that 404 log noise. Return 200 with no brain state and no auth (pure liveness), so the common
     # legitimate probe stops 404ing. Only mounted for the HTTP transport; harmless under stdio.
+    import threading
+
+    import anyio
     from starlette.requests import Request
     from starlette.responses import JSONResponse, Response
 
@@ -110,6 +113,7 @@ def build_server(
         return JSONResponse({"status": "ok"})
 
     pending: dict[EventId, ContextPayload] = {}
+    pending_lock = threading.Lock()
     max_pending = 1000
 
     @server.tool
@@ -131,16 +135,20 @@ def build_server(
                 connection_session = _connection_session_id(get_context())
             except RuntimeError:  # no active context (shouldn't happen inside a tool call)
                 connection_session = None
-        payload = gateway.recall(
-            prompt=prompt,
-            scope=scope,
-            focus=focus,
-            session_id=resolve_session_id(session_id, connection_session, default_session_id),
+        target_session = resolve_session_id(session_id, connection_session, default_session_id)
+        payload = await anyio.to_thread.run_sync(
+            lambda: gateway.recall(
+                prompt=prompt,
+                scope=scope,
+                focus=focus,
+                session_id=target_session,
+            )
         )
         if payload.event_id is not None:
-            pending[payload.event_id] = payload
-            if len(pending) > max_pending:
-                pending.pop(next(iter(pending)))
+            with pending_lock:
+                pending[payload.event_id] = payload
+                if len(pending) > max_pending:
+                    pending.pop(next(iter(pending)))
         suffix = "" if payload.event_id is None else f"\n# retrieval_event_id: {payload.event_id}\n"
         return payload.render() + suffix
 
@@ -154,16 +162,21 @@ def build_server(
             help. Call after using recalled context. `event_id`: from the recall's
             `# retrieval_event_id:` line. `output_text`: what you produced (a summary is fine)."""
             key = EventId(event_id)
-            payload = pending.pop(key, None)
+            with pending_lock:
+                payload = pending.pop(key, None)
             if payload is not None:  # fast path: the live payload is still cached
-                signals = gateway.record_outcome(payload, output_text)
+                signals = await anyio.to_thread.run_sync(
+                    lambda: gateway.record_outcome(payload, output_text)
+                )
                 return f"recorded {len(signals)} usage signal(s)"
             # Fallback: the cached payload is gone (serve restarted, or another worker served the
             # recall). Rebuild the shown memories from durable state so the signal isn't lost.
             if resolve_shown is not None:
-                shown = resolve_shown(key)
+                shown = await anyio.to_thread.run_sync(lambda: resolve_shown(key))
                 if shown is not None:
-                    signals = gateway.record_outcome_for(key, shown, output_text)
+                    signals = await anyio.to_thread.run_sync(
+                        lambda: gateway.record_outcome_for(key, shown, output_text)
+                    )
                     return f"recorded {len(signals)} usage signal(s)"
             raise ValueError(f"unknown or already-recorded retrieval event: {event_id}")
 
@@ -176,7 +189,7 @@ def build_server(
             Answers "what's the latest / what did we just do" — a time-ordered view, distinct
             from the relevance-ranked ``recall`` (use ``recall`` to find what's *relevant* to a
             topic; use this to see what's *recent*)."""
-            return recent_reader(limit, kind)
+            return await anyio.to_thread.run_sync(lambda: recent_reader(limit, kind))
 
     if plan_reader is not None:
 
@@ -187,7 +200,7 @@ def build_server(
             breaks"), and gather the decisions/constraints/gotchas the brain has recorded about
             everything in scope — one fused brief that flags where its coverage is blind. Use it
             to see the cross-cutting impact a local edit view misses; `hops` bounds the radius."""
-            return plan_reader(target, hops)
+            return await anyio.to_thread.run_sync(lambda: plan_reader(target, hops))
 
     if remember_writer is not None and not read_only:
 
@@ -208,8 +221,10 @@ def build_server(
             `why`: the reasoning (makes it useful later). `files`: paths it's about.
             `importance`: 1 normal, 2 load-bearing, 3 project-defining. `supersedes`: id of a
             memory this replaces (kept but demoted, never dropped)."""
-            record = remember_writer(
-                kind, text, why, files or (), importance, memory_id, supersedes
+            record = await anyio.to_thread.run_sync(
+                lambda: remember_writer(
+                    kind, text, why, files or (), importance, memory_id, supersedes
+                )
             )
             links_note = (
                 " Related-file structural links are applied after the MCP server restarts."

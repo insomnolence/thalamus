@@ -101,10 +101,15 @@ class MaintenanceTicker:
         """Request a consolidation cycle as soon as possible (the write-trigger). Thread-safe."""
         self._wake.set()
 
-    def start(self) -> None:
-        """Start the background thread (idempotent)."""
+    def start(self, *, run_initial: bool = False) -> None:
+        """Start the background thread (idempotent).
+
+        If ``run_initial=True``, triggers an initial maintenance cycle immediately on launch.
+        """
         if self._thread is not None:
             return
+        if run_initial:
+            self._wake.set()
         self._thread = threading.Thread(
             target=self._loop, name="thalamus-maintenance", daemon=True
         )
@@ -124,8 +129,10 @@ class MaintenanceTicker:
             triggered = self._wake.wait(timeout=self._interval)
             if self._stop.is_set():
                 break
-            # Clear before running so a trigger arriving mid-cycle schedules another pass
-            # (at most one redundant cycle) rather than being lost.
+            # If wait() timed out but a trigger set _wake right after, treat as
+            # triggered so signal is not lost
+            if not triggered and self._wake.is_set():
+                triggered = True
             self._wake.clear()
             try:
                 if not triggered:

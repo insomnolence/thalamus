@@ -67,6 +67,8 @@ fresh attribution into the store), which must run **before usage-refresh** (whic
 Together they form a three-step pipeline: re-derive the attribution signal → accumulate it into the brain
 → serve it to the rung.
 
+> **Note on Concurrency Surfaces:** `DerivedViewsRef` provides single-slot atomic swaps for experiential views (supersession and stale references). Brain-2's `StructuralRederivePass` acts as a second shared surface that safely updates the Neo4j graph substrate mid-serve.
+
 ## Per-pass: deterministic/LLM, cadence, firewall, earns-its-place
 
 | Pass | Det / LLM | Cadence | May… | Earns place vs. flat-rewrite baseline |

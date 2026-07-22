@@ -94,7 +94,7 @@ def _identifier_tokens(text: str) -> list[str]:
     seen: set[str] = set()
     for token in _IDENTIFIER.findall(text):
         lowered = token.lower()
-        identifier_like = any(c.isupper() for c in token[1:]) or "_" in token
+        identifier_like = token[0].isupper() or any(c.isupper() for c in token[1:]) or "_" in token
         if len(token) >= 3 and lowered not in seen and identifier_like:
             seen.add(lowered)
             out.append(lowered)
@@ -298,7 +298,8 @@ class PlanBrief:
                 lines.append(f"  why: {fence_untrusted(item.why, item.trust)}")
             if item.superseded is not None:
                 note = item.superseded
-                lines.append(f"  ⊘ superseded by {note.superseded_by} on {note.at}: {note.reason}")
+                reason = fence_untrusted(note.reason, item.trust)
+                lines.append(f"  ⊘ superseded by {note.superseded_by} on {note.at}: {reason}")
             if item.stale_references:
                 gone = ", ".join(item.stale_references)
                 lines.append(f"  ⚠ may be stale — references no longer in the codebase: {gone}")
@@ -517,7 +518,7 @@ class Planner:
         subtypes = self._graph.neighbors(ref, edge_types=("implements", "inherits"), direction="in")
         container = self._graph.neighbors(ref, edge_types=("contains",), direction="in")
 
-        entries: list[_RadiusEntry] = []
+        raw_candidates: list[tuple[StructuralNode, str, int]] = []
         seen = {ref.node_id}
 
         def add(nodes: Sequence[StructuralNode], relation: str, distance: int) -> None:
@@ -525,31 +526,50 @@ class Planner:
                 if node.node_id in seen:
                     continue
                 seen.add(node.node_id)
-                item = StructuralItem.from_node(node)
-                count = len(self._links.memories_for(node.ref))
-                entries.append(
-                    _RadiusEntry(
-                        node=RadiusNode(
-                            item=item,
-                            relation=relation,
-                            distance=distance,
-                            linked_memory_count=count,
-                        ),
-                        item_ref=node.ref,
-                    )
-                )
+                raw_candidates.append((node, relation, distance))
 
         if not high_fanout:
             add(callers, "caller", 1)
         add(subtypes, "subtype", 1)
         add(callees, "callee", 1)
         add(container, "container", 1)
-        # Co-change ranks above deeper transitive callers: the eval showed logical coupling
-        # predicts impact better than 2-hop call reachability. Independent of the call breaker.
-        self._add_cochange(ref, seen, entries, add)
+
+        # Build entries up to this point so _add_cochange can receive them
+        entries: list[_RadiusEntry] = []
+        
+        def add_to_entries(nodes: Sequence[StructuralNode], relation: str, distance: int) -> None:
+            for node in nodes:
+                if node.node_id in seen:
+                    continue
+                seen.add(node.node_id)
+                raw_candidates.append((node, relation, distance))
+
+        # Co-change ranks above deeper transitive callers
+        self._add_cochange(ref, seen, add_to_entries)
         if not high_fanout and depth >= 2:
             deeper = self._graph.k_hop(ref, depth, edge_types=("calls",), direction="in")
-            add(deeper, "caller", 2)
+            add_to_entries(deeper, "caller", 2)
+
+        cand_refs = [node.ref for node, _, _ in raw_candidates]
+        if hasattr(self._links, "memories_for_many"):
+            mem_map = self._links.memories_for_many(cand_refs)
+        else:
+            mem_map = {r: self._links.memories_for(r) for r in cand_refs}
+
+        for node, relation, distance in raw_candidates:
+            item = StructuralItem.from_node(node)
+            count = len(mem_map.get(node.ref, ()))
+            entries.append(
+                _RadiusEntry(
+                    node=RadiusNode(
+                        item=item,
+                        relation=relation,
+                        distance=distance,
+                        linked_memory_count=count,
+                    ),
+                    item_ref=node.ref,
+                )
+            )
 
         if len(entries) <= cfg.node_budget:
             return entries, 0
@@ -559,7 +579,6 @@ class Planner:
         self,
         ref: StructuralRef,
         seen: set[str],
-        entries: list[_RadiusEntry],
         add: Callable[[Sequence[StructuralNode], str, int], None],
     ) -> None:
         """Fold in symbols that historically co-changed with ``ref`` (above the coupling floor).
@@ -672,17 +691,22 @@ class Planner:
         # (scope_refs[0]) first, then the other radius nodes, then the module rollups last. The
         # first source a memory is seen through is its tier — closer wins under the budget.
         sources: list[tuple[StructuralRef, int]] = []
-        with_context = 0
         modules: dict[str, StructuralRef] = {}
         for index, ref in enumerate(scope_refs):
             tier = _PROX_INTEGRATION_POINT if index == 0 else _PROX_RADIUS_NODE
             sources.append((ref, tier))
-            if self._links.memories_for(ref):
-                with_context += 1  # a direct, symbol-level link
             module = self._containing_module(ref)
             if module is not None:
                 modules.setdefault(module.node_id, module)
-        files_with_context = sum(1 for m in modules.values() if self._links.memories_for(m))
+
+        all_check_refs = list(scope_refs) + list(modules.values())
+        if hasattr(self._links, "memories_for_many"):
+            check_memories_map = self._links.memories_for_many(all_check_refs)
+        else:
+            check_memories_map = {r: self._links.memories_for(r) for r in all_check_refs}
+
+        with_context = sum(1 for ref in scope_refs if check_memories_map.get(ref))
+        files_with_context = sum(1 for m in modules.values() if check_memories_map.get(m))
         sources.extend((m, _PROX_MODULE_ROLLUP) for m in modules.values())
 
         # Collect ALL candidates first (deduped, closest-tier wins), then rank — so the budget cut
@@ -707,14 +731,32 @@ class Planner:
         first time a memory is seen records its best (smallest) proximity tier; later, farther
         sightings are skipped. Records missing from the store are dropped (a dangling link)."""
         seen: dict[MemoryId, _GatheredMemory] = {}
+        refs = [ref for ref, _ in sources]
+        if hasattr(self._links, "memories_for_many"):
+            memories_map = self._links.memories_for_many(refs)
+        else:
+            memories_map = {r: self._links.memories_for(r) for r in refs}
+
+        all_mem_refs: list[MemoryRef] = []
+        ref_tier: dict[MemoryRef, int] = {}
         for ref, tier in sources:
-            for memory_ref in self._links.memories_for(ref):
-                if memory_ref.memory_id in seen:
-                    continue  # already captured at an equal-or-closer tier (sources are sorted)
-                record = self._store.get(memory_ref)
-                if record is None:
-                    continue
-                seen[memory_ref.memory_id] = _GatheredMemory(record=record, proximity=tier)
+            for mref in memories_map.get(ref, []):
+                if mref.memory_id not in seen and mref not in ref_tier:
+                    ref_tier[mref] = tier
+                    all_mem_refs.append(mref)
+
+        if hasattr(self._store, "get_many"):
+            records_map = self._store.get_many(all_mem_refs)
+        else:
+            records_map = {
+                mref: rec for mref in all_mem_refs if (rec := self._store.get(mref)) is not None
+            }
+        for mref in all_mem_refs:
+            record = records_map.get(mref)
+            if record is not None and mref.memory_id not in seen:
+                seen[mref.memory_id] = _GatheredMemory(
+                    record=record, proximity=ref_tier[mref]
+                )
         return list(seen.values())
 
     def _rank_for_budget(
@@ -741,8 +783,12 @@ class Planner:
             reverse=True,
         )
 
-        constraints_ranked = [c for _, c in scored if c.record.kind in _CONSTRAINT_KINDS]
-        context_ranked = [c for _, c in scored if c.record.kind not in _CONSTRAINT_KINDS]
+        constraints_ranked = [
+            (score, c) for score, c in scored if c.record.kind in _CONSTRAINT_KINDS
+        ]
+        context_ranked = [
+            (score, c) for score, c in scored if c.record.kind not in _CONSTRAINT_KINDS
+        ]
 
         # Constraints first under a tight budget; context fills the remainder.
         budget = cfg.memory_budget
@@ -754,18 +800,18 @@ class Planner:
             + len(context_ranked) - len(kept_context)
         )
 
-        def render(c: _GatheredMemory) -> MemoryItem:
+        def render(score: float, c: _GatheredMemory) -> MemoryItem:
             ref = c.record.ref
             return MemoryItem.from_scored(
-                ScoredMemory(record=c.record, score=0.0),
+                ScoredMemory(record=c.record, score=score),
                 max_content_chars=cfg.max_memory_chars,
                 stale_references=views.stale_references.get(ref, ()),
                 superseded=superseded_map.get(ref),
             )
 
         return (
-            tuple(render(c) for c in kept_constraints),
-            tuple(render(c) for c in kept_context),
+            tuple(render(s, c) for s, c in kept_constraints),
+            tuple(render(s, c) for s, c in kept_context),
             omitted,
         )
 

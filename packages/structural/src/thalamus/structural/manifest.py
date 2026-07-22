@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from threading import RLock
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from thalamus.core.types import Scope
@@ -48,13 +49,16 @@ class InMemoryFileManifest:
     """In-process manifest. For tests and the non-persistent (always-full-rebuild) path."""
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._by_scope: dict[Scope, dict[str, ManifestEntry]] = {}
 
     def load(self, scope: Scope) -> dict[str, ManifestEntry]:
-        return dict(self._by_scope.get(scope, {}))
+        with self._lock:
+            return dict(self._by_scope.get(scope, {}))
 
     def save(self, scope: Scope, entries: Mapping[str, ManifestEntry]) -> None:
-        self._by_scope[scope] = dict(entries)
+        with self._lock:
+            self._by_scope[scope] = dict(entries)
 
 
 class Neo4jFileManifest:

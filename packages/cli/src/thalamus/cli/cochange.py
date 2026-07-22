@@ -61,6 +61,36 @@ def changed_files(repo: Path, sha: str, globs: Sequence[str] = ()) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()] if out else []
 
 
+def bulk_changed_files_by_sha(
+    repo: Path, shas: Sequence[str], batch_size: int = 500
+) -> dict[str, list[str]]:
+    """Fetch changed files for multiple commit SHAs using batched git log subprocesses.
+
+    Rather than running ``git show --name-only`` once per SHA (which spawns N process executions and
+    adds tens of seconds of startup latency), this runs a single bulk ``git log --no-walk`` command
+    per batch to stream all commit file sets in O(1) process executions.
+    """
+    if not shas:
+        return {}
+    sha_list = list(shas)
+    res: dict[str, list[str]] = {sha: [] for sha in sha_list}
+    for i in range(0, len(sha_list), batch_size):
+        chunk = sha_list[i : i + batch_size]
+        out = git_output(repo, "log", "--no-walk", "--format=COMMIT:%H", "--name-only", *chunk)
+        if not out:
+            continue
+        current_sha: str | None = None
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("COMMIT:"):
+                current_sha = line[7:]
+            elif current_sha is not None and current_sha in res:
+                res[current_sha].append(line)
+    return res
+
+
 def symbol_file_maps(
     graph: StructuralGraph, scope: Scope, repo: Path
 ) -> tuple[dict[StructuralRef, str], dict[str, list[StructuralRef]]]:
@@ -87,14 +117,16 @@ def build_file_cochange(
 
     **Language-agnostic by construction:** each commit's changed files are filtered to those that
     carry a code symbol in the current graph (the ``file_refs`` keys), so co-change tracks exactly
-    the code files Brain 2 knows — no language glob. (Keying globs off the flat ``code_language``
-    was a real bug: a declarative ``[[corpus]]`` serve leaves it at the ``"python"`` default, which
-    matches zero files in a TypeScript repo → an empty index.) Symbol↔file membership comes from the
+    the code files Brain 2 knows — no language glob. Symbol↔file membership comes from the
     graph anchors; a commit touching <2 known code files yields no pair and is skipped."""
     ref_file, file_refs = symbol_file_maps(graph, scope, repo)
     index = FileCoChangeIndex(ref_file=ref_file, file_refs=file_refs)
+    if not shas:
+        return index
+
+    file_sets = bulk_changed_files_by_sha(repo, shas)
     for sha in shas:
-        files = [path for path in changed_files(repo, sha) if path in file_refs]
+        files = [path for path in file_sets.get(sha, []) if path in file_refs]
         if len(files) >= 2:
             index.add_commit(files)
     return index

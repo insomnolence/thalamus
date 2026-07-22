@@ -314,29 +314,28 @@ def build_two_hemisphere_gateway(
     # no-change build skips parsing, but episodes may be new). Modules *and* symbols are passed so a
     # line-aware footprint links to the smallest enclosing symbol (C-7); a file-only footprint
     # (today's only shape) falls back to the module.
-    code_nodes = (
-        [node for result in ingest.results.values() for node in result.nodes]
-        if ingest.rebuilt
-        else [node for kind in _LINK_CODE_KINDS for node in graph.nodes_of_kind(scope, kind)]
-    )
-
     links = links if links is not None else InMemoryCrossLinkIndex()
-    footprints = [
-        (episode.ref, footprint_from_metadata(episode.metadata)) for episode in episodes
-    ]
-    # Footprints link to code nodes only (episodes touch source files).
-    link_by_footprint(footprints, code_nodes, links, repo_root=repo)
+    # Skip full-graph read + re-linking on warm no-change builds when links are persisted in Neo4j
+    if ingest.rebuilt or isinstance(links, InMemoryCrossLinkIndex):
+        code_nodes = (
+            [node for result in ingest.results.values() for node in result.nodes]
+            if ingest.rebuilt
+            else [node for kind in _LINK_CODE_KINDS for node in graph.nodes_of_kind(scope, kind)]
+        )
+        footprints = [
+            (episode.ref, footprint_from_metadata(episode.metadata)) for episode in episodes
+        ]
+        # Footprints link to code nodes only (episodes touch source files).
+        link_by_footprint(footprints, code_nodes, links, repo_root=repo)
 
-    # C-2: anchor non-code nodes (findings/docs/text) to the code they annotate, as ``annotates``
-    # graph edges, so a finding about ``foo.py:42`` fuses into recall whenever ``foo.py`` surfaces.
-    # Read both sides from the live graph (covers the no-rebuild path too); idempotent on re-run.
-    graph_code_nodes = [
-        node for kind in _LINK_CODE_KINDS for node in graph.nodes_of_kind(scope, kind)
-    ]
-    annotators = [
-        node for kind in _ANNOTATOR_KINDS for node in graph.nodes_of_kind(scope, kind)
-    ]
-    link_anchored_nodes(annotators, graph_code_nodes, graph, scope, repo_root=repo)
+        # C-2: anchor non-code nodes (findings/docs/text) to the code they annotate.
+        graph_code_nodes = [
+            node for kind in _LINK_CODE_KINDS for node in graph.nodes_of_kind(scope, kind)
+        ]
+        annotators = [
+            node for kind in _ANNOTATOR_KINDS for node in graph.nodes_of_kind(scope, kind)
+        ]
+        link_anchored_nodes(annotators, graph_code_nodes, graph, scope, repo_root=repo)
 
     # §13.18-D2: flag curated memories whose footprint files are gone from disk (stale beliefs
     # about code that no longer exists). Episodes are immutable history, so only curated memories
@@ -420,6 +419,7 @@ def build_two_hemisphere_gateway(
         )
     return Gateway(
         retriever,
+        encoder=encoder,
         k=k,
         graph=graph,
         links=links,

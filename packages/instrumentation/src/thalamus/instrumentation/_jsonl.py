@@ -24,8 +24,14 @@ def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     by retention rotation is read back as one continuous history. Streams lazily so large logs need
     not fit in memory."""
     for segment in jsonl_segments(path):
-        with segment.open(encoding="utf-8") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if stripped:
-                    yield json.loads(stripped)
+        try:
+            with segment.open(encoding="utf-8") as handle:
+                for line in handle:
+                    stripped = line.strip()
+                    if stripped:
+                        try:
+                            yield json.loads(stripped)
+                        except json.JSONDecodeError:
+                            continue
+        except FileNotFoundError:
+            continue

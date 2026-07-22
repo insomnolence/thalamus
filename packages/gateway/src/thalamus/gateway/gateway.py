@@ -9,9 +9,10 @@ is pure and testable. Without the structural collaborators it works experiential
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 
-from thalamus.core.protocols import Retriever, Store
+from thalamus.core.protocols import Encoder, Retriever, Store
 from thalamus.core.types import (
     Cue,
     EventId,
@@ -87,24 +88,41 @@ class StructuralLinkedRetriever:
         anchor = _focus_node_ref(cue.scope, cue.focus)
         node = self._graph.get(anchor)
         if node is None:
+            mod_suffix = anchor.node_id.removeprefix("module:")
+            for candidate in self._graph.nodes_of_kind(cue.scope, "module"):
+                cand_suffix = candidate.node_id.removeprefix("module:")
+                if candidate.node_id.endswith(mod_suffix) or mod_suffix.endswith(cand_suffix):
+                    node = candidate
+                    break
+        if node is None:
             return base
         refs = [node.ref, *(near.ref for near in self._graph.k_hop(node.ref, self._k_hop))]
-        extras: list[ScoredMemory] = []
+        memories_map = self._links.memories_for_many(refs)
+        all_mem_refs: list[MemoryRef] = []
+        ref_distance: dict[MemoryRef, int] = {}
         for distance, ref in enumerate(refs):
-            for memory in self._links.memories_for(ref):
-                record = self._store.get(memory)
-                if record is not None:
-                    extras.append(
-                        ScoredMemory(
-                            record=record,
-                            score=2.0 if distance == 0 else 1.9,
-                            features={
-                                "structural_link": 1.0,
-                                "structural_seed": float(distance == 0),
-                                "structural_expanded": float(distance > 0),
-                            },
-                        )
+            for mem_ref in memories_map.get(ref, []):
+                if mem_ref not in ref_distance:
+                    ref_distance[mem_ref] = distance
+                    all_mem_refs.append(mem_ref)
+
+        records_map = self._store.get_many(all_mem_refs)
+        extras: list[ScoredMemory] = []
+        for mem_ref in all_mem_refs:
+            record = records_map.get(mem_ref)
+            if record is not None:
+                distance = ref_distance[mem_ref]
+                extras.append(
+                    ScoredMemory(
+                        record=record,
+                        score=2.0 if distance == 0 else 1.9,
+                        features={
+                            "structural_link": 1.0,
+                            "structural_seed": float(distance == 0),
+                            "structural_expanded": float(distance > 0),
+                        },
                     )
+                )
         ranked: dict[MemoryRef, ScoredMemory] = {item.record.ref: item for item in base.candidates}
         for item in extras:
             prior = ranked.get(item.record.ref)
@@ -165,8 +183,14 @@ class StructuralRelevanceRetriever:
             return base
 
         # Structural-relevance rank: candidates cross-linked to an anchor node, most-linked first.
+        cand_refs = [c.record.ref for c in base.candidates]
+        if hasattr(self._links, "nodes_for_many"):
+            nodes_map = self._links.nodes_for_many(cand_refs)
+        else:
+            nodes_map = {r: self._links.nodes_for(r) for r in cand_refs}
+
         overlaps = [
-            (sum(1 for ref in self._links.nodes_for(c.record.ref) if ref in anchors), c)
+            (sum(1 for ref in nodes_map.get(c.record.ref, []) if ref in anchors), c)
             for c in base.candidates
         ]
         linked = sorted(
@@ -179,7 +203,11 @@ class StructuralRelevanceRetriever:
         fused: list[ScoredMemory] = []
         for rel_rank, candidate in enumerate(base.candidates, start=1):
             score = 1.0 / (self._rrf_k + rel_rank)  # relevance leg
-            features = {**candidate.features, "relevance_rank": float(rel_rank)}
+            features = {
+                **candidate.features,
+                "relevance_rank": float(rel_rank),
+                "relevance_score": candidate.score,
+            }
             srank = struct_rank.get(candidate.record.ref)
             if srank is not None:  # the cue's code overlaps this memory's cross-links
                 score += self._weight * (1.0 / (self._rrf_k + srank))
@@ -241,7 +269,7 @@ class Gateway:
     def __init__(
         self,
         retriever: Retriever,
-        *,
+        encoder: Encoder | None = None,
         k: int = 5,
         graph: StructuralGraph | None = None,
         links: CrossLinkIndex | None = None,
@@ -258,6 +286,7 @@ class Gateway:
         if max_structural_items < 0 or max_memory_chars < 1:
             raise ValueError("payload bounds must be non-negative with positive memory text limit")
         self._retriever = retriever
+        self._encoder = encoder
         self._k = k
         self._graph = graph
         self._links = links
@@ -293,6 +322,12 @@ class Gateway:
         session_id: SessionId | None = None,
     ) -> ContextPayload:
         cue = Cue(text=prompt, scope=scope, focus=focus, session_id=session_id)
+        if cue.embedding is None:
+            enc = self._encoder
+            if enc is None and self._structural_retrievers:
+                enc = getattr(self._structural_retrievers[0], "_encoder", None)
+            if enc is not None:
+                cue = dataclasses.replace(cue, embedding=enc.encode([prompt])[0])
         # Snapshot the derived views once for the whole call — a concurrent refresh swaps the
         # bundle atomically, so this recall sees a single consistent (old or new) snapshot.
         views = self._views.views
@@ -381,15 +416,30 @@ class Gateway:
         Reverse `calls` edges (callers) answer "what breaks if I change this"; forward
         edges (callees) are what it uses. Bounded to a few hits with capped neighbours."""
         graph = self._graph
-        if graph is None:
+        if graph is None or not direct:
             return []
+        eligible_nodes = [
+            scored.node for scored in direct if scored.node.kind in ("function", "method", "class")
+        ][:_MAX_CALL_RELATIONS]
+        if not eligible_nodes:
+            return []
+
+        refs = [node.ref for node in eligible_nodes]
+        if hasattr(graph, "neighbors_many"):
+            callers_map = graph.neighbors_many(refs, edge_types=("calls",), direction="in")
+            callees_map = graph.neighbors_many(refs, edge_types=("calls",), direction="out")
+        else:
+            callers_map = {
+                ref: graph.neighbors(ref, edge_types=("calls",), direction="in") for ref in refs
+            }
+            callees_map = {
+                ref: graph.neighbors(ref, edge_types=("calls",), direction="out") for ref in refs
+            }
+
         relations: list[CallRelation] = []
-        for scored in direct:
-            node = scored.node
-            if node.kind not in ("function", "method", "class"):
-                continue
-            callers = graph.neighbors(node.ref, edge_types=("calls",), direction="in")
-            callees = graph.neighbors(node.ref, edge_types=("calls",), direction="out")
+        for node in eligible_nodes:
+            callers = callers_map.get(node.ref, [])
+            callees = callees_map.get(node.ref, [])
             if not callers and not callees:
                 continue
             # Fence every symbol name by its own node's provenance (§17.4 T1): a third-party code
@@ -407,8 +457,6 @@ class Gateway:
                     ),
                 )
             )
-            if len(relations) >= _MAX_CALL_RELATIONS:
-                break
         return relations
 
     def _annotations_for(self, scope: Scope, node_ids: Sequence[str]) -> list[StructuralNode]:
@@ -418,13 +466,20 @@ class Gateway:
         traverses — so a finding about ``db.py:42`` surfaces whenever ``db.py`` (or its enclosing
         symbol) does. Deduped, capped, order-stable. A no-op when there is no graph."""
         graph = self._graph
-        if graph is None:
+        if graph is None or not node_ids:
             return []
+        refs = [StructuralRef(scope, nid) for nid in node_ids]
+        if hasattr(graph, "neighbors_many"):
+            annotators_map = graph.neighbors_many(refs, edge_types=(ANNOTATES,), direction="in")
+        else:
+            annotators_map = {
+                ref: graph.neighbors(ref, edge_types=(ANNOTATES,), direction="in") for ref in refs
+            }
+
         out: list[StructuralNode] = []
         seen: set[str] = set()
-        for node_id in node_ids:
-            ref = StructuralRef(scope, node_id)
-            for annotator in graph.neighbors(ref, edge_types=(ANNOTATES,), direction="in"):
+        for ref in refs:
+            for annotator in annotators_map.get(ref, []):
                 if annotator.node_id not in seen:
                     seen.add(annotator.node_id)
                     out.append(annotator)

@@ -77,3 +77,21 @@ def test_rarer_term_outweighs_a_common_one() -> None:
         Cue(text="config regen_command", scope=SCOPE), k=2
     )
     assert result.shown[0].record.memory_id == MemoryId("rare")
+
+
+def test_store_add_invalidates_lexical_cache() -> None:
+    store = InMemoryStore(dim=8)
+    store.add(_record("first", "apple orange banana"), [0.0] * 8)
+    retriever = LexicalRetriever(store)
+
+    # First retrieval populates the scope index cache
+    res1 = retriever.retrieve(Cue(text="cherry", scope=SCOPE), k=5)
+    assert len(res1.shown) == 0
+
+    # Adding a new memory triggers store listener -> invalidates lexical cache
+    store.add(_record("second", "cherry kiwi grape"), [0.0] * 8)
+
+    # Second retrieval observes the newly added memory immediately
+    res2 = retriever.retrieve(Cue(text="cherry", scope=SCOPE), k=5)
+    assert len(res2.shown) == 1
+    assert res2.shown[0].record.memory_id == MemoryId("second")

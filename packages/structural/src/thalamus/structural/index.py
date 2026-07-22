@@ -14,9 +14,11 @@ behind the same protocol later.
 
 from __future__ import annotations
 
+import heapq
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Protocol, runtime_checkable
 
 from thalamus.core.exceptions import DimensionMismatchError
@@ -51,8 +53,9 @@ class ScoredNode:
     features: Mapping[str, float] = field(default_factory=dict)
 
 
-def _cosine(a: tuple[float, ...], a_norm: float, b: tuple[float, ...]) -> float:
-    b_norm = math.sqrt(sum(value * value for value in b))
+def _cosine(
+    a: tuple[float, ...], a_norm: float, b: tuple[float, ...], b_norm: float
+) -> float:
     if a_norm == 0.0 or b_norm == 0.0:
         return 0.0
     dot = sum(x * y for x, y in zip(a, b, strict=True))
@@ -90,11 +93,15 @@ class InMemoryStructuralIndex:
 
     def __init__(self, dim: int) -> None:
         self._dim = dim
+        self._lock = RLock()
         self._nodes: dict[StructuralRef, StructuralNode] = {}
         self._embeddings: dict[StructuralRef, tuple[float, ...]] = {}
+        self._norms: dict[StructuralRef, float] = {}
+        self._by_scope: dict[Scope, dict[StructuralRef, None]] = {}
 
     def __len__(self) -> int:
-        return len(self._nodes)
+        with self._lock:
+            return len(self._nodes)
 
     def _as_checked_vector(self, embedding: Vector, context: str) -> tuple[float, ...]:
         vec = tuple(float(value) for value in embedding)
@@ -104,29 +111,76 @@ class InMemoryStructuralIndex:
 
     def add(self, node: StructuralNode, embedding: Vector) -> None:
         vec = self._as_checked_vector(embedding, "InMemoryStructuralIndex.add")
-        self._nodes[node.ref] = node
-        self._embeddings[node.ref] = vec
+        norm = math.sqrt(sum(value * value for value in vec))
+        with self._lock:
+            old_node = self._nodes.get(node.ref)
+            if old_node is not None and old_node.scope != node.scope:
+                old_map = self._by_scope.get(old_node.scope)
+                if old_map is not None:
+                    old_map.pop(node.ref, None)
+                    if not old_map:
+                        self._by_scope.pop(old_node.scope, None)
+            self._nodes[node.ref] = node
+            self._embeddings[node.ref] = vec
+            self._norms[node.ref] = norm
+            self._by_scope.setdefault(node.scope, {})[node.ref] = None
 
     def add_many(self, items: Iterable[tuple[StructuralNode, Vector]]) -> None:
-        for node, embedding in items:
-            self.add(node, embedding)
+        materialized = [
+            (
+                node,
+                vec := self._as_checked_vector(embedding, "InMemoryStructuralIndex.add_many"),
+                math.sqrt(sum(value * value for value in vec)),
+            )
+            for node, embedding in items
+        ]
+        with self._lock:
+            for node, vec, norm in materialized:
+                old_node = self._nodes.get(node.ref)
+                if old_node is not None and old_node.scope != node.scope:
+                    old_map = self._by_scope.get(old_node.scope)
+                    if old_map is not None:
+                        old_map.pop(node.ref, None)
+                        if not old_map:
+                            self._by_scope.pop(old_node.scope, None)
+                self._nodes[node.ref] = node
+                self._embeddings[node.ref] = vec
+                self._norms[node.ref] = norm
+                self._by_scope.setdefault(node.scope, {})[node.ref] = None
 
     def remove(self, refs: Iterable[StructuralRef]) -> None:
-        for ref in refs:
-            self._nodes.pop(ref, None)
-            self._embeddings.pop(ref, None)
+        materialized_refs = list(refs)
+        with self._lock:
+            for ref in materialized_refs:
+                old_node = self._nodes.pop(ref, None)
+                if old_node is not None:
+                    old_map = self._by_scope.get(old_node.scope)
+                    if old_map is not None:
+                        old_map.pop(ref, None)
+                        if not old_map:
+                            self._by_scope.pop(old_node.scope, None)
+                self._embeddings.pop(ref, None)
+                self._norms.pop(ref, None)
 
     def search(self, query: Vector, k: int, scope: Scope) -> list[ScoredNode]:
+        if k <= 0:
+            return []
         q = self._as_checked_vector(query, "InMemoryStructuralIndex.search")
         q_norm = math.sqrt(sum(value * value for value in q))
+        with self._lock:
+            refs = list(self._by_scope.get(scope, {}).keys())
+            candidates = [
+                (node, self._embeddings[ref], self._norms.get(ref, 0.0))
+                for ref in refs
+                if (node := self._nodes.get(ref)) is not None
+                and node.scope == scope
+                and ref in self._embeddings
+            ]
         scored: list[ScoredNode] = []
-        for ref, node in self._nodes.items():
-            if node.scope != scope:
-                continue
-            score = _cosine(q, q_norm, self._embeddings[ref])
+        for node, embedding, b_norm in candidates:
+            score = _cosine(q, q_norm, embedding, b_norm)
             scored.append(ScoredNode(node=node, score=score, features={"relevance": score}))
-        scored.sort(key=lambda item: item.score, reverse=True)
-        return scored[: max(k, 0)]
+        return heapq.nlargest(k, scored, key=lambda item: item.score)
 
 
 class StructuralRetriever:

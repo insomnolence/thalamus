@@ -101,3 +101,18 @@ def test_retriever_reuses_cue_embedding() -> None:
     hits = retriever.retrieve(Cue(text="ignored", scope=SCOPE, embedding=[0.0, 1.0, 0.0]), k=1)
     assert [h.node.node_id for h in hits] == ["function:m.b"]
     assert encoder.calls == 0
+
+
+def test_add_many_remove_cleans_scope_index() -> None:
+    index = InMemoryStructuralIndex(dim=3)
+    n1 = _node("function:m.a", "a")
+    n2 = _node("function:m.b", "b")
+    index.add_many([(n1, [1.0, 0.0, 0.0]), (n2, [0.0, 1.0, 0.0])])
+
+    hits = index.search([1.0, 0.0, 0.0], k=5, scope=SCOPE)
+    assert len(hits) == 2
+
+    index.remove([n1.ref])
+    hits_after = index.search([1.0, 0.0, 0.0], k=5, scope=SCOPE)
+    assert len(hits_after) == 1
+    assert hits_after[0].node.node_id == "function:m.b"
