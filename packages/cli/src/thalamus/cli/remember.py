@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from thalamus.cli.brain import build_store, close_store
-from thalamus.core.exceptions import ThalamusError
+from thalamus.core.exceptions import UserFacingError
 from thalamus.core.protocols import Encoder, Store, SupersessionIndex
 from thalamus.core.redaction import RedactionEvent, merge_redaction_events, redact_secrets
 from thalamus.core.taxonomy import ACCEPTED_KINDS, normalize_kind
@@ -162,9 +162,9 @@ def build_retained_record(
     and redaction would corrupt the path → its cross-link)."""
     kind = normalize_kind(config.kind)  # synonyms (e.g. project→decision) map to the canonical set
     if not config.text.strip():
-        raise ThalamusError("retained memory text must not be empty")
+        raise UserFacingError("retained memory text must not be empty")
     if not math.isfinite(config.importance):
-        raise ThalamusError("importance must be a finite number")
+        raise UserFacingError("importance must be a finite number")
     events: list[RedactionEvent] = []
     text = config.text
     why = config.why
@@ -270,7 +270,7 @@ def run_remember(
     When ``config.supersedes`` is set, also records a §13.18 D1 supersession edge into
     ``supersession`` (the old belief is kept, demoted below current truth at recall)."""
     if store is None and config.neo4j_uri is None:
-        raise ThalamusError(
+        raise UserFacingError(
             "remember requires durable Brain 1 storage; "
             "set THALAMUS_NEO4J_URI before writing a memory"
         )

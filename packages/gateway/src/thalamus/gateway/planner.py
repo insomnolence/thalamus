@@ -269,12 +269,13 @@ class PlanBrief:
             lines += ["", f"## Known findings in scope ({len(self.findings)})"]
             lines.append("  external analysis already flags these on the in-scope code:")
             for f in self.findings:
+                label = _finding_plan_label(f)
                 loc = (
                     f" [{fence_untrusted(f.location, f.trust)}]"
                     if f.location
                     else ""
                 )
-                lines.append(f"  - {fence_untrusted(f.label, f.trust)}{loc}")
+                lines.append(f"  - {fence_untrusted(label, f.trust)}{loc}")
             if self.findings_omitted:
                 lines.append(f"  - ... {self.findings_omitted} further finding(s) omitted")
 
@@ -307,7 +308,9 @@ class PlanBrief:
         for item in items:
             superseded = " [superseded]" if item.superseded else ""
             content = fence_untrusted(item.content, item.trust)
-            lines.append(f"- ({item.kind}){superseded} {content}")
+            lines.append(
+                f"- ({item.kind}, gather score {item.score:.2f}){superseded} {content}"
+            )
             if item.why:
                 lines.append(f"  why: {fence_untrusted(item.why, item.trust)}")
             if item.superseded is not None:
@@ -319,6 +322,24 @@ class PlanBrief:
                     fence_untrusted(ref, item.trust) for ref in item.stale_references
                 )
                 lines.append(f"  ⚠ may be stale — references no longer in the codebase: {gone}")
+
+
+def _finding_plan_label(item: FindingItem) -> str:
+    """Remove the finding label's compact location when the plan prints its full location.
+
+    Finding labels retain ``basename:line`` because they also render in structural contexts where
+    no :class:`FindingItem` exists. PlanBrief has the normalized full source location separately,
+    so showing both produces ``auth.py:1 ... [src/auth.py:1]``. Strip only the ingestor's exact
+    `` basename:line — `` segment; unfamiliar producer labels pass through unchanged.
+    """
+    if not item.location:
+        return item.label
+    path, separator, line = item.location.rpartition(":")
+    if not separator:
+        return item.label
+    basename = path.rsplit("/", 1)[-1]
+    marker = f" {basename}:{line} — "
+    return item.label.replace(marker, " — ", 1)
 
 
 @dataclass(frozen=True, slots=True)

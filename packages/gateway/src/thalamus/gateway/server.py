@@ -11,11 +11,13 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextvars
+import functools
+import logging
 import threading
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable, Sequence
+from typing import TYPE_CHECKING, ParamSpec
 
-from thalamus.core.exceptions import ThalamusError
+from thalamus.core.exceptions import ThalamusError, UserFacingError
 from thalamus.core.taxonomy import RememberKindInput
 from thalamus.core.types import EventId, MemoryId, MemoryRecord, Scope, SessionId
 from thalamus.gateway.gateway import Gateway
@@ -23,6 +25,9 @@ from thalamus.gateway.payload import ContextPayload
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
+
+logger = logging.getLogger(__name__)
+P = ParamSpec("P")
 
 type RememberWriter = Callable[
     [str, str, str | None, Sequence[str], float, str | None, str | None],
@@ -120,12 +125,40 @@ def build_server(
     into one session; leave off for stdio (one client = the process session)."""
     try:
         from fastmcp import FastMCP
+        from fastmcp.exceptions import ToolError
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
         raise ThalamusError(
             "MCP support requires the 'mcp' extra: pip install 'thalamus-gateway[mcp]'"
         ) from exc
 
-    server = FastMCP(name)
+    # FastMCP's default includes raw exception messages in client-visible ToolErrors. Mask them as
+    # defense in depth; the wrapper below keeps expected Thalamus domain errors actionable while
+    # turning unexpected backend/network failures into one stable, non-sensitive response.
+    server = FastMCP(name, mask_error_details=True)
+
+    def tool_errors(
+        tool_name: str,
+    ) -> Callable[[Callable[P, Awaitable[str]]], Callable[P, Awaitable[str]]]:
+        def decorate(call: Callable[P, Awaitable[str]]) -> Callable[P, Awaitable[str]]:
+            @functools.wraps(call)
+            async def guarded(*args: P.args, **kwargs: P.kwargs) -> str:
+                try:
+                    return await call(*args, **kwargs)
+                except UserFacingError as error:
+                    # Only this explicit allow-list base is safe/actionable at the MCP boundary.
+                    # Other ThalamusError subclasses wrap stores/encoders and may carry secrets.
+                    raise ToolError(str(error)) from None
+                except Exception:
+                    # Preserve the traceback for the operator, never the raw message for the MCP
+                    # client: driver errors can contain internal hosts, queries, or credentials.
+                    logger.exception("unexpected failure in MCP tool %s", tool_name)
+                    raise ToolError(
+                        f"{tool_name} failed unexpectedly; retry or check the Thalamus server logs"
+                    ) from None
+
+            return guarded
+
+        return decorate
 
     # A tiny liveness route. The HTTP serve registers only the MCP endpoint (/mcp), so every other
     # path 404s — a health probe or LAN scanner hitting GET /health is the most common source of
@@ -143,6 +176,7 @@ def build_server(
     max_pending = 1000
 
     @server.tool
+    @tool_errors("recall")
     async def recall(
         prompt: str,
         focus: str | None = None,
@@ -183,6 +217,7 @@ def build_server(
     if not read_only:
 
         @server.tool
+        @tool_errors("record_usage")
         async def record_usage(event_id: str, output_text: str) -> str:
             """Report that a recall shaped your output — how the brain learns which memories
             help. Call after using recalled context. `event_id`: from the recall's
@@ -204,11 +239,12 @@ def build_server(
                         lambda: gateway.record_outcome_for(key, shown, output_text)
                     )
                     return f"recorded {len(signals)} usage signal(s)"
-            raise ValueError(f"unknown or already-recorded retrieval event: {event_id}")
+            raise UserFacingError(f"unknown or already-recorded retrieval event: {event_id}")
 
     if recent_reader is not None:
 
         @server.tool
+        @tool_errors("recent")
         async def recent(limit: int = 10, kind: str | None = None) -> str:
             """List the most recently recorded memories, newest first (optionally one ``kind``).
 
@@ -220,6 +256,7 @@ def build_server(
     if plan_reader is not None:
 
         @server.tool
+        @tool_errors("plan")
         async def plan(target: str, hops: int = 2) -> str:
             """Blast-radius brief BEFORE changing shared/central code. Resolve TARGET (a symbol
             name or short description) to the code it names, compute what depends on it ("what
@@ -231,6 +268,7 @@ def build_server(
     if remember_writer is not None and not read_only:
 
         @server.tool
+        @tool_errors("remember")
         async def remember(
             kind: RememberKindInput,
             text: str,

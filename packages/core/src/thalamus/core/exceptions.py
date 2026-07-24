@@ -13,7 +13,15 @@ class ThalamusError(Exception):
     """Base class for all Thalamus errors."""
 
 
-class ConfigurationError(ThalamusError):
+class UserFacingError(ThalamusError):
+    """A deliberately-authored error whose message is safe to return across an API boundary.
+
+    Backend wrappers such as :class:`StoreError` and :class:`EncoderError` must not inherit this:
+    their messages can include driver details, internal hosts, queries, paths, or credentials.
+    """
+
+
+class ConfigurationError(UserFacingError):
     """A component was configured with invalid or missing settings."""
 
 

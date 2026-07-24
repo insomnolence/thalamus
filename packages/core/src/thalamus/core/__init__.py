@@ -11,6 +11,7 @@ from thalamus.core.exceptions import (
     EncoderError,
     StoreError,
     ThalamusError,
+    UserFacingError,
 )
 from thalamus.core.protocols import (
     EmbeddingStore,
@@ -90,6 +91,7 @@ __all__ = [
     "TenantId",
     "ThalamusError",
     "Trust",
+    "UserFacingError",
     "Vector",
     "deserialize_memory_record",
     "merge_redaction_events",

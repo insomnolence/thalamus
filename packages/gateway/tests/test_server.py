@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import pytest
+from thalamus.core.exceptions import StoreError, UserFacingError
 from thalamus.core.types import (
+    Cue,
+    EventId,
     Hemisphere,
     MemoryId,
     MemoryRecord,
     RepoId,
+    RetrievalResult,
     Scope,
     SessionId,
     TenantId,
@@ -288,3 +293,111 @@ async def test_remember_tool_accepts_a_synonym_kind_but_rejects_an_unknown_one()
         with pytest.raises(ToolError):
             await client.call_tool("remember", {"kind": "conversation", "text": "x"})
     assert calls == ["project"]
+
+
+async def test_unexpected_tool_errors_do_not_expose_backend_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from fastmcp import Client
+    from fastmcp.exceptions import ToolError
+
+    secret = "bolt://neo4j:password@internal:7687"
+
+    def fail() -> None:
+        raise StoreError(
+            f"Neo4j operation failed: {secret} timed out on MATCH (m:M_experiential)"
+        )
+
+    class FailingRetriever:
+        def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
+            del cue, k
+            fail()
+            raise AssertionError("unreachable")
+
+    def write(
+        kind: str,
+        text: str,
+        why: str | None,
+        files: Sequence[str],
+        importance: float,
+        memory_id: str | None,
+        supersedes: str | None,
+    ) -> MemoryRecord:
+        del kind, text, why, files, importance, memory_id, supersedes
+        fail()
+        raise AssertionError("unreachable")
+
+    def recent_reader(limit: int, kind: str | None) -> str:
+        del limit, kind
+        fail()
+        raise AssertionError("unreachable")
+
+    def plan_reader(target: str, hops: int) -> str:
+        del target, hops
+        fail()
+        raise AssertionError("unreachable")
+
+    def resolve_shown(event_id: EventId) -> Sequence[tuple[MemoryId, str]] | None:
+        del event_id
+        fail()
+        raise AssertionError("unreachable")
+
+    server = build_server(
+        Gateway(FailingRetriever()),
+        SCOPE,
+        remember_writer=write,
+        resolve_shown=resolve_shown,
+        recent_reader=recent_reader,
+        plan_reader=plan_reader,
+    )
+    calls = (
+        ("recall", {"prompt": "x"}),
+        ("record_usage", {"event_id": "missing", "output_text": "unused"}),
+        ("recent", {}),
+        ("plan", {"target": "x"}),
+        ("remember", {"kind": "decision", "text": "x"}),
+    )
+    caplog.set_level(logging.ERROR, logger="thalamus.gateway.server")
+    async with Client(server) as client:
+        for tool_name, arguments in calls:
+            with pytest.raises(ToolError) as caught:
+                await client.call_tool(tool_name, arguments)
+            message = str(caught.value)
+            assert f"{tool_name} failed unexpectedly" in message
+            assert secret not in message
+            assert "M_experiential" not in message
+            assert "Traceback" not in message
+    logged = [
+        record
+        for record in caplog.records
+        if record.message.startswith("unexpected failure in MCP tool")
+    ]
+    assert len(logged) == len(calls)
+    assert all(record.exc_info is not None for record in logged)
+
+
+async def test_expected_domain_error_remains_actionable() -> None:
+    from fastmcp import Client
+    from fastmcp.exceptions import ToolError
+
+    def reader(limit: int, kind: str | None) -> str:
+        del limit, kind
+        raise UserFacingError("recent limit must be positive")
+
+    server = build_server(_gateway(), SCOPE, recent_reader=reader)
+    async with Client(server) as client:
+        with pytest.raises(ToolError, match="recent limit must be positive"):
+            await client.call_tool("recent", {})
+
+
+async def test_unknown_record_usage_event_remains_actionable() -> None:
+    from fastmcp import Client
+    from fastmcp.exceptions import ToolError
+
+    server = build_server(_gateway(), SCOPE)
+    async with Client(server) as client:
+        with pytest.raises(ToolError, match="unknown or already-recorded retrieval event: missing"):
+            await client.call_tool(
+                "record_usage",
+                {"event_id": "missing", "output_text": "unused"},
+            )

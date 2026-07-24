@@ -424,6 +424,7 @@ def test_render_surfaces_coverage_and_constraints() -> None:
     assert "# Plan brief: foo" in rendered
     assert "Known constraints & gotchas" in rendered
     assert "foo mutates shared state" in rendered
+    assert "(gotcha, gather score 2.50)" in rendered
     assert "unverified" in rendered  # the coverage-honesty line
 
 
@@ -621,6 +622,16 @@ def test_findings_annotating_in_scope_code_surface_in_the_brief() -> None:
     assert "## Known findings in scope (1)" in rendered
     assert "SQL injection" in rendered
     assert "pkg/foo.py:42" in rendered  # full source location from metadata
+    assert "foo.py:42 —" not in rendered  # location appears once, in the structured suffix
+    assert "R-f1 (error) — SQL injection [pkg/foo.py:42]" in rendered
+
+
+def test_finding_location_is_not_duplicated_for_backslash_source_paths() -> None:
+    f = _finding("fwin", r"pkg\foo.py", 42, "error", "SQL injection")
+    brief = _build_with_findings([(f, "mod:foo")]).plan(target="foo", scope=SCOPE)
+    assert (
+        brief.render().count(r"pkg\foo.py:42") == 1
+    )  # only the structured source-location suffix
 
 
 def test_findings_outside_the_blast_radius_are_not_surfaced() -> None:
