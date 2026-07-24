@@ -62,4 +62,16 @@ class HybridRetriever:
             fused.append(ScoredMemory(record=native.record, score=native.score, features=features))
 
         fused.sort(key=lambda scored: scored.features["rrf"], reverse=True)
+        # Name the final hybrid order as the base relevance rank for any outer RRF rung. Keep the
+        # hybrid RRF value separate: promoting it to ``fusion_score`` would change the live policy
+        # by carrying both semantic and lexical leg magnitudes into later, independently weighted
+        # rungs. ``initial_relevance_rank`` is the preservation contract; ``rrf`` remains telemetry.
+        fused = [
+            ScoredMemory(
+                record=scored.record,
+                score=scored.score,
+                features={**scored.features, "initial_relevance_rank": float(rank)},
+            )
+            for rank, scored in enumerate(fused, start=1)
+        ]
         return RetrievalResult(cue=cue, candidates=fused, shown=fused[: max(k, 0)])

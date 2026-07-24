@@ -13,7 +13,13 @@ from thalamus.core.types import (
     ScoredMemory,
     TenantId,
 )
-from thalamus.retrieval import HybridRetriever, L0Retriever, LexicalRetriever
+from thalamus.retrieval import (
+    HybridRetriever,
+    L0Retriever,
+    LexicalRetriever,
+    UsageWeightedRetriever,
+    UsageWeightsRef,
+)
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
 
@@ -46,6 +52,23 @@ class _Stub:
         return RetrievalResult(cue=cue, candidates=self._ordered, shown=self._ordered[:k])
 
 
+class _ReverseCandidates:
+    """A hypothetical reordering decorator that preserves features but stamps no rank itself."""
+
+    def __init__(self, inner: HybridRetriever) -> None:
+        self._inner = inner
+
+    def retrieve(self, cue: Cue, k: int) -> RetrievalResult:
+        result = self._inner.retrieve(cue, k)
+        candidates = list(reversed(result.candidates))
+        return RetrievalResult(
+            cue=result.cue,
+            candidates=candidates,
+            shown=candidates[: max(k, 0)],
+            event_id=result.event_id,
+        )
+
+
 def test_rrf_rewards_a_memory_found_by_both_legs() -> None:
     semantic = _Stub([_scored("A", 2.0), _scored("B", 1.5), _scored("C", 1.0)])
     lexical = _Stub([_scored("D", 5.0), _scored("B", 4.0)])
@@ -72,6 +95,41 @@ def test_features_record_each_leg_rank() -> None:
     b = next(s for s in fused.candidates if s.record.memory_id == MemoryId("B"))
     assert b.features["semantic_rank"] == 2.0  # B is 2nd in the semantic list
     assert b.features["lexical_rank"] == 1.0  # and 1st in the lexical list
+
+
+def test_final_hybrid_rank_is_preserved_through_a_downstream_rrf_rung() -> None:
+    semantic = _Stub([_scored("A", 3.0), _scored("B", 2.0), _scored("C", 1.0)])
+    lexical = _Stub([_scored("B", 4.0)])
+    hybrid = HybridRetriever(semantic, lexical)
+
+    hybrid_result = hybrid.retrieve(Cue(text="q", scope=SCOPE), k=3)
+    hybrid_by_id = {s.record.memory_id: s for s in hybrid_result.candidates}
+    assert [s.record.memory_id for s in hybrid_result.candidates] == [
+        MemoryId("B"),
+        MemoryId("A"),
+        MemoryId("C"),
+    ]
+    assert hybrid_by_id[MemoryId("B")].features["initial_relevance_rank"] == 1.0
+    assert hybrid_by_id[MemoryId("A")].features["initial_relevance_rank"] == 2.0
+    assert hybrid_by_id[MemoryId("C")].features["initial_relevance_rank"] == 3.0
+    assert all("fusion_score" not in s.features for s in hybrid_result.candidates)
+
+    # A future decorator could reorder candidates without knowing the RRF feature contract. The
+    # downstream rung must still see Hybrid's base ranks, not recreate them from this reversed list.
+    reordered = _ReverseCandidates(hybrid)
+    reordered_result = reordered.retrieve(Cue(text="q", scope=SCOPE), k=3)
+    assert [s.record.memory_id for s in reordered_result.candidates] == [
+        MemoryId("C"),
+        MemoryId("A"),
+        MemoryId("B"),
+    ]
+    composed = UsageWeightedRetriever(reordered, UsageWeightsRef({MemoryId("B"): 9.0}))
+    result = composed.retrieve(Cue(text="q", scope=SCOPE), k=3)
+    by_id = {s.record.memory_id: s for s in result.candidates}
+    assert result.candidates[0].record.memory_id == MemoryId("B")
+    assert by_id[MemoryId("B")].features["initial_relevance_rank"] == 1.0
+    assert by_id[MemoryId("A")].features["initial_relevance_rank"] == 2.0
+    assert by_id[MemoryId("C")].features["initial_relevance_rank"] == 3.0
 
 
 def test_end_to_end_hybrid_recovers_an_exact_identifier_the_vector_buries() -> None:
