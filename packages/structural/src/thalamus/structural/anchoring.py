@@ -66,7 +66,7 @@ def anchor_nodes(
         for scored in retriever.retrieve(cue, max_anchors):
             if scored.score > min_relevance:
                 ref = scored.node.ref
-                scored_by_ref[ref] = max(scored_by_ref.get(ref, 0.0), scored.score)
+                scored_by_ref[ref] = max(scored_by_ref.get(ref, float("-inf")), scored.score)
     top = sorted(scored_by_ref.items(), key=lambda kv: kv[1], reverse=True)[:max_anchors]
     return frozenset(ref for ref, _ in top)
 
@@ -122,16 +122,22 @@ def memory_centrality(
     else:
         nodes_map = {m: links.nodes_for(m) for m in mem_list}
 
-    weights: dict[MemoryRef, float] = {}
+    all_node_refs = list({ref for refs in nodes_map.values() for ref in refs})
     degree_cache: dict[StructuralRef, int] = {}
+    if all_node_refs:
+        if hasattr(graph, "neighbors_many"):
+            neighbors_map = graph.neighbors_many(all_node_refs, direction="both")
+            degree_cache = {ref: len(nb) for ref, nb in neighbors_map.items()}
+        else:
+            degree_cache = {
+                ref: len(graph.neighbors(ref, direction="both")) for ref in all_node_refs
+            }
+
+    weights: dict[MemoryRef, float] = {}
     for memory in mem_list:
         total = 0.0
         for node_ref in nodes_map.get(memory, []):
-            degree = degree_cache.get(node_ref)
-            if degree is None:
-                degree = node_degree(graph, node_ref)
-                degree_cache[node_ref] = degree
-            total += 1.0 + float(degree)
+            total += 1.0 + float(degree_cache.get(node_ref, 0))
         if total > 0.0:
             weights[memory] = total
     return weights

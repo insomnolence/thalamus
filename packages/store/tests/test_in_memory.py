@@ -107,3 +107,32 @@ def test_dim_mismatch() -> None:
 
 def test_empty_store() -> None:
     assert InMemoryStore(dim=3).search([1.0, 0.0, 0.0], k=5, scope=SCOPE) == []
+
+
+def test_add_listener_weakref() -> None:
+    store = InMemoryStore(dim=2)
+
+    class Receiver:
+        def __init__(self) -> None:
+            self.calls: list[Scope] = []
+
+        def on_write(self, s: Scope) -> None:
+            self.calls.append(s)
+
+    r = Receiver()
+    store.add_listener(r.on_write)
+    store.add(_record("a", SCOPE), [1.0, 0.0])
+    assert r.calls == [SCOPE]
+
+    # Del Receiver instance, next write purges dead weakref without error
+    del r
+    store.add(_record("b", SCOPE), [0.0, 1.0])
+
+
+def test_add_listener_retains_standalone_callable() -> None:
+    store = InMemoryStore(dim=2)
+    calls: list[Scope] = []
+    store.add_listener(lambda scope: calls.append(scope))
+
+    store.add(_record("a", SCOPE), [1.0, 0.0])
+    assert calls == [SCOPE]

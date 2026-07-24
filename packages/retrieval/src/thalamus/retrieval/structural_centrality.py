@@ -92,14 +92,22 @@ class StructuralCentralityRetriever:
         fused: list[ScoredMemory] = []
         for rel_rank, candidate in enumerate(candidates, start=1):
             ref = candidate.record.ref
-            score = 1.0 / (self._rrf_k + rel_rank)  # relevance leg
-            features: dict[str, float] = {**candidate.features, "relevance_rank": float(rel_rank)}
+            base_rel_rank = candidate.features.get("initial_relevance_rank", float(rel_rank))
+            score = candidate.features.get(
+                "fusion_score", 1.0 / (self._rrf_k + base_rel_rank)
+            )
+            features: dict[str, float] = {
+                **candidate.features,
+                "initial_relevance_rank": base_rel_rank,
+                "relevance_rank": float(rel_rank),
+            }
             crank = centrality_rank.get(ref)
             if crank is not None:  # centrality leg, only for memories with a cross-link footprint
                 score += self._weight * (1.0 / (self._rrf_k + crank))
                 features["centrality_rank"] = float(crank)
                 features["centrality_weight"] = centrality[ref]
             features["centrality_fused"] = score
+            features["fusion_score"] = score
             # Preserve the native score (the relevance baseline) for honest display + the log.
             fused.append(
                 ScoredMemory(record=candidate.record, score=candidate.score, features=features)

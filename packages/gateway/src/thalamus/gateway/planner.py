@@ -212,12 +212,16 @@ class PlanBrief:
             return "\n".join(lines) + "\n"
 
         ip = self.integration_point
-        loc = f" — {ip.location}" if ip.location else ""
+        loc = (
+            f" — {fence_untrusted(ip.location, ip.trust)}"
+            if ip.location
+            else ""
+        )
         rel = f" [relevance {self.resolution_relevance:.2f}]" if self.resolution_relevance else ""
         # Fence symbol names from non-operator corpora (§17.4 T1) — a plan over third-party code
         # surfaces its symbols here; they reach the actuator as data, not instructions.
-        ip_label = fence_untrusted(ip.label, ip.trust)
-        lines += ["", "## Integration point", f"- ({ip.kind}) {ip_label}{loc}{rel}"]
+        ip_description = fence_untrusted(f"({ip.kind}) {ip.label}", ip.trust)
+        lines += ["", "## Integration point", f"- {ip_description}{loc}{rel}"]
         if self.resolution_ambiguous and self.alternatives:
             alts = ", ".join(fence_untrusted(a.label, a.trust) for a in self.alternatives)
             lines.append(f"  ⚠ ambiguous target — also plausible: {alts}")
@@ -247,9 +251,15 @@ class PlanBrief:
                         if rn.linked_memory_count
                         else "no recorded context"
                     )
-                    loc = f" — {rn.item.location}" if rn.item.location else ""
-                    label = fence_untrusted(rn.item.label, rn.item.trust)
-                    lines.append(f"  - ({rn.item.kind}) {label}{loc}  [{notes}]")
+                    loc = (
+                        f" — {fence_untrusted(rn.item.location, rn.item.trust)}"
+                        if rn.item.location
+                        else ""
+                    )
+                    description = fence_untrusted(
+                        f"({rn.item.kind}) {rn.item.label}", rn.item.trust
+                    )
+                    lines.append(f"  - {description}{loc}  [{notes}]")
         elif not self.high_fanout:
             lines.append("  (no direct callers/callees recorded in Brain 2)")
         if self.radius_omitted:
@@ -259,7 +269,11 @@ class PlanBrief:
             lines += ["", f"## Known findings in scope ({len(self.findings)})"]
             lines.append("  external analysis already flags these on the in-scope code:")
             for f in self.findings:
-                loc = f" [{f.location}]" if f.location else ""
+                loc = (
+                    f" [{fence_untrusted(f.location, f.trust)}]"
+                    if f.location
+                    else ""
+                )
                 lines.append(f"  - {fence_untrusted(f.label, f.trust)}{loc}")
             if self.findings_omitted:
                 lines.append(f"  - ... {self.findings_omitted} further finding(s) omitted")
@@ -301,7 +315,9 @@ class PlanBrief:
                 reason = fence_untrusted(note.reason, item.trust)
                 lines.append(f"  ⊘ superseded by {note.superseded_by} on {note.at}: {reason}")
             if item.stale_references:
-                gone = ", ".join(item.stale_references)
+                gone = ", ".join(
+                    fence_untrusted(ref, item.trust) for ref in item.stale_references
+                )
                 lines.append(f"  ⚠ may be stale — references no longer in the codebase: {gone}")
 
 
@@ -636,6 +652,54 @@ class Planner:
             current = parents[0].ref
         return None
 
+    def _containing_modules(
+        self, refs: Sequence[StructuralRef]
+    ) -> dict[StructuralRef, StructuralRef]:
+        """Batched version of _containing_module to prevent N*M queries in Neo4j."""
+        results: dict[StructuralRef, StructuralRef] = {}
+        active: set[StructuralRef] = set()
+        for r in refs:
+            node = self._graph.get(r)
+            if node is not None and node.kind == "module":
+                results[r] = r
+            else:
+                active.add(r)
+
+        current_map: dict[StructuralRef, StructuralRef] = {r: r for r in active}
+        for _ in range(_MAX_CONTAINER_DEPTH):
+            if not active:
+                break
+            active_list = list(active)
+            if hasattr(self._graph, "neighbors_many"):
+                parents_map = self._graph.neighbors_many(
+                    active_list, edge_types=("contains",), direction="in"
+                )
+            else:
+                parents_map = {
+                    curr: self._graph.neighbors(
+                        curr, edge_types=("contains",), direction="in"
+                    )
+                    for curr in active_list
+                }
+
+            next_active: set[StructuralRef] = set()
+            for orig in list(current_map.keys()):
+                curr = current_map[orig]
+                parents = parents_map.get(curr, [])
+                if not parents:
+                    del current_map[orig]
+                    continue
+                module = next((p for p in parents if p.kind == "module"), None)
+                if module is not None:
+                    results[orig] = module.ref
+                    del current_map[orig]
+                else:
+                    next_ref = parents[0].ref
+                    current_map[orig] = next_ref
+                    next_active.add(next_ref)
+            active = next_active
+        return results
+
     def _gather_findings(
         self, scope_refs: Sequence[StructuralRef]
     ) -> tuple[tuple[FindingItem, ...], int]:
@@ -649,12 +713,22 @@ class Planner:
         breaks*) and the gathered memories (*the why*): findings are *already-recorded flags*."""
         seen: set[str] = set()
         items: list[FindingItem] = []
-        for ref in scope_refs:
-            for node in self._graph.neighbors(ref, edge_types=("annotates",), direction="in"):
-                if node.kind != "finding" or node.node_id in seen:
-                    continue
-                seen.add(node.node_id)
-                items.append(FindingItem.from_node(node))
+        if hasattr(self._graph, "neighbors_many"):
+            neighbors_by_ref = self._graph.neighbors_many(
+                scope_refs, edge_types=("annotates",), direction="in"
+            )
+            nodes = [n for neighbor_list in neighbors_by_ref.values() for n in neighbor_list]
+        else:
+            nodes = [
+                n
+                for ref in scope_refs
+                for n in self._graph.neighbors(ref, edge_types=("annotates",), direction="in")
+            ]
+        for node in nodes:
+            if node.kind != "finding" or node.node_id in seen:
+                continue
+            seen.add(node.node_id)
+            items.append(FindingItem.from_node(node))
         items.sort(key=lambda f: (_severity_rank(f.severity), f.location or ""))
         budget = self._config.finding_budget
         omitted = max(len(items) - budget, 0)
@@ -692,10 +766,13 @@ class Planner:
         # first source a memory is seen through is its tier — closer wins under the budget.
         sources: list[tuple[StructuralRef, int]] = []
         modules: dict[str, StructuralRef] = {}
+
+        mod_map = self._containing_modules(scope_refs)
+
         for index, ref in enumerate(scope_refs):
             tier = _PROX_INTEGRATION_POINT if index == 0 else _PROX_RADIUS_NODE
             sources.append((ref, tier))
-            module = self._containing_module(ref)
+            module = mod_map.get(ref)
             if module is not None:
                 modules.setdefault(module.node_id, module)
 

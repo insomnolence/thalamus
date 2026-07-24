@@ -173,7 +173,7 @@ def run_rung_eval(config: RungEvalConfig) -> None:
         centrality = CentralityWeightsRef(
             memory_centrality([record.ref for record in store.scan(scope)], graph, links)
         )
-        usage_weights: dict[MemoryId, float] = {
+        usage_weights: dict[MemoryRef | MemoryId, float] = {
             mid: float(n) for mid, n in reuse_by_memory(train_events, train_signals).items()
         }
         arms = compose_rung_arms(

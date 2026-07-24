@@ -95,3 +95,22 @@ def test_identical_findings_in_one_file_are_deduped(tmp_path: Path) -> None:
 def test_parse_findings_is_pure_over_text() -> None:
     findings: Sequence[object] = parse_findings('[{"path":"a.ts","line":1,"message":"m"}]')
     assert len(findings) == 1
+
+
+def test_redaction_preserves_structural_source_path_and_scrubs_message(tmp_path: Path) -> None:
+    finding = {
+        "path": "src/password=structural-coordinate.ts",
+        "line": 7,
+        "message": "connect(password=hunter2secretval)",
+    }
+    node = _ingest(tmp_path, json.dumps([finding]))[0]
+    assert node.metadata["source_path"] == finding["path"]
+    assert finding["path"] in node.node_id
+    assert "hunter2secretval" not in node.metadata["text"]
+    assert "[REDACTED:env-assignment]" in node.metadata["text"]
+
+
+def test_analyzer_controlled_message_is_bounded_before_storage(tmp_path: Path) -> None:
+    message = "x" * 20_000
+    node = _ingest(tmp_path, json.dumps([{"path": "a.ts", "line": 1, "message": message}]))[0]
+    assert len(node.metadata["text"]) < 9_000

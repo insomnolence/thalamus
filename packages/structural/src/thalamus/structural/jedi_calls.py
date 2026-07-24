@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,19 @@ from thalamus.structural.schema import IngestResult, StructuralEdge
 from thalamus.structural.sources import IGNORE_DIRS, python_files
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_writable_cache(jedi: Any) -> None:
+    """Keep Jedi's imported-module cache out of a potentially read-only home directory.
+
+    Parso only suppresses ``PermissionError`` when its default ``~/.cache/jedi`` is unwritable;
+    read-only filesystems raise ``OSError(EROFS)`` and make every cross-module resolution fail.
+    The OS temp directory is the appropriate re-derivable cache location for this ingestor.
+    """
+    user_key = str(os.getuid()) if hasattr(os, "getuid") else "local"
+    cache_dir = Path(tempfile.gettempdir()) / f"thalamus-jedi-{user_key}"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    jedi.settings.cache_directory = str(cache_dir)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +76,7 @@ class JediCallIngestor:
             raise ThalamusError(
                 "JediCallIngestor needs the 'jedi' extra: install thalamus-structural[jedi]"
             ) from exc
+        _configure_writable_cache(jedi)
 
         # One AST pass per file: build the (file, line) -> node id index for *all* files
         # (so cross-module calls resolve), and collect call sites with their caller.
@@ -129,6 +145,10 @@ class JediCallIngestor:
             if isinstance(child, ast.ClassDef) and parent == "module":
                 cid = class_id(module, child.name)
                 def_index[(abspath, child.lineno)] = cid
+                for dec in child.decorator_list:
+                    def_index[(abspath, dec.lineno)] = cid
+                    end = getattr(dec, "end_lineno", dec.lineno)
+                    def_index[(abspath, end + 1)] = cid
                 self._index(
                     child, module=module, abspath=abspath, owner_id=cid, parent="class",
                     class_name=child.name, def_index=def_index, sites=sites,
@@ -143,6 +163,10 @@ class JediCallIngestor:
                     else function_id(module, child.name)
                 )
                 def_index[(abspath, child.lineno)] = fid
+                for dec in child.decorator_list:
+                    def_index[(abspath, dec.lineno)] = fid
+                    end = getattr(dec, "end_lineno", dec.lineno)
+                    def_index[(abspath, end + 1)] = fid
                 self._index(
                     child, module=module, abspath=abspath, owner_id=fid, parent="body",
                     class_name=None, def_index=def_index, sites=sites,

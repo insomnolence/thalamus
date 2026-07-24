@@ -79,7 +79,9 @@ class ScipProducer:
         if cfg.scip_index is None:  # defensive — validate() already enforces this
             raise ThalamusError(f"corpus {cfg.name!r}: kind='scip' requires a scip_index")
         return ProducerBuild(
-            ingestor=_scip_ingestor(cfg.scip_index, root_package=cfg.root_package),
+            ingestor=_scip_ingestor(
+                cfg.scip_index, root_package=cfg.root_package, redact=ctx.redact
+            ),
             files=_scip_change_files(cfg.scip_index, cfg.include),
         )
 
@@ -145,7 +147,10 @@ class FindingsProducer:
     def build(self, cfg: CorpusConfig, *, ctx: ProducerContext) -> ProducerBuild:
         files = glob_files(*cfg.include)
         return ProducerBuild(
-            ingestor=FindingsIngestor(files=files, id_namespace=cfg.name), files=files
+            ingestor=FindingsIngestor(
+                files=files, id_namespace=cfg.name, redact=ctx.redact
+            ),
+            files=files,
         )
 
 

@@ -126,8 +126,13 @@ class StructuralLinkedRetriever:
         ranked: dict[MemoryRef, ScoredMemory] = {item.record.ref: item for item in base.candidates}
         for item in extras:
             prior = ranked.get(item.record.ref)
-            if prior is None or item.score > prior.score:
+            if prior is None:
                 ranked[item.record.ref] = item
+            elif item.score > prior.score:
+                merged_features = {**prior.features, **item.features}
+                ranked[item.record.ref] = ScoredMemory(
+                    record=item.record, score=item.score, features=merged_features
+                )
         candidates = sorted(ranked.values(), key=lambda item: item.score, reverse=True)
         return RetrievalResult(cue=cue, candidates=candidates, shown=candidates[: max(k, 0)])
 
@@ -202,9 +207,13 @@ class StructuralRelevanceRetriever:
 
         fused: list[ScoredMemory] = []
         for rel_rank, candidate in enumerate(base.candidates, start=1):
-            score = 1.0 / (self._rrf_k + rel_rank)  # relevance leg
+            base_rel_rank = candidate.features.get("initial_relevance_rank", float(rel_rank))
+            score = candidate.features.get(
+                "fusion_score", 1.0 / (self._rrf_k + base_rel_rank)
+            )
             features = {
                 **candidate.features,
+                "initial_relevance_rank": base_rel_rank,
                 "relevance_rank": float(rel_rank),
                 "relevance_score": candidate.score,
             }
@@ -213,6 +222,7 @@ class StructuralRelevanceRetriever:
                 score += self._weight * (1.0 / (self._rrf_k + srank))
                 features["structural_relevance_rank"] = float(srank)
             features["structural_fused"] = score
+            features["fusion_score"] = score
             fused.append(
                 ScoredMemory(record=candidate.record, score=candidate.score, features=features)
             )
@@ -350,18 +360,24 @@ class Gateway:
             if scored.node.node_id not in exclude:
                 exclude.add(scored.node.node_id)
                 structural.append(StructuralItem.from_scored_node(scored, corpus=corpus))
+        total_structural_count = len(structural)
+        surviving_code = structural[: self._max_structural_items]
         # Non-code nodes anchored to the surfaced code (findings/docs that *annotate* it, C-2):
         # "what the brain already knows about this code", fused in via the deterministic
         # ``annotates`` edge — the same way the cross-link surfaces the *why*.
-        for node in self._annotations_for(cue.scope, [item.node_id for item in structural]):
+        annotation_items: list[StructuralItem] = []
+        top_refs = [item.node_id for item in surviving_code]
+        for node in self._annotations_for(cue.scope, top_refs):
             if node.node_id not in exclude:
                 exclude.add(node.node_id)
-                structural.append(StructuralItem.from_node(node))
+                annotation_items.append(StructuralItem.from_node(node))
+        total_structural_count += len(annotation_items)
+        final_structural = surviving_code + annotation_items
         return ContextPayload(
             cue_text=prompt,
             memories=memories,
-            structural=structural[: self._max_structural_items],
-            structural_omitted=max(len(structural) - self._max_structural_items, 0),
+            structural=final_structural[: self._max_structural_items],
+            structural_omitted=max(total_structural_count - self._max_structural_items, 0),
             calls=self._call_relations([scored for _, scored in direct]),
             event_id=result.event_id,
         )
@@ -418,8 +434,9 @@ class Gateway:
         graph = self._graph
         if graph is None or not direct:
             return []
+        eligible_kinds = ("function", "method", "class", "interface", "enum")
         eligible_nodes = [
-            scored.node for scored in direct if scored.node.kind in ("function", "method", "class")
+            scored.node for scored in direct if scored.node.kind in eligible_kinds
         ][:_MAX_CALL_RELATIONS]
         if not eligible_nodes:
             return []

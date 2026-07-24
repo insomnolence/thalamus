@@ -39,3 +39,9 @@ def test_edges_pass_through_untouched() -> None:
     result = stamped.ingest_path(Path("."), SCOPE)
     assert len(result.edges) == 1
     assert result.edges[0].type == "contains"
+
+
+def test_operator_trust_is_stamped_explicitly() -> None:
+    stamped = TrustStampingIngestor(_FakeIngestor(), Trust.OPERATOR)
+    result = stamped.ingest_path(Path("."), SCOPE)
+    assert result.nodes[0].metadata["trust"] == "operator"

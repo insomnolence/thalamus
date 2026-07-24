@@ -157,7 +157,7 @@ class Neo4jStructuralIndex:
             )
         except Exception:
             rows = []
-        if not rows:
+        if len(rows) < k:
             # Fallback scan for un-indexed or newly added nodes
             rows = _run(
                 self._driver,

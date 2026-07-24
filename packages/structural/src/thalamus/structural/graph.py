@@ -86,10 +86,19 @@ class InMemoryStructuralGraph:
             if node.scope != self._scope:
                 raise ValueError("structural node scope does not match graph scope")
         with self._lock:
+            old_nodes = dict(self._nodes)
+            old_out = {k: list(v) for k, v in self._out.items()}
+            old_in = {k: list(v) for k, v in self._in.items()}
             self._nodes.clear()
             self._out.clear()
             self._in.clear()
-            self.add(result)
+            try:
+                self.add(result)
+            except Exception:
+                self._nodes = old_nodes
+                self._out = old_out
+                self._in = old_in
+                raise
 
     def remove(self, refs: Iterable[StructuralRef]) -> None:
         with self._lock:

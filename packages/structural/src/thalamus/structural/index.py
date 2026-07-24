@@ -56,10 +56,14 @@ class ScoredNode:
 def _cosine(
     a: tuple[float, ...], a_norm: float, b: tuple[float, ...], b_norm: float
 ) -> float:
-    if a_norm == 0.0 or b_norm == 0.0:
+    denom = a_norm * b_norm
+    if denom == 0.0:
         return 0.0
     dot = sum(x * y for x, y in zip(a, b, strict=True))
-    return dot / (a_norm * b_norm)
+    val = dot / denom
+    if math.isnan(val):
+        return 0.0
+    return max(-1.0, min(1.0, val))
 
 
 @runtime_checkable
@@ -176,11 +180,18 @@ class InMemoryStructuralIndex:
                 and node.scope == scope
                 and ref in self._embeddings
             ]
-        scored: list[ScoredNode] = []
-        for node, embedding, b_norm in candidates:
-            score = _cosine(q, q_norm, embedding, b_norm)
-            scored.append(ScoredNode(node=node, score=score, features={"relevance": score}))
-        return heapq.nlargest(k, scored, key=lambda item: item.score)
+        top_candidates = heapq.nlargest(
+            k,
+            (
+                (_cosine(q, q_norm, embedding, b_norm), idx, node)
+                for idx, (node, embedding, b_norm) in enumerate(candidates)
+            ),
+            key=lambda item: item[0],
+        )
+        return [
+            ScoredNode(node=node, score=score, features={"relevance": score})
+            for score, _idx, node in top_candidates
+        ]
 
 
 class StructuralRetriever:

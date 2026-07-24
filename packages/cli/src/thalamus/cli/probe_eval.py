@@ -221,14 +221,17 @@ def _build_brain_on(
     return L0Retriever(encoder, store), superseded_map, store, driver
 
 
-def _usage_weights(config: ProbeEvalConfig) -> dict[MemoryId, float]:
+def _usage_weights(config: ProbeEvalConfig) -> dict[MemoryRef | MemoryId, float]:
     """Per-memory cross-session usage weight from the durable logs (the L-R1 rung's input)."""
     logs = config.repo / ".thalamus" / "logs"
     events = list(read_event_log(logs / "retrieval.jsonl"))
     signals = list(read_usage_log(logs / "usage.jsonl")) + list(
         read_usage_log(logs / "usage_attributed.jsonl")
     )
-    return {mid: float(n) for mid, n in reuse_by_memory(events, signals).items()}
+    res: dict[MemoryRef | MemoryId, float] = {
+        mid: float(n) for mid, n in reuse_by_memory(events, signals).items()
+    }
+    return res
 
 
 def run_probe_eval(config: ProbeEvalConfig) -> ProbeEvalReport:
@@ -268,7 +271,7 @@ def _run_with_rungs(
     config: ProbeEvalConfig,
     scope: Scope,
     probes: Sequence[TranscriptProbe],
-    usage_weights: Mapping[MemoryId, float],
+    usage_weights: Mapping[MemoryRef | MemoryId, float],
 ) -> ProbeEvalReport:
     """Ablate the Brain-2-signal rungs over the probe corpus: +structrel, +central, and the full
     stack, each a marginal arm over brain-on. Needs Brain 2, so it builds the full gateway (reusing

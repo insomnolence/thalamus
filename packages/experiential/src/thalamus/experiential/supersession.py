@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from threading import RLock
 
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.types import MemoryRef, Scope, Supersession
@@ -29,6 +30,7 @@ class InMemorySupersessionIndex:
     """
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._by_old: dict[MemoryRef, Supersession] = {}
 
     def supersede(self, *, old: MemoryRef, new: MemoryRef, reason: str, at: datetime) -> None:
@@ -36,7 +38,9 @@ class InMemorySupersessionIndex:
             raise ThalamusError("supersession endpoints must share one scope")
         if old == new:
             raise ThalamusError("a memory cannot supersede itself")
-        self._by_old[old] = Supersession(superseded_by=new.memory_id, reason=reason, at=at)
+        with self._lock:
+            self._by_old[old] = Supersession(superseded_by=new.memory_id, reason=reason, at=at)
 
     def superseded(self, scope: Scope) -> Mapping[MemoryRef, Supersession]:
-        return {ref: record for ref, record in self._by_old.items() if ref.scope == scope}
+        with self._lock:
+            return {ref: record for ref, record in self._by_old.items() if ref.scope == scope}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from thalamus.core.types import RepoId, Scope, StructuralRef, TenantId
 from thalamus.structural import (
     IngestResult,
@@ -67,3 +68,32 @@ def test_replace_removes_nodes_absent_from_latest_parse() -> None:
     )
     assert graph.get(StructuralRef(SCOPE, "module:m")) is None
     assert graph.get(StructuralRef(SCOPE, "module:new")) is not None
+
+
+def test_replace_exception_safety() -> None:
+    class FailingGraph(InMemoryStructuralGraph):
+        def __init__(self) -> None:
+            super().__init__(SCOPE)
+            self.fail_after_add = False
+
+        def add(self, result: IngestResult) -> None:
+            super().add(result)
+            if self.fail_after_add:
+                raise RuntimeError("injected failure after replacement state was written")
+
+    graph = FailingGraph()
+    graph.add(_result())
+    replacement = IngestResult(
+        nodes=[StructuralNode("module:new", "module", "new", SCOPE)],
+        edges=[],
+    )
+    graph.fail_after_add = True
+    with pytest.raises(RuntimeError, match="injected failure"):
+        graph.replace(replacement)
+
+    assert graph.get(StructuralRef(SCOPE, "module:m")) is not None
+    assert graph.get(StructuralRef(SCOPE, "module:new")) is None
+    assert {
+        node.node_id
+        for node in graph.neighbors(StructuralRef(SCOPE, "module:m"), direction="out")
+    } == {"class:m.A", "function:m.g"}

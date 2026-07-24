@@ -56,6 +56,19 @@ class _Capture:
         return {"ingested": 0}
 
 
+class _BlockingPass(_SignallingPass):
+    """Hold a cycle open so stop-timeout/restart behavior can be exercised."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+
+    def run(self, ctx: PassContext) -> PassOutcome:
+        outcome = super().run(ctx)
+        self.release.wait(timeout=5.0)
+        return outcome
+
+
 def test_run_once_runs_capture_then_the_scheduler_synchronously() -> None:
     dpass = _SignallingPass()
     capture = _Capture()
@@ -166,3 +179,20 @@ def test_dream_only_ticker_with_no_capture_still_consolidates() -> None:
     report = ticker.run_once()
     assert dpass.runs == 1
     assert report is not None and report.ok
+
+
+def test_start_during_timed_out_stop_restarts_after_old_cycle_finishes() -> None:
+    dpass = _BlockingPass()
+    ticker = MaintenanceTicker(Scheduler([dpass]), _ctx, interval_seconds=3600)
+    ticker.start(run_initial=True)
+    assert dpass.ran.wait(timeout=5.0), "initial cycle never started"
+
+    ticker.stop(join_timeout=0.01)
+    ticker.start(run_initial=True)
+    dpass.ran.clear()
+    dpass.release.set()
+    try:
+        assert dpass.ran.wait(timeout=5.0), "queued restart never ran a fresh cycle"
+        assert dpass.runs == 2
+    finally:
+        ticker.stop()

@@ -28,7 +28,7 @@ def compose_rung_arms(
     base: Retriever,
     superseded: Mapping[MemoryRef, Supersession],
     *,
-    usage_weights: Mapping[MemoryId, float] | None = None,
+    usage_weights: Mapping[MemoryRef | MemoryId, float] | None = None,
     usage_weight: float = 1.0,
     links: CrossLinkIndex | None = None,
     structural_retrievers: Sequence[StructuralRetriever] = (),

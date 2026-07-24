@@ -107,11 +107,19 @@ classical methods handle without an unmeasurable model in the path.
 
 3. **Secret redaction at ingest (T2).** ✅ **BUILT.** `core/redaction.py` `redact_secrets()` — a
    deterministic scrubber for known key/token shapes (AWS, GitHub, Slack, Google, OpenAI/Anthropic,
-   JWT, PEM private keys, `scheme://user:pass@` URLs, and secret-named `KEY=value` whose value carries
-   a digit/symbol). A generic high-entropy sweep exists but is **opt-in** (false-positives on the
-   code hashes/ids a code-aware brain holds). Runs redact-before-embed at every free-text boundary
-   (`cli/remember`, `experiential/episode`, the `docs`/`text` ingestors) so secrets never enter the
-   vector index or Neo4j — redaction-after-the-fact on an embedded store is the hard case we avoided.
+   JWT, PEM private keys, `scheme://user:pass@` URLs, and secret-named `KEY=value`). Authentication
+   fields use a deliberately conservative structural rule rather than a scheme allowlist or
+   token-shape guess: keys ending in `authorization`/compound `auth` (plus the narrow legacy forms
+   `auth_key`, `auth_header`, and `auth_data`) are credential fields; a `<scheme> <credential>` value
+   preserves the scheme and scrubs the remainder, while a single value is scrubbed in full. Folded
+   HTTP-header continuations are included. This intentionally accepts benign text loss inside a
+   recognized auth field so opaque or vendor-specific schemes cannot leak. Protocol/config names
+   such as `oauth` and `authorization_endpoint` are not auth fields; explicit secret names such as
+   `oauth_token` still are. A generic high-entropy sweep exists but is **opt-in** (false-positives on
+   the code hashes/ids a code-aware brain holds). Runs redact-before-embed at every free-text
+   boundary (`cli/remember`, `experiential/episode`, the `docs`/`text` ingestors) so secrets never
+   enter the vector index or Neo4j — redaction-after-the-fact on an embedded store is the hard case
+   we avoided.
    Redaction *events* (kind + count, **never the secret**) are recorded to a `redaction.jsonl`
    telemetry log (`instrumentation/redaction_log.py`) that `verdict` summarizes ("Secret redaction:
    N scrubbed across M writes — <by-kind>"). The whole layer is one switch —

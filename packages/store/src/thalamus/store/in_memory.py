@@ -15,20 +15,33 @@ from __future__ import annotations
 
 import heapq
 import math
+import weakref
 from collections.abc import Callable, Sequence
 from threading import RLock
+from types import MethodType
+from typing import Any
 
 from thalamus.core.exceptions import DimensionMismatchError
-from thalamus.core.types import MemoryRecord, MemoryRef, Scope, ScoredMemory, Vector
+from thalamus.core.types import (
+    MemoryRecord,
+    MemoryRef,
+    Scope,
+    ScoredMemory,
+    Vector,
+)
 
 
 def _cosine(
     a: tuple[float, ...], a_norm: float, b: tuple[float, ...], b_norm: float
 ) -> float:
-    if a_norm == 0.0 or b_norm == 0.0:
+    denom = a_norm * b_norm
+    if denom == 0.0:
         return 0.0
     dot = sum(x * y for x, y in zip(a, b, strict=True))
-    return dot / (a_norm * b_norm)
+    val = dot / denom
+    if math.isnan(val):
+        return 0.0
+    return max(-1.0, min(1.0, val))
 
 
 class InMemoryStore:
@@ -45,12 +58,16 @@ class InMemoryStore:
         self._embeddings: dict[MemoryRef, tuple[float, ...]] = {}
         self._norms: dict[MemoryRef, float] = {}
         self._by_scope: dict[Scope, dict[MemoryRef, None]] = {}
-        self._listeners: list[Callable[[Scope], None]] = []
+        self._listeners: list[Any] = []
 
     def add_listener(self, listener: Callable[[Scope], None]) -> None:
         """Register a callback for record writes (e.g. invalidating lexical caches)."""
+        # Bound methods must not keep their owner (notably LexicalRetriever) alive forever.
+        # Standalone functions, lambdas, and callable objects have no separate owner to retain
+        # them, so the registry itself provides their required strong lifetime.
+        ref = weakref.WeakMethod(listener) if isinstance(listener, MethodType) else listener
         with self._lock:
-            self._listeners.append(listener)
+            self._listeners.append(ref)
 
     def __len__(self) -> int:
         with self._lock:
@@ -67,20 +84,21 @@ class InMemoryStore:
         vec = tuple(float(x) for x in embedding)
         norm = math.sqrt(sum(x * x for x in vec))
         with self._lock:
-            old_record = self._records.get(ref)
-            if old_record is not None and old_record.scope != record.scope:
-                old_map = self._by_scope.get(old_record.scope)
-                if old_map is not None:
-                    old_map.pop(ref, None)
-                    if not old_map:
-                        self._by_scope.pop(old_record.scope, None)
             self._records[ref] = record
             self._embeddings[ref] = vec
             self._norms[ref] = norm
             self._by_scope.setdefault(record.scope, {})[ref] = None
             listeners = list(self._listeners)
-        for listener in listeners:
-            listener(record.scope)
+        dead: list[Any] = []
+        for listener_ref in listeners:
+            fn = listener_ref() if isinstance(listener_ref, weakref.WeakMethod) else listener_ref
+            if fn is not None:
+                fn(record.scope)
+            elif isinstance(listener_ref, weakref.WeakMethod):
+                dead.append(listener_ref)
+        if dead:
+            with self._lock:
+                self._listeners = [item for item in self._listeners if item not in dead]
 
     def get(self, ref: MemoryRef) -> MemoryRecord | None:
         with self._lock:
@@ -117,19 +135,24 @@ class InMemoryStore:
             return []
         q_tuple = tuple(float(x) for x in query)
         q_norm = math.sqrt(sum(x * x for x in q_tuple))
-        scored: list[ScoredMemory] = []
         with self._lock:
             refs = list(self._by_scope.get(scope, {}).keys())
-            for ref in refs:
-                record = self._records.get(ref)
-                embedding = self._embeddings.get(ref)
-                b_norm = self._norms.get(ref, 0.0)
-                if record is None or embedding is None or record.scope != scope:
-                    continue
-                score = _cosine(q_tuple, q_norm, embedding, b_norm)
-                scored.append(
-                    ScoredMemory(
-                        record=record, score=score, features={"relevance": score}
-                    )
-                )
-        return heapq.nlargest(k, scored, key=lambda item: item.score)
+            candidates = [
+                (record, self._embeddings[ref], self._norms.get(ref, 0.0))
+                for ref in refs
+                if (record := self._records.get(ref)) is not None
+                and record.scope == scope
+                and ref in self._embeddings
+            ]
+        top_candidates = heapq.nlargest(
+            k,
+            (
+                (_cosine(q_tuple, q_norm, embedding, b_norm), idx, record)
+                for idx, (record, embedding, b_norm) in enumerate(candidates)
+            ),
+            key=lambda item: item[0],
+        )
+        return [
+            ScoredMemory(record=record, score=score, features={"relevance": score})
+            for score, _idx, record in top_candidates
+        ]

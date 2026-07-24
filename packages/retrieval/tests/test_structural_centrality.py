@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from thalamus.core.types import (
     Cue,
     Hemisphere,
@@ -16,7 +17,12 @@ from thalamus.core.types import (
     ScoredMemory,
     TenantId,
 )
-from thalamus.retrieval import CentralityWeightsRef, StructuralCentralityRetriever
+from thalamus.retrieval import (
+    CentralityWeightsRef,
+    StructuralCentralityRetriever,
+    UsageWeightedRetriever,
+    UsageWeightsRef,
+)
 
 SCOPE = Scope(tenant_id=TenantId("t1"), repo_id=RepoId("r1"))
 NOW = datetime(2026, 6, 16, tzinfo=UTC)
@@ -101,3 +107,41 @@ def test_native_score_preserved_and_centrality_recorded_in_features() -> None:
     assert by_id["C"].features["centrality_rank"] == 1.0
     assert by_id["C"].features["centrality_weight"] == 7.0
     assert "centrality_rank" not in by_id["A"].features  # disconnected memory carries no features
+
+
+def test_outer_centrality_preserves_inner_usage_contribution() -> None:
+    """The live default is centrality(usage(relevance)); both signal legs must survive."""
+    inner = _Stub([_scored("A", 3.0), _scored("B", 2.0), _scored("C", 1.0)])
+    usage = UsageWeightsRef({MemoryId("C"): 9.0})
+    centrality = CentralityWeightsRef({_ref("B"): 9.0})
+
+    usage_only = UsageWeightedRetriever(inner, usage)
+    assert _order(usage_only.retrieve(CUE, k=3)) == ["C", "A", "B"]
+    assert _order(StructuralCentralityRetriever(inner, centrality).retrieve(CUE, k=3)) == [
+        "B",
+        "A",
+        "C",
+    ]
+
+    result = StructuralCentralityRetriever(usage_only, centrality).retrieve(CUE, k=3)
+    assert _order(result) == ["B", "C", "A"]
+    by_id = {str(c.record.memory_id): c for c in result.candidates}
+    assert "usage_rank" in by_id["C"].features
+    assert "centrality_rank" in by_id["B"].features
+    # These exact sums are the regression guard: the buggy outer rung recomputed relevance plus
+    # centrality and discarded C's inner usage term, while still producing the same B,C,A order.
+    assert by_id["C"].features["fusion_score"] == pytest.approx(1 / 63 + 1 / 61)
+    assert by_id["B"].features["fusion_score"] == pytest.approx(1 / 62 + 1 / 61)
+
+
+def test_usage_leg_changes_composed_order_when_outer_signal_is_weaker() -> None:
+    inner = _Stub([_scored("A", 3.0), _scored("B", 2.0), _scored("C", 1.0)])
+    centrality = CentralityWeightsRef({_ref("B"): 9.0})
+    outer_only = StructuralCentralityRetriever(inner, centrality, weight=0.75)
+    composed = StructuralCentralityRetriever(
+        UsageWeightedRetriever(inner, UsageWeightsRef({MemoryId("C"): 9.0})),
+        centrality,
+        weight=0.75,
+    )
+    assert _order(outer_only.retrieve(CUE, k=3)) == ["B", "A", "C"]
+    assert _order(composed.retrieve(CUE, k=3)) == ["C", "B", "A"]

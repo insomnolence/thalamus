@@ -59,9 +59,14 @@ class MaintenanceTicker:
         self._capture = capture
         self._housekeeping = housekeeping
         self._interval = interval_seconds
-        self._wake = threading.Event()
-        self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._start_lock = threading.Lock()
+        self._trigger_lock = threading.Lock()
+        self._pending_trigger = False
+        self._restart_requested = False
+        self._restart_run_initial = False
 
     def run_once(self) -> CycleReport | None:
         """Run one full cycle (housekeep, perceive, then consolidate) synchronously in-caller."""
@@ -99,49 +104,92 @@ class MaintenanceTicker:
 
     def trigger(self) -> None:
         """Request a consolidation cycle as soon as possible (the write-trigger). Thread-safe."""
-        self._wake.set()
+        with self._trigger_lock:
+            self._pending_trigger = True
+            self._wake.set()
 
     def start(self, *, run_initial: bool = False) -> None:
         """Start the background thread (idempotent).
 
         If ``run_initial=True``, triggers an initial maintenance cycle immediately on launch.
+        If a prior ``stop()`` timed out while a cycle was still finishing, the restart is
+        queued and begins as soon as that old thread exits.
         """
-        if self._thread is not None:
-            return
-        if run_initial:
+        with self._start_lock:
+            if self._thread is not None:
+                if self._thread.is_alive():
+                    if self._stop.is_set():
+                        self._restart_requested = True
+                        self._restart_run_initial |= run_initial
+                    return
+                self._thread = None
+            self._start_locked(run_initial=run_initial)
+
+    def stop(self, *, join_timeout: float = 5.0) -> None:
+        """Signal the thread to finish its current cycle and exit."""
+        with self._start_lock:
+            self._restart_requested = False
+            self._restart_run_initial = False
+            self._stop.set()
             self._wake.set()
+            thread = self._thread
+        if thread is not None:
+            thread.join(timeout=join_timeout)
+            with self._start_lock:
+                if self._thread is thread and not thread.is_alive():
+                    self._thread = None
+            if thread.is_alive():
+                import logging
+
+                logging.getLogger("thalamus.dreaming").warning(
+                    "MaintenanceTicker thread failed to join within timeout"
+                )
+
+    def _start_locked(self, *, run_initial: bool) -> None:
+        """Start a fresh generation while ``_start_lock`` is held."""
+        self._restart_requested = False
+        self._restart_run_initial = False
+        self._stop.clear()
+        with self._trigger_lock:
+            self._pending_trigger = run_initial
+            if run_initial:
+                self._wake.set()
+            else:
+                self._wake.clear()
         self._thread = threading.Thread(
             target=self._loop, name="thalamus-maintenance", daemon=True
         )
         self._thread.start()
 
-    def stop(self, *, join_timeout: float = 5.0) -> None:
-        """Signal the thread to finish its current cycle and exit."""
-        self._stop.set()
-        self._wake.set()
-        if self._thread is not None:
-            self._thread.join(timeout=join_timeout)
-            self._thread = None
-
     def _loop(self) -> None:
-        while not self._stop.is_set():
-            # wait() returns True when woken by a trigger (a write), False on interval timeout.
-            triggered = self._wake.wait(timeout=self._interval)
-            if self._stop.is_set():
-                break
-            # If wait() timed out but a trigger set _wake right after, treat as
-            # triggered so signal is not lost
-            if not triggered and self._wake.is_set():
-                triggered = True
-            self._wake.clear()
-            try:
-                if not triggered:
-                    # Periodic wake: housekeep (rotate oversized logs), then perceive new commits,
-                    # so consolidation in this same cycle links and scores what was just captured.
-                    # A write-trigger skips both — a remember changed neither the logs' size nor the
-                    # git history, only the views refreshed below.
-                    self._run_housekeeping()
-                    self._run_capture()
-                self._run_dream()
-            except Exception as exc:  # never let the background thread die on a transient error
-                print(f"thalamus: maintenance cycle errored (will retry): {exc}", file=sys.stderr)
+        current = threading.current_thread()
+        try:
+            while not self._stop.is_set():
+                # wait() returns True when woken by a trigger (a write), False on interval timeout.
+                triggered = self._wake.wait(timeout=self._interval)
+                if self._stop.is_set():
+                    break
+                with self._trigger_lock:
+                    was_triggered = triggered or self._pending_trigger
+                    self._pending_trigger = False
+                    self._wake.clear()
+                try:
+                    if not was_triggered:
+                        # Periodic wake: housekeep (rotate oversized logs), then perceive new
+                        # commits, so consolidation in this same cycle links and scores what was
+                        # just captured. A write-trigger skips both — a remember changed neither
+                        # the logs' size nor the git history, only the views refreshed below.
+                        self._run_housekeeping()
+                        self._run_capture()
+                    self._run_dream()
+                except Exception as exc:  # never die on a transient backend error
+                    print(
+                        f"thalamus: maintenance cycle errored (will retry): {exc}",
+                        file=sys.stderr,
+                    )
+        finally:
+            with self._start_lock:
+                if self._thread is current:
+                    self._thread = None
+                    if self._restart_requested:
+                        self._start_locked(run_initial=self._restart_run_initial)

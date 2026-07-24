@@ -50,7 +50,9 @@ def module_index(nodes: Iterable[StructuralNode], repo_root: Path) -> dict[str, 
         if node.kind != "module" or node.anchor is None:
             continue
         try:
-            rel = Path(node.anchor.path).resolve().relative_to(root).as_posix()
+            p = Path(node.anchor.path)
+            abs_p = p if p.is_absolute() else root / p
+            rel = abs_p.resolve().relative_to(root).as_posix()
         except ValueError:
             continue  # anchored outside the repo root — not addressable by a footprint
         index[rel] = node.ref

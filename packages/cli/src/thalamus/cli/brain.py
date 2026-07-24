@@ -25,6 +25,7 @@ from pathlib import Path
 from thalamus.cli.project import CorpusConfig
 from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import Encoder, Retriever, Store, SupersessionIndex
+from thalamus.core.trust import Trust
 from thalamus.core.types import Hemisphere, MemoryRecord, Scope
 from thalamus.experiential import InMemorySupersessionIndex
 from thalamus.gateway import (
@@ -102,7 +103,9 @@ def _default_ingestor(resolve_calls: bool) -> Ingestor:
     return CompositeIngestor([ast_pass, JediCallIngestor()])
 
 
-def _scip_ingestor(scip_index: Path, *, root_package: str | None = None) -> Ingestor:
+def _scip_ingestor(
+    scip_index: Path, *, root_package: str | None = None, redact: bool = True
+) -> Ingestor:
     """The language-agnostic SCIP ingestor (structure + precise calls in one pass).
 
     ``scip_index`` is a `.scip` artifact built out-of-band (e.g. ``scip-typescript``;
@@ -111,17 +114,19 @@ def _scip_ingestor(scip_index: Path, *, root_package: str | None = None) -> Inge
         raise ThalamusError(
             "SCIP ingestion needs the 'scip' extra: install thalamus-structural[scip]"
         )
-    return ScipIngestor(scip_index, root_package=root_package)
+    return ScipIngestor(scip_index, root_package=root_package, redact=redact)
 
 
-def _code_ingestor(code_language: str, scip_index: Path | None, resolve_calls: bool) -> Ingestor:
+def _code_ingestor(
+    code_language: str, scip_index: Path | None, resolve_calls: bool, redact: bool = True
+) -> Ingestor:
     """Pick the code-corpus ingestor for the language (SCIP for non-Python)."""
     if code_language == "python":
         return _default_ingestor(resolve_calls)
     if code_language == "typescript":
         if scip_index is None:
             raise ThalamusError("code_language='typescript' requires a scip_index path")
-        return _scip_ingestor(scip_index)
+        return _scip_ingestor(scip_index, redact=redact)
     raise ThalamusError(f"unknown code_language: {code_language!r} (python|typescript)")
 
 
@@ -150,6 +155,7 @@ def build_corpora(
     resolve_calls: bool = True,
     resolve_docs: bool = True,
     redact: bool = True,
+    trust: Trust = Trust.OPERATOR,
 ) -> list[CorpusSpec]:
     """The Brain-2 corpora: code (Python AST + jedi, or SCIP for TS/others) and docs (Markdown).
 
@@ -160,8 +166,9 @@ def build_corpora(
     the language default; ``code_index``/``doc_index`` default to in-memory when not supplied."""
     code_ingestor = (
         ingestor if ingestor is not None
-        else _code_ingestor(code_language, scip_index, resolve_calls)
+        else _code_ingestor(code_language, scip_index, resolve_calls, redact=redact)
     )
+    code_ingestor = TrustStampingIngestor(code_ingestor, trust)
     code_index = code_index if code_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
     corpora = [CorpusSpec(code_ingestor, code_index, _code_files_for(code_language), "code")]
     if doc_roots:
@@ -175,9 +182,11 @@ def build_corpora(
                 if doc_index_factory is not None
                 else InMemoryStructuralIndex(dim=encoder.dim)
             )
+            doc_ingestor: Ingestor = DocIngestor(id_namespace=label, redact=redact)
+            doc_ingestor = TrustStampingIngestor(doc_ingestor, trust)
             corpora.append(
                 CorpusSpec(
-                    DocIngestor(id_namespace=label, redact=redact),
+                    doc_ingestor,
                     index,
                     markdown_files,
                     corpus,
@@ -186,7 +195,9 @@ def build_corpora(
             )
     elif resolve_docs:
         doc_index = doc_index if doc_index is not None else InMemoryStructuralIndex(dim=encoder.dim)
-        corpora.append(CorpusSpec(DocIngestor(redact=redact), doc_index, markdown_files, "docs"))
+        doc_ingestor = DocIngestor(redact=redact)
+        doc_ingestor = TrustStampingIngestor(doc_ingestor, trust)
+        corpora.append(CorpusSpec(doc_ingestor, doc_index, markdown_files, "docs"))
     return corpora
 
 
@@ -219,12 +230,9 @@ def build_corpora_from_configs(
     specs: list[CorpusSpec] = []
     for cfg in configs:
         built = get_producer(cfg.kind).build(cfg, ctx=ctx)
-        # Stamp non-operator corpora so their nodes carry provenance for the recall-path fence
-        # (§17.4 T1/T3). Operator corpora (the default) are left unstamped — operator is the
-        # payload's implicit default, so this is a no-op on the single-operator configuration.
-        ingestor = built.ingestor
-        if cfg.trust.is_untrusted:
-            ingestor = TrustStampingIngestor(ingestor, cfg.trust)
+        # Stamp every corpus explicitly so trust comes from producer provenance, never a node-kind
+        # heuristic. Legacy unstamped nodes remain operator-trusted at the payload boundary.
+        ingestor = TrustStampingIngestor(built.ingestor, cfg.trust)
         specs.append(
             CorpusSpec(ingestor, make_index(cfg.name), built.files, cfg.name, root=cfg.root)
         )
@@ -272,6 +280,7 @@ def build_two_hemisphere_gateway(
     usage_sink: UsageSink | None = None,
     explore_epsilon: float = 0.0,
     explore_pool: int = 20,
+    trust: Trust = Trust.OPERATOR,
 ) -> Gateway:
     """Re-derive Brain 2 + cross-links from ``repo`` and return a two-hemisphere gateway.
 
@@ -299,6 +308,7 @@ def build_two_hemisphere_gateway(
         scip_index=scip_index,
         resolve_calls=resolve_calls,
         resolve_docs=resolve_docs,
+        trust=trust,
     )
 
     if rebuild:  # force the full re-derive: clear persisted graph + manifest so all files are "new"

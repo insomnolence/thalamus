@@ -231,7 +231,7 @@ class Neo4jStructuralGraph:
         refs: Sequence[StructuralRef],
         *,
         edge_types: Sequence[str] | None = None,
-        direction: Direction = "both",
+        direction: Direction = "out",
     ) -> dict[StructuralRef, list[StructuralNode]]:
         if not refs:
             return {}

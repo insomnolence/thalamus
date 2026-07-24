@@ -7,8 +7,9 @@ every ingestor, this decorator wraps any :class:`~thalamus.structural.ingestor.I
 surfaced later via a cross-link or graph edge still carries its provenance — the recall-path fence
 (``gateway/payload.py``) reads it regardless of how the node reached the payload.
 
-Applied only for non-operator corpora (the build path leaves operator content unstamped — operator
-is the payload's implicit default), so it is a no-op on the common single-operator configuration.
+Applied to every corpus, including operator corpora. Explicit stamps make provenance independent of
+node kind and leave no ambiguity between legacy unstamped data and newly ingested operator content.
+The payload still treats legacy unstamped nodes as operator-authored for backward compatibility.
 """
 
 from __future__ import annotations

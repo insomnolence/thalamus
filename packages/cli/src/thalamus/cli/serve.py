@@ -615,8 +615,8 @@ def build_serve_gateway(
     # L-R1 step 3 — the usage rung's weights, now read FROM THE BRAIN (the consolidated behavioral
     # store) rather than recomputed from the log files each tick. Distinct used-sessions per memory
     # — the "reliably-useful core". Empty for a cold brain / investigate. Behavioral (firewall).
-    def _recompute_usage_weights() -> dict[MemoryId, float]:
-        return dict(behavioral_store.usage_weights())
+    def _recompute_usage_weights() -> dict[MemoryRef | MemoryId, float]:
+        return {k: float(v) for k, v in behavioral_store.usage_weights().items()}
 
     usage_refresh = UsageRefreshPass(_recompute_usage_weights, usage_ref.refresh)
 

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from thalamus.core.exceptions import ThalamusError
+from thalamus.core.redaction import redact_secrets
 from thalamus.core.types import Scope
 from thalamus.structural.ids import module_id
 from thalamus.structural.schema import IngestResult, SourceAnchor, StructuralEdge, StructuralNode
@@ -49,9 +50,12 @@ class ScipIngestor:
     optionally prefixes module dotted-names (mirrors ``PythonAstIngestor``).
     """
 
-    def __init__(self, index_path: Path, *, root_package: str | None = None) -> None:
+    def __init__(
+        self, index_path: Path, *, root_package: str | None = None, redact: bool = True
+    ) -> None:
         self._index_path = Path(index_path)
         self._root_package = root_package
+        self._redact = redact
 
     def ingest_path(self, root: Path, scope: Scope) -> IngestResult:
         index = self._load_index()
@@ -115,16 +119,22 @@ class ScipIngestor:
                     continue
                 remainder = parsed.descriptors[n_path:]
                 doc_text = _doc_text(sym.documentation)
+                if self._redact and doc_text:
+                    doc_text = redact_secrets(doc_text).text
                 kind = _node_kind(remainder, doc_text)
                 if kind is None:
                     continue
                 if kind == "module":
                     node_id, label = mod_id, dotted
+                    if self._redact:
+                        label = redact_secrets(label).text
                     module_seen = True
                 else:
                     qualified = ".".join(d.name for d in remainder)
                     node_id = f"{kind}:{dotted}.{qualified}"
                     label = f"{dotted}.{qualified}"
+                    if self._redact:
+                        label = redact_secrets(label).text
                 anchor = _anchor(abs_path, defs.get(sym.symbol))
                 nodes.append(
                     StructuralNode(
@@ -140,7 +150,17 @@ class ScipIngestor:
 
             if not module_seen:  # defensive: synthesize a module node if the index omits one
                 anchor = SourceAnchor(abs_path, 1, 1)
-                nodes.append(StructuralNode(mod_id, "module", dotted, scope, anchor, {}))
+                mod_label = redact_secrets(dotted).text if self._redact else dotted
+                nodes.append(
+                    StructuralNode(
+                        mod_id,
+                        "module",
+                        mod_label,
+                        scope,
+                        anchor,
+                        {"text": _embeddable_text("module", mod_label, "")},
+                    )
+                )
 
         return nodes, symbol_to_id
 
@@ -202,11 +222,12 @@ class ScipIngestor:
         for doc in index.documents:
             callable_defs: list[tuple[str, tuple[int, int, int, int]]] = []
             for occ in doc.occurrences:
-                if not (occ.symbol_roles & _DEFINITION) or not occ.enclosing_range:
+                rng = occ.enclosing_range or occ.range
+                if not (occ.symbol_roles & _DEFINITION) or not rng:
                     continue
                 node_id = symbol_to_id.get(occ.symbol)
                 if node_id is not None and kind_by_id.get(node_id) in ("function", "method"):
-                    callable_defs.append((node_id, _range_bounds(list(occ.enclosing_range))))
+                    callable_defs.append((node_id, _range_bounds(list(rng))))
             for occ in doc.occurrences:
                 if occ.symbol_roles & _DEFINITION:
                     continue  # references only

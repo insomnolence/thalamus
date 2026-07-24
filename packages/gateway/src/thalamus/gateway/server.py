@@ -8,6 +8,10 @@ this only translates the protocol. Requires the optional ``mcp`` extra:
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
+import contextvars
+import threading
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
@@ -39,6 +43,31 @@ type RecentReader = Callable[[int, str | None], str]
 # even in investigate mode.
 type PlanReader = Callable[[str, int], str]
 
+async def _run_sync[T](call: Callable[[], T]) -> T:
+    """Run blocking gateway work without tying it to an executor's process lifetime.
+
+    AnyIO and asyncio worker pools leave a waiting non-daemon worker behind on supported Python
+    3.14 runtimes, which makes an otherwise completed in-process MCP request hang indefinitely at
+    teardown. A request-scoped worker exits as soon as its one call completes, preserves the
+    caller's context variables, and still keeps blocking store/encoder work off the event loop.
+    """
+    completed: concurrent.futures.Future[T] = concurrent.futures.Future()
+    context = contextvars.copy_context()
+
+    def worker() -> None:
+        try:
+            completed.set_result(context.run(call))
+        except BaseException as error:
+            completed.set_exception(error)
+
+    threading.Thread(target=worker, name="thalamus-mcp-worker", daemon=True).start()
+    # Poll a thread-safe future instead of relying on call_soon_threadsafe's selector wakeup.
+    # Python 3.14 can lose that wakeup after append-only log I/O, leaving a completed request
+    # asleep forever; the short timer also gives cancellation a regular checkpoint.
+    while not completed.done():
+        await asyncio.sleep(0.01)
+    return completed.result()
+
 
 def resolve_session_id(
     explicit: str | None, connection_session: str | None, default: SessionId | None
@@ -46,9 +75,9 @@ def resolve_session_id(
     """Pick the session id a recall is keyed by: an explicit caller id wins; else the
     per-connection MCP session (HTTP, many clients); else the process default (stdio, one client).
     Pure, so the precedence is unit-testable away from the transport."""
-    if explicit is not None:
+    if explicit is not None and explicit.strip():
         return SessionId(explicit)
-    if connection_session is not None:
+    if connection_session is not None and connection_session.strip():
         return SessionId(connection_session)
     return default
 
@@ -102,9 +131,6 @@ def build_server(
     # path 404s — a health probe or LAN scanner hitting GET /health is the most common source of
     # that 404 log noise. Return 200 with no brain state and no auth (pure liveness), so the common
     # legitimate probe stops 404ing. Only mounted for the HTTP transport; harmless under stdio.
-    import threading
-
-    import anyio
     from starlette.requests import Request
     from starlette.responses import JSONResponse, Response
 
@@ -136,7 +162,7 @@ def build_server(
             except RuntimeError:  # no active context (shouldn't happen inside a tool call)
                 connection_session = None
         target_session = resolve_session_id(session_id, connection_session, default_session_id)
-        payload = await anyio.to_thread.run_sync(
+        payload = await _run_sync(
             lambda: gateway.recall(
                 prompt=prompt,
                 scope=scope,
@@ -165,16 +191,16 @@ def build_server(
             with pending_lock:
                 payload = pending.pop(key, None)
             if payload is not None:  # fast path: the live payload is still cached
-                signals = await anyio.to_thread.run_sync(
+                signals = await _run_sync(
                     lambda: gateway.record_outcome(payload, output_text)
                 )
                 return f"recorded {len(signals)} usage signal(s)"
             # Fallback: the cached payload is gone (serve restarted, or another worker served the
             # recall). Rebuild the shown memories from durable state so the signal isn't lost.
             if resolve_shown is not None:
-                shown = await anyio.to_thread.run_sync(lambda: resolve_shown(key))
+                shown = await _run_sync(lambda: resolve_shown(key))
                 if shown is not None:
-                    signals = await anyio.to_thread.run_sync(
+                    signals = await _run_sync(
                         lambda: gateway.record_outcome_for(key, shown, output_text)
                     )
                     return f"recorded {len(signals)} usage signal(s)"
@@ -189,7 +215,7 @@ def build_server(
             Answers "what's the latest / what did we just do" — a time-ordered view, distinct
             from the relevance-ranked ``recall`` (use ``recall`` to find what's *relevant* to a
             topic; use this to see what's *recent*)."""
-            return await anyio.to_thread.run_sync(lambda: recent_reader(limit, kind))
+            return await _run_sync(lambda: recent_reader(limit, kind))
 
     if plan_reader is not None:
 
@@ -200,7 +226,7 @@ def build_server(
             breaks"), and gather the decisions/constraints/gotchas the brain has recorded about
             everything in scope — one fused brief that flags where its coverage is blind. Use it
             to see the cross-cutting impact a local edit view misses; `hops` bounds the radius."""
-            return await anyio.to_thread.run_sync(lambda: plan_reader(target, hops))
+            return await _run_sync(lambda: plan_reader(target, hops))
 
     if remember_writer is not None and not read_only:
 
@@ -221,7 +247,7 @@ def build_server(
             `why`: the reasoning (makes it useful later). `files`: paths it's about.
             `importance`: 1 normal, 2 load-bearing, 3 project-defining. `supersedes`: id of a
             memory this replaces (kept but demoted, never dropped)."""
-            record = await anyio.to_thread.run_sync(
+            record = await _run_sync(
                 lambda: remember_writer(
                     kind, text, why, files or (), importance, memory_id, supersedes
                 )

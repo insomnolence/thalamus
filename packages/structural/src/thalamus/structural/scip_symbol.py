@@ -100,6 +100,8 @@ def _take_space_escaped(s: str, count: int) -> tuple[list[str], str]:
             continue
         buf.append(c)
         i += 1
+    if buf and len(fields) < count:
+        fields.append("".join(buf))
     return fields, s[i:]
 
 

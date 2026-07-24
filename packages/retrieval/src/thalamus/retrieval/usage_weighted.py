@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from thalamus.core.protocols import Retriever
-from thalamus.core.types import Cue, MemoryId, RetrievalResult, ScoredMemory
+from thalamus.core.types import Cue, MemoryId, MemoryRef, RetrievalResult, ScoredMemory
 
 
 class UsageWeightsRef:
@@ -36,10 +36,10 @@ class UsageWeightsRef:
     the GIL) and the maintenance thread :meth:`refresh`-es with one atomic assignment, so a
     concurrent refresh is observed whole — never as a torn mix — with no lock."""
 
-    def __init__(self, weights: Mapping[MemoryId, float] | None = None) -> None:
-        self.weights: Mapping[MemoryId, float] = weights if weights is not None else {}
+    def __init__(self, weights: Mapping[MemoryRef | MemoryId, float] | None = None) -> None:
+        self.weights: Mapping[MemoryRef | MemoryId, float] = weights if weights is not None else {}
 
-    def refresh(self, weights: Mapping[MemoryId, float]) -> None:
+    def refresh(self, weights: Mapping[MemoryRef | MemoryId, float]) -> None:
         """Atomically replace the current weights (a single ``STORE_ATTR``)."""
         self.weights = weights
 
@@ -69,25 +69,41 @@ class UsageWeightedRetriever:
         candidates = self._inner.retrieve(cue, k).candidates
         usage = self._weights.weights  # snapshot once (atomic) — a concurrent refresh is whole
 
+        def _get_w(c: ScoredMemory) -> float:
+            val = usage.get(c.record.ref)
+            if val is not None:
+                return val
+            return usage.get(c.record.memory_id, 0.0)
+
         # The usage leg: candidates with a positive usage weight, most-used first → a usage rank.
         used = sorted(
-            (c for c in candidates if usage.get(c.record.memory_id, 0.0) > 0.0),
-            key=lambda c: usage[c.record.memory_id],
+            (c for c in candidates if _get_w(c) > 0.0),
+            key=_get_w,
             reverse=True,
         )
-        usage_rank = {c.record.memory_id: rank for rank, c in enumerate(used, start=1)}
+        usage_rank = {c.record.ref: rank for rank, c in enumerate(used, start=1)}
 
         fused: list[ScoredMemory] = []
         for rel_rank, candidate in enumerate(candidates, start=1):
-            mid = candidate.record.memory_id
-            score = 1.0 / (self._rrf_k + rel_rank)  # relevance leg
-            features: dict[str, float] = {**candidate.features, "relevance_rank": float(rel_rank)}
-            urank = usage_rank.get(mid)
+            ref = candidate.record.ref
+            base_rel_rank = candidate.features.get("initial_relevance_rank", float(rel_rank))
+            # Count relevance once across a composed rung stack. An outer rung adds its
+            # independent signal to this score instead of erasing the contribution made here.
+            score = candidate.features.get(
+                "fusion_score", 1.0 / (self._rrf_k + base_rel_rank)
+            )
+            features: dict[str, float] = {
+                **candidate.features,
+                "initial_relevance_rank": base_rel_rank,
+                "relevance_rank": float(rel_rank),
+            }
+            urank = usage_rank.get(ref)
             if urank is not None:  # usage leg, only for memories with a behavioral usage record
                 score += self._weight * (1.0 / (self._rrf_k + urank))
                 features["usage_rank"] = float(urank)
-                features["usage_weight"] = usage[mid]
+                features["usage_weight"] = _get_w(candidate)
             features["usage_fused"] = score
+            features["fusion_score"] = score
             # Preserve the native score (the relevance baseline) for honest display + the log.
             fused.append(
                 ScoredMemory(record=candidate.record, score=candidate.score, features=features)

@@ -134,17 +134,16 @@ def _footprint(config: RememberConfig) -> list[str]:
     root; those simply don't become footprint entries (which only link to code modules anyway)."""
     footprint: list[str] = []
     for file_path in config.files:
-        path = file_path
-        if path.is_absolute():
-            try:
-                path = path.resolve().relative_to(config.repo)
-            except ValueError:
-                logger.warning("related file outside the repository — skipped: %s", file_path)
-                continue
-        if ".." in path.parts:
+        path = file_path if file_path.is_absolute() else (config.repo / file_path)
+        try:
+            rel_path = path.resolve().relative_to(config.repo)
+        except ValueError:
+            logger.warning("related file outside the repository — skipped: %s", file_path)
+            continue
+        if ".." in rel_path.parts:
             logger.warning("related file escapes the repository — skipped: %s", file_path)
             continue
-        footprint.append(path.as_posix())
+        footprint.append(rel_path.as_posix())
     return footprint
 
 

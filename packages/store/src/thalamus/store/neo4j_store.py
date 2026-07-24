@@ -16,8 +16,11 @@ Requires the optional ``neo4j`` extra: ``pip install 'thalamus-store[neo4j]'``.
 from __future__ import annotations
 
 import json
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from threading import RLock
+from types import MethodType
 from typing import TYPE_CHECKING, Any
 
 from thalamus.core.exceptions import DimensionMismatchError, StoreError
@@ -68,6 +71,8 @@ class Neo4jStore:
         self._database = database
         self._label = f"M_{hemisphere.value}"
         self._index = f"vec_{hemisphere.value}"
+        self._listener_lock = RLock()
+        self._listeners: list[Any] = []
         self._ensure_index()
         if encoder_id is not None:
             self._ensure_encoder_config(encoder_id)
@@ -96,11 +101,25 @@ class Neo4jStore:
             f"CREATE INDEX memory_scope_lookup_{self._hemisphere.value} IF NOT EXISTS "
             f"FOR (m:{self._label}) ON (m.tenant_id, m.repo_id)"
         )
-        self._listeners: list[Callable[[Scope], None]] = []
-
     def add_listener(self, listener: Callable[[Scope], None]) -> None:
         """Register a callback for record writes (e.g. invalidating lexical caches)."""
-        self._listeners.append(listener)
+        ref = weakref.WeakMethod(listener) if isinstance(listener, MethodType) else listener
+        with self._listener_lock:
+            self._listeners.append(ref)
+
+    def _notify_listeners(self, scope: Scope) -> None:
+        with self._listener_lock:
+            listeners = list(self._listeners)
+        dead: list[Any] = []
+        for listener_ref in listeners:
+            fn = listener_ref() if isinstance(listener_ref, weakref.WeakMethod) else listener_ref
+            if fn is not None:
+                fn(scope)
+            elif isinstance(listener_ref, weakref.WeakMethod):
+                dead.append(listener_ref)
+        if dead:
+            with self._listener_lock:
+                self._listeners = [item for item in self._listeners if item not in dead]
 
     def _checked_vector(self, embedding: Vector, context: str) -> list[float]:
         vec = [float(value) for value in embedding]
@@ -143,8 +162,7 @@ class Neo4jStore:
             metadata_json=json.dumps(dict(record.metadata)),
             embedding=vec,
         )
-        for listener in list(self._listeners):
-            listener(record.scope)
+        self._notify_listeners(record.scope)
 
     def get(self, ref: MemoryRef) -> MemoryRecord | None:
         rows = self._run(
@@ -218,6 +236,7 @@ class Neo4jStore:
             return []
         fetch_k = max(k * 20, 200)
         # HNSW vector index search via db.index.vector.queryNodes
+        query_failed = False
         try:
             rows = self._run(
                 f"CALL db.index.vector.queryNodes('{self._index}', $fetch_k, $vec) "
@@ -240,7 +259,19 @@ class Neo4jStore:
                 "vector index query failed (falling back to linear scan): %s", exc
             )
             rows = []
-        if not rows:
+            query_failed = True
+        needs_fallback = query_failed
+        if not query_failed and len(rows) < k:
+            count_rows = self._run(
+                f"MATCH (m:{self._label}) "
+                "WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
+                "RETURN count(m) AS total",
+                tenant_id=str(scope.tenant_id),
+                repo_id=str(scope.repo_id),
+            )
+            total = int(count_rows[0]["total"]) if count_rows else 0
+            needs_fallback = len(rows) < min(k, total)
+        if needs_fallback:
             # Fallback scan for un-indexed or newly added nodes
             rows = self._run(
                 f"MATCH (m:{self._label}) "

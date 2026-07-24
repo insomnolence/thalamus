@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
+from threading import RLock
 from typing import Protocol, runtime_checkable
 
 from thalamus.core.types import MemoryId, SessionId
@@ -52,14 +53,20 @@ class InMemoryBehavioralStore:
     impl (Track I increment 2) is what survives a restart and so makes the raw logs disposable."""
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._sessions: dict[MemoryId, set[SessionId]] = {}
 
     def record_usage(self, updates: Mapping[MemoryId, AbstractSet[SessionId]]) -> None:
-        for memory_id, sessions in updates.items():
-            self._sessions.setdefault(memory_id, set()).update(sessions)
+        with self._lock:
+            for memory_id, sessions in updates.items():
+                self._sessions.setdefault(memory_id, set()).update(sessions)
 
     def usage_weights(self) -> dict[MemoryId, float]:
-        return {memory_id: float(len(sessions)) for memory_id, sessions in self._sessions.items()}
+        with self._lock:
+            return {
+                memory_id: float(len(sessions))
+                for memory_id, sessions in self._sessions.items()
+            }
 
 
 def consolidate_usage(

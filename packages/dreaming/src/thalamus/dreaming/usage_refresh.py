@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from thalamus.core.types import MemoryId
+from thalamus.core.types import MemoryId, MemoryRef
 from thalamus.dreaming.base import PassContext, PassKind, PassOutcome
 
 
@@ -29,8 +29,8 @@ class UsageRefreshPass:
 
     def __init__(
         self,
-        recompute: Callable[[], Mapping[MemoryId, float]],
-        refresh: Callable[[Mapping[MemoryId, float]], None],
+        recompute: Callable[[], Mapping[MemoryRef | MemoryId, float]],
+        refresh: Callable[[Mapping[MemoryRef | MemoryId, float]], None],
     ) -> None:
         self._recompute = recompute
         self._refresh = refresh

@@ -100,7 +100,7 @@ class DocIngestor:
                 StructuralNode(
                     node_id=section_id,
                     kind="section",
-                    label=text,
+                    label=self._scrub(text),
                     scope=scope,
                     anchor=SourceAnchor(path=str(path), line_start=lineno, line_end=end),
                     metadata={"text": self._scrub(body[: self._max_section_chars])},
