@@ -32,6 +32,11 @@ if TYPE_CHECKING:
 _VECTOR_INDEX = "vec_struct"  # one cosine index over SNode.embedding; corpus is a filter
 
 
+def _cypher_identifier(value: str) -> str:
+    """Quote a dynamic Cypher identifier, escaping embedded backticks."""
+    return f"`{value.replace('`', '``')}`"
+
+
 class Neo4jStructuralIndex:
     """``StructuralIndex`` over Neo4j: persisted per-corpus node embeddings + cosine search."""
 
@@ -56,11 +61,13 @@ class Neo4jStructuralIndex:
             self._ensure_encoder_config(encoder_id)
 
     def _ensure_index(self) -> None:
-        # dim/label/index are trusted internal values; all content flows through parameters.
+        # The corpus-derived index name is a Cypher identifier, not a parameter position. Corpus
+        # names come from declarative config and may contain spaces or punctuation, so quote it
+        # rather than treating it as trusted syntax. All remaining content flows through params.
         _run(
             self._driver,
             self._database,
-            f"CREATE VECTOR INDEX {self._index_name} IF NOT EXISTS "
+            f"CREATE VECTOR INDEX {_cypher_identifier(self._index_name)} IF NOT EXISTS "
             f"FOR (m:{_NODE}) ON (m.embedding) "
             f"OPTIONS {{indexConfig: {{`vector.dimensions`: {self._dim}, "
             f"`vector.similarity_function`: 'cosine'}}}}",
@@ -143,11 +150,12 @@ class Neo4jStructuralIndex:
             rows = _run(
                 self._driver,
                 self._database,
-                f"CALL db.index.vector.queryNodes('{self._index_name}', $fetch_k, $vec) "
+                "CALL db.index.vector.queryNodes($index_name, $fetch_k, $vec) "
                 "YIELD node AS m, score "
                 "WHERE m.tenant_id = $tenant_id AND m.repo_id = $repo_id "
                 "AND m.corpus = $corpus AND m.embedding IS NOT NULL "
                 "RETURN m, score ORDER BY score DESC LIMIT $k",
+                index_name=self._index_name,
                 vec=vec,
                 fetch_k=fetch_k,
                 tenant_id=str(scope.tenant_id),
