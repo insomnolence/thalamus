@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from thalamus.cli.serve import (
     build_remember_writer,
     build_serve_gateway,
     build_shown_resolver,
+    preflight_encoder,
     serve_config,
 )
 from thalamus.core.types import (
@@ -135,7 +137,7 @@ def test_build_shown_resolver_reconstructs_from_log_and_store(tmp_path: Path) ->
         shown=[ShownItem(MemoryId("m1"), 0, 1.0), ShownItem(MemoryId("ghost"), 1, 1.0)],
     ))
 
-    resolve = build_shown_resolver(store, scope, log)
+    resolve = build_shown_resolver(store, scope, [log])
 
     assert resolve(EventId("evt-1")) == [
         (MemoryId("m1"), "alpha content"),
@@ -305,3 +307,70 @@ def test_regen_hook_is_none_without_any_regen_command(tmp_path: Path) -> None:
 
     cfg = CorpusConfig(name="py", root=tmp_path, kind="python-ast")
     assert serve_mod.build_regen_hook([cfg]) is None
+
+
+class _UnloadableEncoder:
+    """An encoder whose lazy model load fails — the cold-cache/offline first run."""
+
+    @property
+    def dim(self) -> int:
+        raise RuntimeError("LocalEntryNotFoundError: model not cached")
+
+    def encode(self, texts: Sequence[str]) -> list[list[float]]:  # pragma: no cover - never reached
+        raise AssertionError("unreachable: dim fails first")
+
+
+def test_preflight_encoder_is_silent_when_the_model_loads(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    preflight_encoder(DeterministicEncoder(dim=8), "deterministic")
+    assert capsys.readouterr().err == ""  # no noise on the working path
+
+
+def test_preflight_encoder_names_the_offline_switch_then_reraises(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    with pytest.raises(RuntimeError):  # never swallowed — a serve without an encoder is broken
+        preflight_encoder(_UnloadableEncoder(), "bge-small")
+    err = capsys.readouterr().err
+    # The one actionable line the stdio client's MCP log would otherwise never explain.
+    assert "HF_HUB_OFFLINE is set" in err
+    assert "--encoder deterministic" in err
+
+
+def test_preflight_encoder_falls_back_to_the_network_hint(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")  # set but falsy → not the cause
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    with pytest.raises(RuntimeError):
+        preflight_encoder(_UnloadableEncoder(), "bge-small")
+    err = capsys.readouterr().err
+    assert "network access to the Hugging Face Hub" in err
+    assert "HF_HUB_OFFLINE" not in err
+
+
+def test_build_shown_resolver_finds_a_plan_event_in_the_second_log(tmp_path: Path) -> None:
+    """`plan` logs to its own stream, so record_usage must resolve ids from either."""
+    scope = Scope(tenant_id=TenantId("local"), repo_id=RepoId("repo"))
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    store.add(
+        MemoryRecord(MemoryId("m1"), Hemisphere.EXPERIENTIAL, "decision", "alpha", scope, NOW),
+        encoder.encode(["alpha"])[0],
+    )
+    recall_log = tmp_path / "retrieval.jsonl"
+    plan_log = tmp_path / "plan.jsonl"
+    JsonlEventSink(plan_log).emit(RetrievalEvent(
+        event_id=EventId("plan-1"), timestamp=NOW, scope=scope, policy_id="plan",
+        cue_text="_compute_radius", k_requested=30, candidates=[],
+        shown=[ShownItem(MemoryId("m1"), 0, 1.0)],
+    ))
+
+    resolve = build_shown_resolver(store, scope, [recall_log, plan_log])
+
+    # the recall log does not even exist yet — a missing log must be skipped, not raise
+    assert resolve(EventId("plan-1")) == [(MemoryId("m1"), "alpha")]
+    assert resolve(EventId("nope")) is None

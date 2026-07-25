@@ -20,7 +20,7 @@ structural footprint attribution and this dropped to the citation tier (OLR §13
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -88,7 +88,18 @@ def attribute_overlap(
 
     Emits ``kind="citation"`` — it is the actuator's self-report (cooperation-dependent),
     not the deterministic primary signal (that is structural footprint attribution). Useful
-    enrichment that degrades to nothing when the actuator never calls ``record_usage``."""
+    enrichment that degrades to nothing when the actuator never calls ``record_usage``.
+
+    .. warning::
+       **This signal does not discriminate and is retained only as the ablation baseline for
+       :func:`attribute_declared`.** Measured on 19 hand-labelled (memory, output) pairs from
+       real dogfood sessions, ``value`` for memories that demonstrably shaped the output
+       (mean 0.088, range 0.045–0.115) is indistinguishable from those that did not
+       (mean 0.074, range 0.042–0.114). No threshold separates them, and in two months of
+       live logging ``used`` fired on **0 of 640** citation rows. The cause is structural, not
+       a mis-set threshold: in a single-project corpus every memory shares the project's
+       vocabulary, so lexical overlap measures "is this output about the project", not "did
+       this memory get used". Prefer the *declared* signal; do not tune this one."""
     out_tokens = _tokens(output)
     signals: list[UsageSignal] = []
     for memory_id, content in shown:
@@ -96,6 +107,44 @@ def attribute_overlap(
         value = len(mem_tokens & out_tokens) / len(mem_tokens) if mem_tokens else 0.0
         signals.append(UsageSignal(event_id, memory_id, "citation", value, value >= threshold))
     return signals
+
+
+def attribute_declared(
+    event_id: EventId,
+    shown: Sequence[tuple[MemoryId, str]],
+    declared: Iterable[MemoryId],
+) -> list[UsageSignal]:
+    """The **declared-use** signal: the actuator names which surfaced memories shaped its output.
+
+    Emits ``kind="declared"`` for **every** shown memory — ``used=True`` (value 1.0) for the
+    declared ones, ``used=False`` (value 0.0) for the rest. Emitting the non-declared rows is
+    deliberate: it yields real *within-event negatives*, which a threshold-on-a-continuous-score
+    signal never produces cleanly, and which the credit layer has otherwise been starved of.
+
+    Why this exists (the R-9 finding): footprint attribution can only credit memories whose
+    recorded file footprint overlaps the work, so a purely *conceptual* memory — an orientation
+    or decision that changed what the actuator wrote without touching its files — is invisible to
+    the deterministic primary. :func:`attribute_overlap` was meant to cover that gap by inferring
+    use from prose, and does not (see its warning). Declaration closes it directly.
+
+    Firewall (§14.2): this is a **behavioural act reported by the actuator** — "I used this" —
+    in the same category as the citation tier, not the model grading a memory's prose or
+    ranking its own store. It stays a *secondary* kind in ``utility@k`` (a self-report must not
+    on its own make an event count as scored), so adding it does not shift the headline metric.
+
+    Ids that were not in ``shown`` are ignored: the signal describes what this event surfaced,
+    so a stale or invented id contributes nothing rather than fabricating a row."""
+    wanted = set(declared)
+    return [
+        UsageSignal(
+            event_id,
+            memory_id,
+            "declared",
+            1.0 if memory_id in wanted else 0.0,
+            memory_id in wanted,
+        )
+        for memory_id, _content in shown
+    ]
 
 
 def serialize_usage(signal: UsageSignal) -> dict[str, Any]:

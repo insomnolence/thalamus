@@ -9,11 +9,26 @@ Thalamus is exposed to your agent over **MCP** (Model Context Protocol). It spea
   [`../scripts/serve-http.sh`](../scripts/serve-http.sh).
 
 Before any of this, do the [Quickstart](../README.md#quickstart): start Neo4j, `uv sync
---all-packages --all-extras`, and (optionally) `remember` / `sync` some context.
+--all-packages --all-extras`, then run `sync` (and optionally `remember`) at least once. Do not skip
+the `sync`: it is the run that downloads the BGE-small embedding model, and it is far easier to watch
+it succeed in a terminal than inside an agent-spawned subprocess.
 
 The example files here are **templates** — copy them into place and edit the marked values. None
 contains a real secret; the only credential is the local-dev Neo4j password, which matches the one
 in [`../docker-compose.yml`](../docker-compose.yml).
+
+**Offline mode.** The templates set `HF_HUB_OFFLINE=0`, because the first encoder load downloads
+`BAAI/bge-small-en-v1.5` from the Hugging Face Hub. Once it is cached, set `HF_HUB_OFFLINE=1` (export
+it, or edit the `env` block) to keep the server off the network entirely. Setting it *before* the
+model is cached makes `serve` fail at startup — it prints one line naming the cause on stderr, which
+your MCP client keeps in its server log.
+
+**Stop repeating flags.** Two annotated project-config templates live here as well —
+[`thalamus.toml`](thalamus.toml) (a Python repo) and
+[`thalamus.typescript.toml`](thalamus.typescript.toml) (SCIP, plus the declarative `[[corpus]]`
+tables). Copy one to `thalamus.toml` at your repo root and every command reads it as its defaults
+(an explicit flag still wins), so `--repo-id`, `--repo`, ports, and corpus wiring stop being
+duplicated across the configs below.
 
 ## What you must fill in
 

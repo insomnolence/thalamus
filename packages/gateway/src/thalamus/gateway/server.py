@@ -22,6 +22,7 @@ from thalamus.core.taxonomy import RememberKindInput
 from thalamus.core.types import EventId, MemoryId, MemoryRecord, Scope, SessionId
 from thalamus.gateway.gateway import Gateway
 from thalamus.gateway.payload import ContextPayload
+from thalamus.instrumentation import UsageSignal
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -98,6 +99,17 @@ def _connection_session_id(ctx: object) -> str | None:
     except (RuntimeError, AttributeError):
         return None
     return str(sid) if sid else None
+
+
+def _usage_ack(signals: Sequence[UsageSignal]) -> str:
+    """Acknowledge ``record_usage``, naming how many memories were credited as declared.
+
+    Ids the event never surfaced are ignored rather than fabricated into rows, so without this
+    count a typo'd or stale id would be indistinguishable from a successful declaration."""
+    declared = sum(1 for signal in signals if signal.kind == "declared" and signal.used)
+    if declared:
+        return f"recorded {len(signals)} usage signal(s); {declared} declared used"
+    return f"recorded {len(signals)} usage signal(s)"
 
 
 def build_server(
@@ -218,27 +230,35 @@ def build_server(
 
         @server.tool
         @tool_errors("record_usage")
-        async def record_usage(event_id: str, output_text: str) -> str:
+        async def record_usage(
+            event_id: str, output_text: str, used_memory_ids: list[str] | None = None
+        ) -> str:
             """Report that a recall shaped your output — how the brain learns which memories
             help. Call after using recalled context. `event_id`: from the recall's
-            `# retrieval_event_id:` line. `output_text`: what you produced (a summary is fine)."""
+            `# retrieval_event_id:` line. `output_text`: what you produced (a summary is fine).
+            `used_memory_ids`: the ids in `[brackets]` next to the memories you actually used —
+            **name them**; a memory that changed your thinking without changing which files you
+            touched is otherwise invisible to the brain."""
             key = EventId(event_id)
+            declared = [MemoryId(m) for m in used_memory_ids] if used_memory_ids else None
             with pending_lock:
                 payload = pending.pop(key, None)
             if payload is not None:  # fast path: the live payload is still cached
                 signals = await _run_sync(
-                    lambda: gateway.record_outcome(payload, output_text)
+                    lambda: gateway.record_outcome(payload, output_text, declared=declared)
                 )
-                return f"recorded {len(signals)} usage signal(s)"
+                return _usage_ack(signals)
             # Fallback: the cached payload is gone (serve restarted, or another worker served the
             # recall). Rebuild the shown memories from durable state so the signal isn't lost.
             if resolve_shown is not None:
                 shown = await _run_sync(lambda: resolve_shown(key))
                 if shown is not None:
                     signals = await _run_sync(
-                        lambda: gateway.record_outcome_for(key, shown, output_text)
+                        lambda: gateway.record_outcome_for(
+                            key, shown, output_text, declared=declared
+                        )
                     )
-                    return f"recorded {len(signals)} usage signal(s)"
+                    return _usage_ack(signals)
             raise UserFacingError(f"unknown or already-recorded retrieval event: {event_id}")
 
     if recent_reader is not None:

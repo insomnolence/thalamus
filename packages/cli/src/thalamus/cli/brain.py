@@ -468,6 +468,7 @@ def build_planner(
     *,
     cochange: CoChangeIndex | None = None,
     config: PlannerConfig | None = None,
+    event_sink: EventSink | None = None,
 ) -> Planner | None:
     """A :class:`Planner` over the same Brain-2 collaborators the gateway already holds.
 
@@ -485,6 +486,7 @@ def build_planner(
         views=gateway.views,
         cochange=cochange,
         config=config,
+        event_sink=event_sink,
     )
 
 

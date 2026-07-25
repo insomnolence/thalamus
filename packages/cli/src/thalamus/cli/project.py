@@ -78,6 +78,11 @@ _KEY_TO_DEST: dict[str, str] = {
     "dream_tick": "dream_tick",
     "dream_tick_minutes": "dream_tick_minutes",
     "checkpoint": "checkpoint",
+    "plan_memory_budget": "plan_memory_budget",
+    "plan_memory_chars": "plan_memory_chars",
+    "plan_why_chars": "plan_why_chars",
+    "plan_node_budget": "plan_node_budget",
+    "plan_cochange_commits": "plan_cochange_commits",
 }
 # Dests whose values are paths, resolved relative to the config file's directory.
 _PATH_DESTS = frozenset({"repo", "data_dir", "scip_index", "checkpoint"})

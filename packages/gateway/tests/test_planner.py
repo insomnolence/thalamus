@@ -22,7 +22,9 @@ from thalamus.core.types import (
     TenantId,
 )
 from thalamus.gateway import Planner, PlannerConfig
+from thalamus.gateway.planner import _query_match
 from thalamus.gateway.views import DerivedViews, DerivedViewsRef
+from thalamus.instrumentation import InMemoryEventSink
 from thalamus.structural import (
     CoChangeIndex,
     InMemoryCoChangeIndex,
@@ -424,7 +426,10 @@ def test_render_surfaces_coverage_and_constraints() -> None:
     assert "# Plan brief: foo" in rendered
     assert "Known constraints & gotchas" in rendered
     assert "foo mutates shared state" in rendered
-    assert "(gotcha, gather score 2.50)" in rendered
+    # 2.50 from proximity+recency+importance, +1.00 because the memory names the target "foo"
+    assert "(gotcha, gather score 3.50)" in rendered
+    # the id is rendered so the actuator can declare the memory via record_usage
+    assert "[m1]" in rendered
     assert "unverified" in rendered  # the coverage-honesty line
 
 
@@ -695,3 +700,159 @@ def test_plan_brief_fences_third_party_symbols() -> None:
     # an operator integration point is rendered verbatim (the common brief is unchanged)
     op = StructuralItem(node_id="mod:m", kind="module", label="m.ok")
     assert "untrusted" not in PlanBrief(target="m.ok", integration_point=op).render()
+
+
+# --- test-file callers: ordered last, collapsed in the render, never dropped -------------------
+
+_SVC = StructuralNode(
+    node_id="svc:encode", kind="function", label="svc.encode",
+    scope=SCOPE, anchor=SourceAnchor(path="svc/encode.py", line_start=1, line_end=9),
+)
+_PROD_CALLER = StructuralNode(
+    node_id="svc:handler", kind="function", label="svc.handler",
+    scope=SCOPE, anchor=SourceAnchor(path="svc/handler.py", line_start=1, line_end=9),
+)
+_TEST_CALLER_A = StructuralNode(
+    node_id="t:one", kind="function", label="tests.test_encode.test_one",
+    scope=SCOPE, anchor=SourceAnchor(path="tests/test_encode.py", line_start=1, line_end=9),
+)
+_TEST_CALLER_B = StructuralNode(
+    node_id="t:two", kind="function", label="tests.test_encode.test_two",
+    scope=SCOPE, anchor=SourceAnchor(path="tests/test_encode.py", line_start=11, line_end=19),
+)
+
+
+def _svc_planner() -> Planner:
+    """A target with one production caller and two test callers."""
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(
+        IngestResult(
+            nodes=[_SVC, _PROD_CALLER, _TEST_CALLER_A, _TEST_CALLER_B],
+            edges=[
+                StructuralEdge("svc:handler", "svc:encode", "calls"),
+                StructuralEdge("t:one", "svc:encode", "calls"),
+                StructuralEdge("t:two", "svc:encode", "calls"),
+            ],
+        )
+    )
+    return Planner(
+        graph=graph,
+        links=InMemoryCrossLinkIndex(),
+        store=_Store([]),
+        structural_retrievers=[_Retr([(_SVC, 0.9)])],
+        views=DerivedViewsRef(),
+    )
+
+
+def test_test_file_callers_rank_after_production_callers() -> None:
+    """Under a node budget the un-guessable callers must survive first — so tests sort last."""
+    brief = _svc_planner().plan(target="svc.encode", scope=SCOPE)
+
+    callers = [rn for rn in brief.blast_radius if rn.relation == "caller"]
+    assert [rn.item.node_id for rn in callers] == ["svc:handler", "t:one", "t:two"]
+    assert [rn.is_test for rn in callers] == [False, True, True]
+
+
+def test_test_file_callers_stay_in_the_radius_set() -> None:
+    """Ordering only — nothing is dropped, so the eval path and 'what breaks' stay complete."""
+    refs = _svc_planner().blast_radius_refs(_SVC.ref)
+
+    assert {r.node_id for r in refs} == {"svc:handler", "t:one", "t:two"}
+
+
+def test_render_collapses_test_callers_into_an_honest_count() -> None:
+    """Readable without understating what breaks: the tests are counted, not hidden."""
+    rendered = _svc_planner().plan(target="svc.encode", scope=SCOPE).render()
+
+    assert "svc.handler" in rendered  # the production caller is listed in full
+    assert "test_one" not in rendered and "test_two" not in rendered  # collapsed, not enumerated
+    assert "+ 2 more in test file(s)" in rendered
+    assert "they change when it does" in rendered  # says they are still real callers
+
+
+# --- C-3a: query relevance — does the memory name what you are changing? ------------------------
+
+
+def _query_planner(config: PlannerConfig | None = None) -> Planner:
+    """Two equally-proximate, same-age memories; only one names the target."""
+    records = [
+        _record("m-names", "decision", "changing foo needs an index migration"),
+        _record("m-silent", "decision", "this area needs an index migration"),
+    ]
+    return _build(
+        hits=[(FOO, 0.9)],
+        links=[("m-names", BAR), ("m-silent", BAR)],
+        records=records,
+        config=config,
+    )
+
+
+def test_a_memory_naming_the_target_outranks_one_that_does_not() -> None:
+    brief = _query_planner().plan(target="foo", scope=SCOPE)
+
+    assert [m.memory_id for m in brief.context] == [MemoryId("m-names"), MemoryId("m-silent")]
+
+
+def test_query_relevance_is_ablatable() -> None:
+    """§14: weight 0 restores the prior ranking exactly, so the layer is removable."""
+    on = _query_planner().plan(target="foo", scope=SCOPE)
+    off = _query_planner(PlannerConfig(gather_weight_query=0.0)).plan(target="foo", scope=SCOPE)
+
+    named_on = next(m for m in on.context if m.memory_id == MemoryId("m-names"))
+    named_off = next(m for m in off.context if m.memory_id == MemoryId("m-names"))
+    silent_off = next(m for m in off.context if m.memory_id == MemoryId("m-silent"))
+    assert named_on.score == named_off.score + 1.0  # the full weight, since "foo" is the one term
+    assert named_off.score == silent_off.score  # without it the two are indistinguishable
+
+
+def test_a_descriptive_target_is_scored_against_the_symbol_it_resolved_to() -> None:
+    """The target names no identifier, but resolution does — so relevance still discriminates."""
+    brief = _query_planner().plan(target="where does the migration happen", scope=SCOPE)
+
+    scores = {m.memory_id: m.score for m in brief.context}
+    # "foo" came from the resolved integration point, not from the target text
+    assert scores[MemoryId("m-names")] == scores[MemoryId("m-silent")] + 1.0
+
+
+def test_query_relevance_is_inert_when_nothing_yields_an_identifier() -> None:
+    """The degenerate guard: no identifiers anywhere means no invented ordering."""
+    assert _query_match("changing foo needs an index migration", frozenset()) == 0.0
+
+
+# --- gather telemetry -------------------------------------------------------------------------
+
+
+def test_gather_emits_an_event_logging_every_candidate_not_just_the_shown() -> None:
+    """The budget cut is the decision being recorded, so what lost must be logged too."""
+    records = [
+        _record("m-a", "decision", "foo needs a migration"),
+        _record("m-b", "decision", "unrelated note"),
+    ]
+    sink = InMemoryEventSink()
+    planner = _build(
+        hits=[(FOO, 0.9)],
+        links=[("m-a", FOO), ("m-b", BAR)],
+        records=records,
+        config=PlannerConfig(memory_budget=1),
+    )
+    planner._event_sink = sink  # the wiring seam serve/CLI use
+
+    brief = planner.plan(target="foo", scope=SCOPE)
+
+    assert len(sink.events) == 1
+    event = sink.events[0]
+    assert event.policy_id == "plan"  # kept out of the recall stream on purpose
+    assert event.cue_text == "foo"
+    assert len(event.shown) == 1  # the budget kept one...
+    # ...but both were logged, so the cut is analysable
+    assert {c.memory_id for c in event.candidates} == {MemoryId("m-a"), MemoryId("m-b")}
+    assert brief.event_id == event.event_id
+    assert f"# retrieval_event_id: {event.event_id}" in brief.render()
+
+
+def test_no_event_is_emitted_without_a_sink() -> None:
+    """Telemetry is a removable layer (§14): the default Planner logs nothing."""
+    brief = _build(hits=[(FOO, 0.9)]).plan(target="foo", scope=SCOPE)
+
+    assert brief.event_id is None
+    assert "retrieval_event_id" not in brief.render()

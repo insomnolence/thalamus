@@ -33,10 +33,13 @@ from statistics import fmean
 from thalamus.core.types import EventId, MemoryId
 from thalamus.instrumentation import RetrievalEvent, UsageSignal
 
-# Secondary, cooperation-dependent signal kinds (§13.8): an actuator self-report (`record_usage`
-# lexical overlap), not a deterministic captured outcome. They may *mark* a memory used, but on
-# their own must NOT make an event count as scored — see utility_at_k.
-_SECONDARY_KINDS = frozenset({"citation"})
+# Secondary, cooperation-dependent signal kinds (§13.8): an actuator self-report — inferred
+# lexically ("citation") or named outright ("declared") — not a deterministic captured outcome.
+# They may *mark* a memory used, but on their own must NOT make an event count as scored (see
+# utility_at_k). "declared" is the accurate self-report and "citation" the inference that does not
+# discriminate (see attribute_overlap's warning); both are secondary because a self-report of
+# either kind is cooperation-dependent, so neither may silently move the headline metric.
+_SECONDARY_KINDS = frozenset({"citation", "declared"})
 
 
 @dataclass(frozen=True, slots=True)

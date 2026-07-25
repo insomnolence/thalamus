@@ -10,7 +10,7 @@ is pure and testable. Without the structural collaborators it works experiential
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from thalamus.core.protocols import Encoder, Retriever, Store
 from thalamus.core.types import (
@@ -34,7 +34,12 @@ from thalamus.gateway.payload import (
     node_trust,
 )
 from thalamus.gateway.views import DerivedViews, DerivedViewsRef
-from thalamus.instrumentation import UsageSignal, UsageSink, attribute_overlap
+from thalamus.instrumentation import (
+    UsageSignal,
+    UsageSink,
+    attribute_declared,
+    attribute_overlap,
+)
 from thalamus.structural import (
     ANNOTATES,
     CrossLinkIndex,
@@ -513,30 +518,50 @@ class Gateway:
             for node in linked_nodes_for(memories, graph, links, k_hop=self._structural_k_hop)
         ]
 
-    def record_outcome(self, payload: ContextPayload, output: str) -> list[UsageSignal]:
+    def record_outcome(
+        self,
+        payload: ContextPayload,
+        output: str,
+        *,
+        declared: Iterable[MemoryId] | None = None,
+    ) -> list[UsageSignal]:
         """Attribute Tier-1 usage: which surfaced memories the actuator's ``output`` used.
 
         Stateless — pass back the payload from :meth:`recall`. Signals are logged to the
         usage sink keyed by the payload's ``event_id`` (the loop close: surfaced → used).
+        ``declared`` are the memory ids the actuator says it used (see :meth:`record_outcome_for`).
         """
         if payload.event_id is None:
             return []
         shown = [(item.memory_id, item.content) for item in payload.memories]
-        return self.record_outcome_for(payload.event_id, shown, output)
+        return self.record_outcome_for(payload.event_id, shown, output, declared=declared)
 
     def record_outcome_for(
-        self, event_id: EventId, shown: Sequence[tuple[MemoryId, str]], output: str
+        self,
+        event_id: EventId,
+        shown: Sequence[tuple[MemoryId, str]],
+        output: str,
+        *,
+        declared: Iterable[MemoryId] | None = None,
     ) -> list[UsageSignal]:
         """Record Tier-1 usage from an ``event_id`` + the shown ``(memory_id, content)`` pairs.
 
         The reconstruction-friendly form of :meth:`record_outcome`: a caller that no longer holds
         the live payload (a ``record_usage`` arriving after a serve restart, or in another worker
         of the long-running server) rebuilds ``shown`` from the durable retrieval-event log + store
-        and calls this — so the citation signal survives instead of being silently dropped."""
+        and calls this — so the signal survives instead of being silently dropped.
+
+        Emits the *declared* signal when the actuator named ids, and always emits the lexical
+        *citation* signal. Both are kept deliberately: citation is the ablation baseline the
+        declared signal is measured against (§14 — a new layer must be comparable to the one it
+        replaces), and it is the only signal available from an actuator that reports an output
+        but names nothing."""
         sink = self._usage_sink
         if sink is None:
             return []
         signals = attribute_overlap(event_id, shown, output)
+        if declared is not None:
+            signals = signals + attribute_declared(event_id, shown, declared)
         for signal in signals:
             sink.emit(signal)
         return signals

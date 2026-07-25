@@ -1,5 +1,5 @@
 {
-  "_comment": "Claude Code MCP config for Thalamus. Copy this to a file named .mcp.json at the root of YOUR project, then edit the values marked FILL-IN below. Claude Code expands ${VAR} and ${VAR:-default}, so if you already exported the THALAMUS_NEO4J_* vars from the Quickstart, the defaults here just work for a local setup.",
+  "_comment": "Claude Code MCP config for Thalamus. Copy this to a file named .mcp.json at the root of YOUR project, then edit the values marked FILL-IN below. Claude Code expands ${VAR} and ${VAR:-default}, so if you already exported the THALAMUS_NEO4J_* vars from the Quickstart, the defaults here just work for a local setup. HF_HUB_OFFLINE defaults to 0 because the first run must download the BGE-small encoder from the Hugging Face Hub; export HF_HUB_OFFLINE=1 once it is cached to keep the server off the network.",
   "mcpServers": {
     "thalamus": {
       "type": "stdio",
@@ -16,7 +16,7 @@
         "THALAMUS_NEO4J_URI": "${THALAMUS_NEO4J_URI:-bolt://localhost:7687}",
         "THALAMUS_NEO4J_USER": "${THALAMUS_NEO4J_USER:-neo4j}",
         "THALAMUS_NEO4J_PASSWORD": "${THALAMUS_NEO4J_PASSWORD:-thalamuspw}",
-        "HF_HUB_OFFLINE": "${HF_HUB_OFFLINE:-1}"
+        "HF_HUB_OFFLINE": "${HF_HUB_OFFLINE:-0}"
       }
     }
   }

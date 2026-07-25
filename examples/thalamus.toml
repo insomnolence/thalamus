@@ -1,0 +1,108 @@
+# Thalamus project configuration — a Python repo (the flat, single-code-corpus route).
+#
+# Copy this to `thalamus.toml` at the root of your project. Every `python -m thalamus.cli <cmd>`
+# run from that directory picks it up automatically as the command's *defaults*, so a project is
+# declarative instead of a hand-written serve/sync invocation. Precedence is:
+#
+#     explicit CLI flag  >  thalamus.toml  >  built-in default
+#
+# A file elsewhere is selected with the top-level flag:
+#     python -m thalamus.cli --config path/to/thalamus.toml serve
+#
+# Rules that apply to the whole file:
+#   * Path-valued keys (`code_root`, `data_dir`, `doc_roots`, `scip_index`, `checkpoint`, and a
+#     corpus' `root`) resolve RELATIVE TO THIS FILE'S DIRECTORY — the config is portable.
+#   * Unknown keys are ignored, so a config written for a newer Thalamus still loads.
+#   * Keys are applied only to commands that have the matching flag; the rest are dropped. The
+#     comments below note which command each key is for.
+#   * SECRETS ARE NEVER IN THIS FILE. `THALAMUS_NEO4J_PASSWORD` (and `THALAMUS_HTTP_TOKEN` for an
+#     HTTP serve) stay in the environment.
+#
+# For a non-Python codebase, or for a brain that ingests several corpora (code + docs + notes +
+# external findings), see `thalamus.typescript.toml` next to this file — it documents the
+# declarative `[[corpus]]` tables.
+
+# ── Identity: which brain this is ────────────────────────────────────────────────────────────
+# `repo_id` is the stable name this codebase's memories are scoped to — name it for the repo and
+# never change it casually (memories are scoped by it). Default: the `code_root` directory name.
+repo_id = "my-project"
+# `tenant` namespaces a set of repo brains. Single-operator setups leave it at "local".
+tenant = "local"
+
+# ── Where things live ────────────────────────────────────────────────────────────────────────
+# `code_root` is the repo Brain 2 is derived from — the same thing as `serve --repo` / `sync
+# --repo`. "." means "the directory holding this file".
+code_root = "."
+# `data_dir` is where the brain's own state lives: `.thalamus/logs`, the session file, and git
+# checkpoints (`serve --data-dir` / `sync --data-dir`). Point it OUTSIDE the code repo when you
+# want the code tree left pristine — e.g. `data_dir = "../my-project-brain"`.
+data_dir = "."
+# `checkpoint` (sync only) is the git cursor marking the last commit ingested into Brain 1.
+# Default: `<data_dir>/.thalamus/checkpoints/git.cursor` — set it only to override that.
+checkpoint = ".thalamus/checkpoints/git.cursor"
+
+# ── Brain 2: the structural corpus ───────────────────────────────────────────────────────────
+# `language` picks the code-corpus ingestor: "python" parses the AST in-process; any other value
+# is a SCIP language and additionally requires `scip_index` (see `thalamus.typescript.toml`).
+language = "python"
+# `doc_roots` ingests Markdown from each directory as its OWN labelled corpus (recall renders it
+# as "## Related docs (<dir>)"). Use it for doc trees that matter on their own, or that live
+# outside `code_root`. Omit the key entirely to get a single "docs" corpus over `code_root`.
+doc_roots = ["docs"]
+# `resolve_calls` runs jedi at startup to resolve Python call edges — better `plan` blast radius
+# and structural recall, at the cost of a slower cold start. Set false to skip it. (No-op for
+# SCIP languages: their indexes already carry precise call edges.)
+resolve_calls = true
+
+# ── Encoder ──────────────────────────────────────────────────────────────────────────────────
+# "bge-small" is the production semantic encoder (BGE-small via fastembed/ONNX; downloaded from
+# the Hugging Face Hub on first use). "deterministic" is the offline, dependency-free lexical
+# fallback — fine for smoke tests, much weaker for real recall.
+# NB: changing the encoder invalidates existing vectors; re-ingest before trusting recall again.
+encoder = "bge-small"
+# `dim` is the embedding width — only meaningful for `encoder = "deterministic"`; bge-small
+# reports its own dimensionality and ignores this.
+dim = 128
+
+# ── Recall shape (serve) ─────────────────────────────────────────────────────────────────────
+# `k` memories per recall.
+k = 5
+# `k_hop` structural hops expanded around each hit when gathering related code.
+k_hop = 1
+# `structural_min_relevance` is the minimum cosine for a direct structural hit. 0.6 is the
+# conservative floor for BGE (on-topic code observed >= 0.70, off-topic noise ~0.57); lower it
+# for a weaker encoder, raise it if recall is noisy.
+structural_min_relevance = 0.6
+# `hybrid_retrieval` fuses a BM25 lexical leg with semantic recall so exact identifiers, error
+# strings, and rare terms still surface. false falls back to the semantic-only L0 baseline —
+# which is exactly how you ablate the rung and measure it.
+hybrid_retrieval = true
+
+# ── Background maintenance (serve) ───────────────────────────────────────────────────────────
+# `dream_tick` runs the offline consolidation passes on a background clock inside a long-running
+# serve: re-derive Brain 2 from current source, refresh usage/centrality weights, demote
+# superseded beliefs. false freezes the served views at whatever startup built.
+dream_tick = true
+# Minutes between maintenance cycles (a `remember` also triggers one immediately).
+dream_tick_minutes = 30.0
+
+# ── Safety ───────────────────────────────────────────────────────────────────────────────────
+# `secret_redaction` scrubs credential-shaped text (tokens, keys, passwords) at every ingest
+# boundary, before anything is embedded or stored. Leave it on unless you are measuring its cost.
+secret_redaction = true
+
+# ── Transport (serve) ────────────────────────────────────────────────────────────────────────
+# "stdio" — the MCP client spawns its own serve process (Claude Code, Gemini CLI). One client.
+# "http"  — one long-lived server that many clients attach to (Codex, several agents at once).
+transport = "stdio"
+# Bind address/port for `transport = "http"`. Binding off-localhost with no THALAMUS_HTTP_TOKEN
+# exposes read/write access to the brain to the whole network — the server warns if you do.
+http_host = "127.0.0.1"
+http_port = 8000
+
+# ── Neo4j ────────────────────────────────────────────────────────────────────────────────────
+# These two are bridged into the environment as THALAMUS_NEO4J_URI / THALAMUS_NEO4J_USER, and an
+# already-exported variable still wins. The PASSWORD is deliberately not a key here — export
+# THALAMUS_NEO4J_PASSWORD instead. Without a URI the brain runs in-memory and forgets everything.
+neo4j_uri = "bolt://localhost:7687"
+neo4j_user = "neo4j"

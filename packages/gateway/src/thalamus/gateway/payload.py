@@ -77,16 +77,23 @@ class MemoryItem:
         scored: ScoredMemory,
         *,
         max_content_chars: int | None = None,
+        max_why_chars: int | None = None,
         stale_references: Sequence[str] = (),
         superseded: Supersession | None = None,
     ) -> MemoryItem:
+        """``max_why_chars`` defaults to ``max_content_chars`` — set it to budget the rationale
+        *separately*. The two fields behave nothing alike: measured over the live corpus, 77% of
+        curated memories exceed a 1000-char content cap while only 2% exceed it on ``why``, so one
+        shared limit silently halves every body while never touching the rationale it was also
+        meant to bound."""
+        why_limit = max_content_chars if max_why_chars is None else max_why_chars
         content = scored.record.content
         rationale = _render_why(scored.record.metadata.get("why"))
         note: SupersededNote | None = None
         if superseded is not None:
             reason = superseded.reason
-            if max_content_chars is not None:
-                reason = _truncate(reason, max_content_chars)
+            if why_limit is not None:
+                reason = _truncate(reason, why_limit)
             note = SupersededNote(
                 superseded_by=superseded.superseded_by,
                 reason=reason,
@@ -94,8 +101,8 @@ class MemoryItem:
             )
         if max_content_chars is not None:
             content = _truncate(content, max_content_chars)
-            if rationale is not None:
-                rationale = _truncate(rationale, max_content_chars)
+        if rationale is not None and why_limit is not None:
+            rationale = _truncate(rationale, why_limit)
         return cls(
             memory_id=scored.record.memory_id,
             kind=scored.record.kind,
@@ -137,10 +144,21 @@ def _render_why(why: object) -> str | None:
 
 
 def _truncate(value: str, limit: int) -> str:
+    """Shorten to ``limit`` chars, preferring the last sentence boundary in the final quarter.
+
+    A mid-word head-cut is the worst place to stop: this project's memories put the qualifier at
+    the end of a sentence ("…, but only when the index is cold"), so slicing mid-clause can leave
+    a statement that reads as unconditional. Falling back to the hard cut keeps the bound absolute
+    when there is no boundary to use."""
     if len(value) <= limit:
         return value
     suffix = "..." if limit >= 3 else ""
-    return value[: limit - len(suffix)].rstrip() + suffix
+    hard = value[: limit - len(suffix)]
+    floor = int(limit * 0.75)  # only accept a boundary that keeps most of the budget
+    boundary = max(hard.rfind(". "), hard.rfind(".\n"), hard.rfind("\n\n"))
+    if boundary >= floor:
+        return hard[: boundary + 1].rstrip() + suffix
+    return hard.rstrip() + suffix
 
 
 def _node_location(node: StructuralNode) -> str | None:
@@ -295,8 +313,14 @@ class ContextPayload:
             for item in items:
                 superseded = " [superseded]" if item.superseded else ""
                 content = fence_untrusted(item.content, item.trust)
+                # The id is rendered so the actuator can *declare* which memories it used
+                # (`record_usage(used_memory_ids=…)`). Footprint attribution can only credit
+                # memories whose files the work touched, so a conceptual memory is otherwise
+                # invisible to the credit layer (the R-9 finding) — and it cannot be named if
+                # it is never shown.
                 lines.append(
-                    f"- ({item.kind}, relevance {item.score:.2f}){superseded} {content}"
+                    f"- ({item.kind}, relevance {item.score:.2f}){superseded} "
+                    f"[{item.memory_id}] {content}"
                 )
                 if item.why:
                     lines.append(f"  why: {fence_untrusted(item.why, item.trust)}")

@@ -1,5 +1,5 @@
 {
-  "_comment": "Gemini CLI MCP config for Thalamus. Merge the mcpServers block below into your .gemini/settings.json (project-local) or ~/.gemini/settings.json (global). Edit the FILL-IN values. Launch `gemini` from the root of the repo you want the brain scoped to (--repo .). If your password is not the local-dev default, change THALAMUS_NEO4J_PASSWORD.",
+  "_comment": "Gemini CLI MCP config for Thalamus. Merge the mcpServers block below into your .gemini/settings.json (project-local) or ~/.gemini/settings.json (global). Edit the FILL-IN values. Launch `gemini` from the root of the repo you want the brain scoped to (--repo .). If your password is not the local-dev default, change THALAMUS_NEO4J_PASSWORD. HF_HUB_OFFLINE is 0 because the first run must download the BGE-small encoder from the Hugging Face Hub; set it to 1 once the model is cached to keep the server off the network.",
   "mcpServers": {
     "thalamus": {
       "command": "uv",
@@ -15,7 +15,7 @@
         "THALAMUS_NEO4J_URI": "bolt://localhost:7687",
         "THALAMUS_NEO4J_USER": "neo4j",
         "THALAMUS_NEO4J_PASSWORD": "thalamuspw",
-        "HF_HUB_OFFLINE": "1"
+        "HF_HUB_OFFLINE": "0"
       }
     }
   }

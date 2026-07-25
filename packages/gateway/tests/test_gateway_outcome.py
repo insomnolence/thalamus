@@ -87,3 +87,47 @@ def test_record_outcome_noop_without_sink() -> None:
     gateway = Gateway(L0Retriever(encoder, store, now=lambda: NOW))
     payload = gateway.recall(prompt="hello world", scope=SCOPE)
     assert gateway.record_outcome(payload, "hello world") == []
+
+
+def _gateway_with_sink() -> tuple[Gateway, InMemoryUsageSink]:
+    encoder = DeterministicEncoder(dim=128)
+    store = InMemoryStore(dim=128)
+    _add(encoder, store, "m_sqlite", "use aiosqlite for the async store")
+    _add(encoder, store, "m_style", "prefer terse commit messages")
+    sink = InMemoryUsageSink()
+    retriever = LoggingRetriever(
+        L0Retriever(encoder, store, now=lambda: NOW),
+        InMemoryEventSink(),
+        policy_id="L0",
+        now=lambda: NOW,
+    )
+    return Gateway(retriever, k=2, usage_sink=sink), sink
+
+
+def test_declared_ids_are_credited_alongside_the_citation_baseline() -> None:
+    """`declared` credits what the actuator names; `citation` is kept as the ablation baseline."""
+    gateway, sink = _gateway_with_sink()
+    payload = gateway.recall(prompt="how do we do async db work", scope=SCOPE)
+    shown = [item.memory_id for item in payload.memories]
+    assert shown, "fixture must surface at least one memory"
+
+    # prose that overlaps nothing, so any credit must come from the declaration itself
+    signals = gateway.record_outcome(payload, "entirely unrelated prose", declared=[shown[0]])
+
+    declared = [s for s in signals if s.kind == "declared"]
+    assert {s.kind for s in signals} == {"citation", "declared"}
+    # every shown memory gets a declared row - the non-declared ones are real negatives
+    assert len(declared) == len(shown)
+    assert [s.used for s in declared if s.memory_id == shown[0]] == [True]
+    assert sum(s.used for s in declared) == 1
+    assert all(s in sink.signals for s in signals)
+
+
+def test_declared_is_omitted_entirely_when_the_actuator_names_nothing() -> None:
+    """Backward compatible: an actuator that only reports prose behaves exactly as before."""
+    gateway, _sink = _gateway_with_sink()
+    payload = gateway.recall(prompt="how do we do async db work", scope=SCOPE)
+
+    signals = gateway.record_outcome(payload, "import aiosqlite")
+
+    assert {s.kind for s in signals} == {"citation"}

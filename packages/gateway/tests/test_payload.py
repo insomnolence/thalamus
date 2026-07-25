@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from thalamus.core.types import MemoryId, RepoId, Scope, TenantId
+from datetime import UTC, datetime
+
+from thalamus.core.types import (
+    Hemisphere,
+    MemoryId,
+    MemoryRecord,
+    RepoId,
+    Scope,
+    ScoredMemory,
+    TenantId,
+)
 from thalamus.gateway.payload import (
     ContextPayload,
     MemoryItem,
@@ -115,3 +125,66 @@ def test_untrusted_stale_references_and_location_fenced() -> None:
     assert "untrusted_file.py" in rendered
     assert "untrusted/path.py:10" in rendered
     assert rendered.count("⟦untrusted:third-party") == 4
+
+
+def test_memory_id_is_rendered_so_the_actuator_can_declare_it() -> None:
+    """The credit loop depends on this: an id that is never shown can never be declared."""
+    payload = ContextPayload(cue_text="q", memories=[_memory("use aiosqlite for the store")])
+    assert "[retained:x]" in payload.render()
+
+
+def test_why_is_budgeted_separately_from_content() -> None:
+    """One shared cap halves every body while never touching the rationale it also bounds."""
+    item = MemoryItem.from_scored(
+        ScoredMemory(record=_record_with_why("b" * 900, "w" * 900), score=1.0),
+        max_content_chars=100,
+        max_why_chars=500,
+    )
+    assert len(item.content) <= 100
+    assert item.why is not None and 100 < len(item.why) <= 500
+
+
+def test_why_falls_back_to_the_content_budget_when_unset() -> None:
+    item = MemoryItem.from_scored(
+        ScoredMemory(record=_record_with_why("b" * 900, "w" * 900), score=1.0),
+        max_content_chars=100,
+    )
+    assert item.why is not None and len(item.why) <= 100
+
+
+def test_truncation_prefers_a_sentence_boundary() -> None:
+    """Mid-clause cuts can turn a conditional statement into an unconditional-looking one."""
+    text = "Rebuild the index before you start. Only when the cache is cold does it matter."
+    item = MemoryItem.from_scored(
+        ScoredMemory(record=_record_with_why(text, None), score=1.0), max_content_chars=40
+    )
+    assert item.content == "Rebuild the index before you start...."
+
+
+def test_truncation_ignores_a_boundary_that_would_waste_the_budget() -> None:
+    """A sentence ending early must not shrink the cut to a fraction of what was allowed."""
+    text = "Short. " + "then a long clause that carries the actual substance of the memory"
+    item = MemoryItem.from_scored(
+        ScoredMemory(record=_record_with_why(text, None), score=1.0), max_content_chars=40
+    )
+    assert item.content.startswith("Short. then a long")  # hard cut, not truncated to "Short."
+    assert len(item.content) == 40
+
+
+def test_truncation_falls_back_to_a_hard_cut_without_a_usable_boundary() -> None:
+    item = MemoryItem.from_scored(
+        ScoredMemory(record=_record_with_why("x" * 200, None), score=1.0), max_content_chars=50
+    )
+    assert len(item.content) == 50
+
+
+def _record_with_why(content: str, why: str | None) -> MemoryRecord:
+    return MemoryRecord(
+        MemoryId("retained:x"),
+        Hemisphere.EXPERIENTIAL,
+        "decision",
+        content,
+        Scope(TenantId("t"), RepoId("r")),
+        datetime(2026, 7, 25, tzinfo=UTC),
+        metadata={"why": why} if why else {},
+    )

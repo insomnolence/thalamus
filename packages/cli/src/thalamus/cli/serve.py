@@ -77,7 +77,7 @@ from thalamus.experiential import (
     SessionStampingSource,
     consolidate_usage,
 )
-from thalamus.gateway import Gateway, Planner
+from thalamus.gateway import Gateway, Planner, PlannerConfig
 from thalamus.gateway.http_security import build_security_middleware
 from thalamus.gateway.server import PlanReader, RecentReader, RememberWriter, ShownResolver
 from thalamus.instrumentation import (
@@ -174,6 +174,10 @@ class ServeConfig:
     # commits at startup and fold it into the blast radius (validated to lift cross-file recall).
     # 0 disables it (call-graph radius only). A larger window = more signal but slower startup.
     plan_cochange_commits: int = 500
+    plan_memory_budget: int = 30  # memories a brief gathers (see PlannerConfig.memory_budget)
+    plan_memory_chars: int = 400  # per-memory content truncation in a brief
+    plan_why_chars: int = 800  # per-memory rationale truncation, budgeted separately
+    plan_node_budget: int = 40  # max blast-radius nodes in a brief
     # Log retention (Track I): rotate an append-only log to a numbered archive once it exceeds
     # log_max_bytes (0 disables), keeping log_keep archive segments (older ones dropped). Readers
     # concatenate the segments, so the retained history stays whole; the bound caps unbounded growth
@@ -221,6 +225,22 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--k", type=int, default=5, help="memories per recall")
     parser.add_argument("--k-hop", type=int, default=1, help="structural hops to expand")
+    parser.add_argument(
+        "--plan-memory-budget", type=int, default=30,
+        help="memories a plan brief gathers (lowering it costs measured gather recall - see "
+        "PlannerConfig.memory_budget)",
+    )
+    parser.add_argument(
+        "--plan-memory-chars", type=int, default=400,
+        help="per-memory content truncation inside a plan brief",
+    )
+    parser.add_argument(
+        "--plan-why-chars", type=int, default=800,
+        help="per-memory rationale truncation inside a plan brief (budgeted apart from content)",
+    )
+    parser.add_argument(
+        "--plan-node-budget", type=int, default=40, help="max blast-radius nodes in a plan brief"
+    )
     parser.add_argument(
         "--plan-cochange-commits", type=int, default=500,
         help="recent commits to build the plan tool's file co-change index from at startup "
@@ -376,6 +396,10 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         code_language=code_language,
         scip_index=scip_index,
         plan_cochange_commits=int(args.plan_cochange_commits),
+        plan_memory_budget=int(args.plan_memory_budget),
+        plan_memory_chars=int(args.plan_memory_chars),
+        plan_why_chars=int(args.plan_why_chars),
+        plan_node_budget=int(args.plan_node_budget),
         log_max_bytes=int(args.log_max_bytes),
         log_keep=int(args.log_keep),
         explore_epsilon=float(args.explore_epsilon),
@@ -781,7 +805,9 @@ def build_remember_writer(
     return write
 
 
-def build_shown_resolver(store: Store, scope: Scope, retrieval_log: Path) -> ShownResolver:
+def build_shown_resolver(
+    store: Store, scope: Scope, retrieval_logs: Sequence[Path]
+) -> ShownResolver:
     """Reconstruct a recall's shown ``(memory_id, content)`` pairs from the durable log + store.
 
     The durable fallback for ``record_usage`` when the in-memory payload is gone (serve restart,
@@ -794,7 +820,16 @@ def build_shown_resolver(store: Store, scope: Scope, retrieval_log: Path) -> Sho
     linear streaming scan is acceptable; an indexed lookup can replace it behind this same seam."""
 
     def resolve(event_id: EventId) -> list[tuple[MemoryId, str]] | None:
-        event = next((e for e in read_event_log(retrieval_log) if e.event_id == event_id), None)
+        event = next(
+            (
+                e
+                for log in retrieval_logs
+                if log.exists()
+                for e in read_event_log(log)
+                if e.event_id == event_id
+            ),
+            None,
+        )
         if event is None:
             return None
         pairs: list[tuple[MemoryId, str]] = []
@@ -829,6 +864,48 @@ def build_plan_reader(planner: Planner, scope: Scope) -> PlanReader:
         return planner.plan(target=target, scope=scope, hops=hops).render()
 
     return read
+
+
+# Values huggingface_hub reads as "offline" (its own truthy parse), so the hint below is only
+# offered when the variable is genuinely suppressing the download.
+_HF_TRUTHY = frozenset({"1", "on", "yes", "true"})
+_HF_OFFLINE_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+
+
+def _hf_offline_vars() -> list[str]:
+    """The Hub offline switches currently set (empty when the model download is allowed)."""
+    return [
+        var for var in _HF_OFFLINE_VARS if os.environ.get(var, "").strip().lower() in _HF_TRUTHY
+    ]
+
+
+def preflight_encoder(encoder: Encoder, name: str) -> None:
+    """Materialise the lazily-loaded encoder *before* the MCP transport starts, explaining failure.
+
+    The production encoder fetches ``BAAI/bge-small-en-v1.5`` from the Hugging Face Hub the first
+    time it embeds anything. Over stdio the serve is a subprocess of the agent, so a first run with
+    a cold model cache and ``HF_HUB_OFFLINE=1`` dies deep inside that lazy load and the client
+    reports only "thalamus server failed" — the silent-failure mode. Touching the encoder here
+    turns it into one actionable line on stderr, first thing in the client's MCP log, and then
+    re-raises: a serve without its encoder is not something to degrade quietly past.
+    """
+    try:
+        _ = encoder.dim  # forces the lazy model load (and, on a cold cache, the download)
+    except Exception:
+        offline = _hf_offline_vars()
+        remedy = (
+            f"{' and '.join(offline)} is set, which blocks that download — unset it for the "
+            "first run"
+            if offline
+            else "check network access to the Hugging Face Hub"
+        )
+        print(
+            f"thalamus: encoder {name!r} failed to load. It downloads BAAI/bge-small-en-v1.5 from "
+            f"the Hugging Face Hub on first use; {remedy}. Air-gapped or offline by policy? Serve "
+            "with --encoder deterministic (no download; lexical, and much weaker recall).",
+            file=sys.stderr,
+        )
+        raise
 
 
 def _is_git_repo(path: Path) -> bool:
@@ -898,6 +975,7 @@ def run_serve(config: ServeConfig) -> None:
     from thalamus.gateway import build_server  # lazy: the 'mcp' extra
 
     encoder: Encoder = build_encoder(config.encoder, dim=config.dim)
+    preflight_encoder(encoder, config.encoder)
     (
         gateway,
         store,
@@ -1020,7 +1098,24 @@ def run_serve(config: ServeConfig) -> None:
             interval_seconds=max(config.dream_tick_minutes, 0.0) * 60.0,
         )
 
-    planner = build_planner(gateway, store, cochange=cochange_ref)
+    planner = build_planner(
+        gateway,
+        store,
+        # Without an explicit config every plan bound sat at its dataclass default, unreachable
+        # from any flag or thalamus.toml key — "tunable" in name only.
+        config=PlannerConfig(
+            memory_budget=config.plan_memory_budget,
+            max_memory_chars=config.plan_memory_chars,
+            max_why_chars=config.plan_why_chars,
+            node_budget=config.plan_node_budget,
+        ),
+        cochange=cochange_ref,
+        event_sink=(
+            None
+            if config.investigate
+            else JsonlEventSink(data_dir / ".thalamus" / "logs" / "plan.jsonl")
+        ),
+    )
     server = build_server(
         gateway,
         scope,
@@ -1037,7 +1132,14 @@ def run_serve(config: ServeConfig) -> None:
         read_only=config.investigate,
         default_session_id=default_session_id,
         resolve_shown=build_shown_resolver(
-            store, scope, data_dir / ".thalamus" / "logs" / "retrieval.jsonl"
+            store,
+            scope,
+            # plan briefs log to their own stream (see Planner._log_gather); record_usage must
+            # resolve an event id from either, since both hand memories to the actuator.
+            [
+                data_dir / ".thalamus" / "logs" / "retrieval.jsonl",
+                data_dir / ".thalamus" / "logs" / "plan.jsonl",
+            ],
         ),
         # HTTP serves many clients from one process: key each recall by its MCP connection
         # session so concurrent agents don't collapse into the single process session. stdio

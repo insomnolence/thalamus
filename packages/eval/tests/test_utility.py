@@ -194,3 +194,35 @@ def test_end_to_end_recall_outcome_then_utility() -> None:
     assert report.utility_at_k == 0.5
     assert (report.n_events, report.n_shown, report.n_used) == (1, 2, 1)
     assert report.coverage == 1.0
+
+
+def _declared(event_id: str, memory_id: str, *, used: bool) -> UsageSignal:
+    value = 1.0 if used else 0.0
+    return UsageSignal(EventId(event_id), MemoryId(memory_id), "declared", value, used)
+
+
+def test_declared_only_event_is_missing_data_not_a_scored_zero() -> None:
+    """A declaration is still a self-report: accurate, but it must not define scoring on its own.
+
+    Otherwise adding the declared signal would silently move utility@k by reclassifying
+    previously-unscored events, making the metric jump for a reason unrelated to the brain."""
+    events = [_event("e1", ["a"]), _event("e2", ["b"])]
+    signals = [_signal("e1", "a", used=True), _declared("e2", "b", used=True)]
+
+    report = utility_at_k(events, signals, k=5)
+
+    assert report.utility_at_k == 1.0  # e1 only; e2 excluded, NOT a 0 dragging it to 0.5
+    assert report.n_events == 1  # only e1 had a deterministic outcome
+    assert report.coverage == 0.5  # e2 surfaced but had no deterministic outcome
+
+
+def test_declared_can_mark_a_memory_used_within_a_footprint_scored_event() -> None:
+    """The point of the signal: a conceptual memory the work's file footprint cannot reach
+    still earns credit inside an event that IS deterministically scored (the R-9 gap)."""
+    events = [_event("e1", ["a", "b"])]
+    signals = [_signal("e1", "a", used=True), _declared("e1", "b", used=True)]
+
+    report = utility_at_k(events, signals, k=2)
+
+    assert report.utility_at_k == 1.0
+    assert (report.n_events, report.n_used) == (1, 2)

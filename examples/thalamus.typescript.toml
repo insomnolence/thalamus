@@ -1,0 +1,116 @@
+# Thalamus project configuration — a TypeScript project indexed via SCIP, with several corpora.
+#
+# Copy this to `thalamus.toml` at the root of your project. The file-wide rules are the same as in
+# `thalamus.toml` (CLI flag > thalamus.toml > default; path keys resolve relative to THIS file's
+# directory; unknown keys ignored; no secrets in the file). This example covers the two things the
+# Python example does not: a **SCIP** code corpus, and the declarative **[[corpus]]** tables.
+#
+# Layout this example assumes:
+#     ./thalamus.toml            <- this file
+#     ./mcp-server/              <- the TypeScript sources + tsconfig.json
+#     ./docs/                    <- Markdown design docs
+#     ./notes/                   <- loose plain-text notes
+#     ./reports/*.sarif          <- output of an external analyser
+#
+# One-time prerequisite for the SCIP corpus:
+#     npm install -g @sourcegraph/scip-typescript
+#     scripts/scip-index-typescript.sh ./mcp-server          # writes mcp-server/index.scip
+# The `.scip` artifact is the structure source of truth — a stale index means a stale Brain 2.
+# `regen_command` below lets a running serve rebuild it whenever the sources move ahead of it.
+#
+# TOML GOTCHA: every key below a `[[corpus]]` header belongs to THAT TABLE. All the top-level
+# settings therefore come first; the [[corpus]] tables are last. A top-level key written after a
+# [[corpus]] header is silently swallowed by the corpus and ignored.
+
+# ── Identity and locations ───────────────────────────────────────────────────────────────────
+repo_id = "sample-app"
+tenant = "local"
+# The repo Brain 2 is derived from and that `plan` resolves file paths against.
+code_root = "mcp-server"
+# Keep the brain's own state (`.thalamus/logs`, session file, git checkpoint) OUT of the code
+# tree: here it lands next to this file rather than inside `mcp-server/`.
+data_dir = "."
+
+# ── Serve ────────────────────────────────────────────────────────────────────────────────────
+# HTTP so several agents (and a Codex session, which has no per-project MCP config) can attach to
+# one long-lived server. Set THALAMUS_HTTP_TOKEN in the environment before binding off-localhost.
+transport = "http"
+http_host = "127.0.0.1"
+http_port = 8788
+
+# ── Neo4j ────────────────────────────────────────────────────────────────────────────────────
+# Bridged to THALAMUS_NEO4J_URI / THALAMUS_NEO4J_USER (an exported variable still wins). A second
+# project can run its own Neo4j on another port, as here. Password via THALAMUS_NEO4J_PASSWORD.
+neo4j_uri = "bolt://localhost:7688"
+neo4j_user = "neo4j"
+
+# ── Brain 2, the flat route (one code corpus + docs) ─────────────────────────────────────────
+# For a single-language project this is all you need, and you can delete the [[corpus]] tables
+# below. `language` is any SCIP language (typescript, rust, go, cpp, …) and then `scip_index` is
+# REQUIRED — serve refuses to start without it.
+#
+#     language   = "typescript"
+#     scip_index = "mcp-server/index.scip"
+#     doc_roots  = ["docs"]
+#
+# The [[corpus]] tables below REPLACE that flat build entirely — declare corpora one way or the
+# other, not both. Use the tables when the brain should carry more than "one language + docs":
+# several languages, extra text, or third-party findings.
+
+# ── Brain 2, the declarative route ───────────────────────────────────────────────────────────
+# Each [[corpus]] table is one independently-indexed corpus. Keys:
+#   name          the corpus label. Recall groups hits under "## Related <name>", so name it for
+#                 how it should read ("code", "docs", "findings", "notes"). Defaults to `root`.
+#   root          REQUIRED. The directory (or single file) to ingest.
+#   kind          which producer builds it: "python-ast" | "scip" | "docs" | "text" | "findings".
+#                 Unknown kinds fail at config load with the list of registered kinds.
+#   scip_index    required for kind="scip" — the prebuilt `.scip` artifact to consume.
+#   include       filename globs naming this corpus' source files. They drive change detection
+#                 (so a live re-derive fires on an edit) and gate `regen_command`. Empty falls
+#                 back to the kind's default walker. Globs match the FILE NAME, not the path.
+#   regen_command optional shell command that rebuilds the corpus' external artifact, run from
+#                 `root` by the background re-derive pass when any `include` file is newer than
+#                 the artifact. REQUIRES `include` (there is no change signal without it).
+#   root_package  optional prefix for this corpus' module ids — use it to keep two corpora with
+#                 colliding module names apart.
+#   options.*     forward-compatible per-producer parameters (see the "notes" corpus below).
+#   trust         provenance: "operator" (default, your own content) | "derived" | "third-party".
+#                 Anything but "operator" is stamped and fenced on recall, so instruction-shaped
+#                 text ingested from outside cannot steer the agent.
+
+[[corpus]]
+name = "code"
+root = "mcp-server"
+kind = "scip"
+scip_index = "mcp-server/index.scip"
+include = ["*.ts", "*.tsx"]
+# Run from `root`, so the relative --output lands exactly where `scip_index` points.
+regen_command = "scip-typescript index --output index.scip"
+root_package = "mcp-server"
+trust = "operator"
+
+[[corpus]]
+name = "docs"
+root = "docs"
+kind = "docs"
+# No `include`: the docs producer's default walker already picks up Markdown.
+
+[[corpus]]
+name = "notes"
+root = "notes"
+kind = "text"
+# Generic headingless prose, split into overlapping chunks. Both options are parsed and
+# range-checked at config load (overlap_chars must be < chunk_chars).
+include = ["*.txt"]
+options.chunk_chars = 400
+options.overlap_chars = 80
+
+[[corpus]]
+name = "findings"
+root = "reports"
+kind = "findings"
+# `include` is REQUIRED here — it names the findings file(s) themselves (SARIF or generic JSON).
+# Thalamus ingests an analyser's *results*; it never runs the analyser's engine.
+include = ["*.sarif"]
+# Someone else's tool wrote this text, so it is fenced on recall rather than trusted as guidance.
+trust = "third-party"

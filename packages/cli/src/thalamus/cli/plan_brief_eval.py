@@ -55,6 +55,7 @@ class PlanBriefEvalConfig:
     cases_path: Path
     hops: int
     plan_cochange_commits: int
+    memory_budget: int
     neo4j_uri: str | None
     neo4j_user: str
     neo4j_password: str | None
@@ -77,6 +78,10 @@ def add_plan_brief_eval_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--hops", type=int, default=2, help="default blast-radius depth per case")
     parser.add_argument(
+        "--memory-budget", type=int, default=30,
+        help="memories a brief gathers — sweep this to measure the budget/recall tradeoff",
+    )
+    parser.add_argument(
         "--plan-cochange-commits", type=int, default=500,
         help="recent commits to mine for the co-change radius layer (0 = off; matches live `plan`)",
     )
@@ -93,6 +98,7 @@ def plan_brief_eval_config(args: argparse.Namespace) -> PlanBriefEvalConfig:
         cases_path=Path(args.cases),
         hops=int(args.hops),
         plan_cochange_commits=int(args.plan_cochange_commits),
+        memory_budget=int(args.memory_budget),
         neo4j_uri=os.environ.get("THALAMUS_NEO4J_URI"),
         neo4j_user=os.environ.get("THALAMUS_NEO4J_USER", "neo4j"),
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
@@ -155,6 +161,7 @@ def run_plan_brief_eval(config: PlanBriefEvalConfig) -> None:
     from thalamus.cli.brain import build_planner, close_store
     from thalamus.cli.cochange import build_file_cochange, recent_commit_shas
     from thalamus.cli.serve import ServeConfig, build_serve_gateway
+    from thalamus.gateway import PlannerConfig
 
     cases = load_brief_cases(config.cases_path)
     serve_config = ServeConfig(
@@ -187,7 +194,10 @@ def run_plan_brief_eval(config: PlanBriefEvalConfig) -> None:
                 scope,
                 recent_commit_shas(config.repo, config.plan_cochange_commits),
             )
-        planner = build_planner(gateway, store, cochange=cochange)
+        planner = build_planner(
+            gateway, store, cochange=cochange,
+            config=PlannerConfig(memory_budget=config.memory_budget),
+        )
         if planner is None:
             print("plan-brief-eval: experiential-only brain — no planner to evaluate")
             return

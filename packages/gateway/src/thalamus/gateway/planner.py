@@ -29,13 +29,15 @@ useful thing to tell the actuator.
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from thalamus.core.protocols import Store
 from thalamus.core.types import (
     Cue,
+    EventId,
     MemoryId,
     MemoryRecord,
     MemoryRef,
@@ -46,6 +48,7 @@ from thalamus.core.types import (
 )
 from thalamus.gateway.payload import FindingItem, MemoryItem, StructuralItem, fence_untrusted
 from thalamus.gateway.views import DerivedViews, DerivedViewsRef
+from thalamus.instrumentation import CandidateLog, EventSink, RetrievalEvent, ShownItem
 from thalamus.structural import (
     CoChangeIndex,
     CrossLinkIndex,
@@ -106,6 +109,39 @@ def _simple_name(label: str) -> str:
     return label.rsplit(".", 1)[-1]
 
 
+def _query_terms(target: str, integration_label: str | None) -> frozenset[str]:
+    """The identifiers a gathered memory is scored against — the target plus what it resolved to.
+
+    The resolved symbol matters as much as the raw target: a descriptive target ("where does
+    spec ingestion attach") carries no identifier of its own, but resolution names the symbol
+    it meant."""
+    terms = {token for token in _identifier_tokens(target)}
+    if integration_label:
+        terms.add(_simple_name(integration_label).lower())
+    return frozenset(term for term in terms if len(term) >= 3)
+
+
+def _query_match(text: str, terms: frozenset[str]) -> float:
+    """Fraction of the query's identifiers this memory actually names, in ``[0, 1]``.
+
+    Why lexical matching is the right instrument *here*, having been the wrong one for crediting
+    use: an identifier is a rare, high-signal token, and this asks "is this memory **about** this
+    symbol" — the same thing the hybrid retriever's BM25 leg exists to catch, because an exact
+    symbol name is precisely what an embedding cannot represent. (Scoring whether a memory was
+    *used* by comparing it to an actuator's prose fails for the opposite reason: paraphrase shares
+    only the project's common vocabulary. See ``instrumentation.usage.attribute_overlap``.)
+
+    A descriptive target is still scored, against the symbol it *resolved to* (see
+    :func:`_query_terms`) — that is the point, not a leak. The 0.0 guard covers only the
+    degenerate case where neither the target nor the resolution yields a usable identifier, so
+    the term stays inert rather than inventing an ordering, as ``_recency_fraction`` does when
+    every candidate shares a timestamp."""
+    if not terms:
+        return 0.0
+    haystack = text.lower()
+    return sum(1 for term in terms if term in haystack) / len(terms)
+
+
 def _importance(record: MemoryRecord) -> float:
     """The operator-set importance from ``metadata`` (``remember``'s default is ``1.0``), coerced
     defensively — a non-numeric or absent value contributes the neutral ``1.0`` rather than raising
@@ -154,6 +190,25 @@ def _is_test_path(path: str) -> bool:
     )
 
 
+def _node_is_test(node: StructuralNode) -> bool:
+    """Whether a graph node lives in a test file (no anchor path ⇒ not a test)."""
+    path = node.anchor.path if node.anchor is not None else None
+    return path is not None and _is_test_path(path)
+
+
+def _tests_last[T: StructuralNode](nodes: Sequence[T]) -> list[T]:
+    """Production nodes first, test-file nodes after — order only, nothing dropped.
+
+    A test that exercises a symbol *is* a real caller and stays in the radius. But it is
+    mechanically derivable and low-information next to a production call site, so when the node
+    budget truncates, the callers a developer could not have guessed should be the ones that
+    survive. Suppressing them outright would break the coverage-honesty contract (§14): the brief
+    must never quietly shrink what it claims is "everything that breaks"."""
+    primary = [n for n in nodes if not _node_is_test(n)]
+    tests = [n for n in nodes if _node_is_test(n)]
+    return primary + tests
+
+
 @dataclass(frozen=True, slots=True)
 class RadiusNode:
     """One code node in the blast radius, tagged by how it relates to the integration point."""
@@ -162,6 +217,7 @@ class RadiusNode:
     relation: str  # "caller" (what breaks) | "callee" (what it uses) | "container"
     distance: int  # hops from the integration point (1 = direct)
     linked_memory_count: int  # cross-links attached here — the per-node coverage signal
+    is_test: bool = False  # lives in a test file — collapsed (not dropped) when rendering
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +257,10 @@ class PlanBrief:
     radius_omitted: int = 0  # radius nodes dropped past the node budget
     memories_omitted: int = 0  # memories dropped past the memory budget
     findings_omitted: int = 0  # findings dropped past the finding budget
+    event_id: EventId | None = None  # gather telemetry id; pass to record_usage to credit a memory
+
+    def _event_suffix(self) -> str:
+        return "" if self.event_id is None else f"\n# retrieval_event_id: {self.event_id}\n"
 
     def render(self) -> str:
         """Render the brief as a clean text block for the actuator — coverage honesty included."""
@@ -209,7 +269,7 @@ class PlanBrief:
         if self.integration_point is None:
             lines += ["", f'Could not resolve "{self.target}" to a known code node.']
             lines.append("(No blast radius — the target is not in Brain 2, or below the floor.)")
-            return "\n".join(lines) + "\n"
+            return "\n".join(lines) + "\n" + self._event_suffix()
 
         ip = self.integration_point
         loc = (
@@ -221,6 +281,18 @@ class PlanBrief:
         # Fence symbol names from non-operator corpora (§17.4 T1) — a plan over third-party code
         # surfaces its symbols here; they reach the actuator as data, not instructions.
         ip_description = fence_untrusted(f"({ip.kind}) {ip.label}", ip.trust)
+        # Coverage leads. It is the load-bearing property (see the module docstring) and it is the
+        # one line that makes the actuator *less* bold where the brain is blind — so it must not
+        # sit below the bulk, where it is both read last and attenuated once the brief becomes
+        # mid-transcript context on the next turn. The detail still repeats at the end.
+        cov = self.coverage
+        if cov.radius_nodes and cov.nodes_without_context:
+            lines += [
+                "",
+                f"⚠ Coverage: {cov.nodes_with_context} of {cov.radius_nodes} in-scope node(s) "
+                f"have recorded context; {cov.nodes_without_context} have NONE — absence below is "
+                "*unverified*, not a clean bill of health.",
+            ]
         lines += ["", "## Integration point", f"- {ip_description}{loc}{rel}"]
         if self.resolution_ambiguous and self.alternatives:
             alts = ", ".join(fence_untrusted(a.label, a.trust) for a in self.alternatives)
@@ -245,7 +317,11 @@ class PlanBrief:
                 if not group:
                     continue
                 lines.append(f"- {heading}:")
-                for rn in group:
+                # Test-file nodes are real radius members but low-information next to production
+                # ones, and they can outnumber them 9:1. Collapse to a count so the brief stays
+                # readable — never drop them, or "what breaks" would understate itself.
+                in_tests = [rn for rn in group if rn.is_test]
+                for rn in (rn for rn in group if not rn.is_test):
                     notes = (
                         f"{rn.linked_memory_count} note(s)"
                         if rn.linked_memory_count
@@ -260,6 +336,11 @@ class PlanBrief:
                         f"({rn.item.kind}) {rn.item.label}", rn.item.trust
                     )
                     lines.append(f"  - {description}{loc}  [{notes}]")
+                if in_tests:
+                    lines.append(
+                        f"  - + {len(in_tests)} more in test file(s) — in the radius, collapsed "
+                        "here (they exercise this code, so they change when it does)"
+                    )
         elif not self.high_fanout:
             lines.append("  (no direct callers/callees recorded in Brain 2)")
         if self.radius_omitted:
@@ -298,7 +379,7 @@ class PlanBrief:
             )
         if self.memories_omitted:
             lines.append(f"({self.memories_omitted} further memory(ies) omitted past the budget.)")
-        return "\n".join(lines) + "\n"
+        return "\n".join(lines) + "\n" + self._event_suffix()
 
     @staticmethod
     def _render_memories(lines: list[str], heading: str, items: Sequence[MemoryItem]) -> None:
@@ -309,7 +390,8 @@ class PlanBrief:
             superseded = " [superseded]" if item.superseded else ""
             content = fence_untrusted(item.content, item.trust)
             lines.append(
-                f"- ({item.kind}, gather score {item.score:.2f}){superseded} {content}"
+                f"- ({item.kind}, gather score {item.score:.2f}){superseded} "
+                f"[{item.memory_id}] {content}"
             )
             if item.why:
                 lines.append(f"  why: {fence_untrusted(item.why, item.trust)}")
@@ -352,9 +434,20 @@ class PlannerConfig:
     hops: int = 2  # blast-radius depth bound for caller reachability
     fanout_threshold: int = 25  # direct-caller degree above which the hub breaker trips
     node_budget: int = 40  # max blast-radius nodes in the brief
+    # KEPT AT 30 ON EVIDENCE, against the intuition that a brief this size must be over-gathering.
+    # A live 97-candidate gather shows scores differentiated for only ~8 items (4.00 -> 1.93) then
+    # collapsing onto a plateau (ranks 9-15 all scored exactly 1.88; 85 of 97 share the lowest
+    # proximity tier), which argues for a much smaller budget. But sweeping it against
+    # `plan-brief-eval` says otherwise -- 12: 2/3 cases and the POSITIVE CONTROL missing; 16: same;
+    # 20 and 24: control recovers, still 2/3; 30: 3/3 with the control. Cutting the count drops
+    # memories the instrument judges relevant, because the cut lands inside the tied plateau and
+    # so chooses arbitrarily. Shrink briefs via the per-memory budgets below (which change how much
+    # of a memory is shown, not which memories appear); revisit this only once the gather ranking
+    # discriminates past rank ~8 -- the usage/L-R1 weighting C-3a specified is still unbuilt.
     memory_budget: int = 30  # max memories gathered into the brief
     finding_budget: int = 20  # max external-analysis findings surfaced in the brief
-    max_memory_chars: int = 1000  # per-memory content/why truncation
+    max_memory_chars: int = 400  # per-memory content truncation (bodies are the bulk)
+    max_why_chars: int = 800  # rationale truncation, budgeted separately (see MemoryItem)
     cochange_min_support: float = 2.0  # min coupling score (count symbol-level; lift file-level)
     cochange_max_nodes: int = 15  # max co-change nodes added to the radius
     cochange_max_per_file: int = 3  # cap symbols taken from any one co-changed file (anti-flood)
@@ -367,6 +460,7 @@ class PlannerConfig:
     gather_weight_proximity: float = 1.0  # per proximity tier closer to the integration point
     gather_weight_recency: float = 1.0  # newest in-scope memory gets the full weight, oldest 0
     gather_weight_importance: float = 0.5  # scales metadata["importance"] (remember default 1.0)
+    gather_weight_query: float = 1.0  # memory names the target's identifiers (see _query_match)
     gather_supersession_penalty: float = 5.0  # demotion applied to a superseded belief (sinks it)
 
 
@@ -390,6 +484,9 @@ class Planner:
         views: DerivedViewsRef,
         cochange: CoChangeIndex | None = None,
         config: PlannerConfig | None = None,
+        event_sink: EventSink | None = None,
+        event_id_factory: Callable[[], EventId] = lambda: EventId(uuid.uuid4().hex),
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._graph = graph
         self._links = links
@@ -400,6 +497,13 @@ class Planner:
         # change together are folded into the blast radius alongside call-graph reachability.
         self._cochange = cochange
         self._config = config if config is not None else PlannerConfig()
+        # Optional gather telemetry (§14, removable). The gather is a graph join, not a
+        # Retriever, so LoggingRetriever cannot wrap it — without this the ~25 memories a brief
+        # surfaces are invisible to every downstream instrument, and nothing above recall's k=5
+        # is ever observed.
+        self._event_sink = event_sink
+        self._event_id_factory = event_id_factory
+        self._now = now
 
     def plan(self, *, target: str, scope: Scope, hops: int | None = None) -> PlanBrief:
         cfg = self._config
@@ -417,7 +521,10 @@ class Planner:
 
         # 3 — Gather the why: cross-linked memories for the integration point + every radius node.
         scope_refs = [ref, *(rn.item_ref for rn in radius)]
-        constraints, context, coverage, mem_omitted = self._gather(scope_refs)
+        query = _query_terms(target, res.item.label)
+        constraints, context, coverage, mem_omitted, event_id = self._gather(
+            scope_refs, query, target=target, scope=scope
+        )
 
         # 4 — Gather external-analysis findings annotating any in-scope code (C-3b).
         findings, findings_omitted = self._gather_findings(scope_refs)
@@ -438,6 +545,7 @@ class Planner:
             radius_omitted=radius_omitted,
             memories_omitted=mem_omitted,
             findings_omitted=findings_omitted,
+            event_id=event_id,
         )
 
     def _resolve(self, cue: Cue) -> _Resolution | None:
@@ -566,7 +674,7 @@ class Planner:
                 raw_candidates.append((node, relation, distance))
 
         if not high_fanout:
-            add(callers, "caller", 1)
+            add(_tests_last(callers), "caller", 1)
         add(subtypes, "subtype", 1)
         add(callees, "callee", 1)
         add(container, "container", 1)
@@ -585,7 +693,7 @@ class Planner:
         self._add_cochange(ref, seen, add_to_entries)
         if not high_fanout and depth >= 2:
             deeper = self._graph.k_hop(ref, depth, edge_types=("calls",), direction="in")
-            add_to_entries(deeper, "caller", 2)
+            add_to_entries(_tests_last(deeper), "caller", 2)
 
         cand_refs = [node.ref for node, _, _ in raw_candidates]
         if hasattr(self._links, "memories_for_many"):
@@ -603,6 +711,7 @@ class Planner:
                         relation=relation,
                         distance=distance,
                         linked_memory_count=count,
+                        is_test=_node_is_test(node),
                     ),
                     item_ref=node.ref,
                 )
@@ -756,11 +865,17 @@ class Planner:
         return tuple(items[:budget]), omitted
 
     def _gather(
-        self, scope_refs: Sequence[StructuralRef]
-    ) -> tuple[tuple[MemoryItem, ...], tuple[MemoryItem, ...], CoverageReport, int]:
+        self,
+        scope_refs: Sequence[StructuralRef],
+        query: frozenset[str] = frozenset(),
+        *,
+        target: str = "",
+        scope: Scope | None = None,
+    ) -> tuple[tuple[MemoryItem, ...], tuple[MemoryItem, ...], CoverageReport, int, EventId | None]:
         """Collect cross-linked memories for the in-scope nodes, deduped, ranked, partitioned, cut.
 
-        Returns ``(constraints, context, coverage, memories_omitted)``. Links are module-granular
+        Returns ``(constraints, context, coverage, memories_omitted, event_id)``. Links are
+        module-granular
         (see :meth:`_containing_module`), so we harvest from each in-scope symbol's **direct** links
         *and* its **containing module's** links — without the rollup the gather is blind to
         file-scoped decisions/gotchas even when the brain holds them.
@@ -810,7 +925,8 @@ class Planner:
         # Collect ALL candidates first (deduped, closest-tier wins), then rank — so the budget cut
         # keeps the most relevant set rather than whatever traversal reached first.
         candidates = self._collect_candidates(sources)
-        constraints, context, omitted = self._rank_for_budget(candidates, views)
+        constraints, context, omitted, scored = self._rank_for_budget(candidates, views, query)
+        event_id = self._log_gather(target, scope, scored, constraints, context)
 
         coverage = CoverageReport(
             radius_nodes=len(scope_refs),
@@ -818,7 +934,7 @@ class Planner:
             files_in_scope=len(modules),
             files_with_context=files_with_context,
         )
-        return constraints, context, coverage, omitted
+        return constraints, context, coverage, omitted, event_id
 
     def _collect_candidates(
         self, sources: Sequence[tuple[StructuralRef, int]]
@@ -861,7 +977,13 @@ class Planner:
         self,
         candidates: Sequence[_GatheredMemory],
         views: DerivedViews,
-    ) -> tuple[tuple[MemoryItem, ...], tuple[MemoryItem, ...], int]:
+        query: frozenset[str] = frozenset(),
+    ) -> tuple[
+        tuple[MemoryItem, ...],
+        tuple[MemoryItem, ...],
+        int,
+        Sequence[tuple[float, _GatheredMemory]],
+    ]:
         """Score, sort, partition, and apply ``memory_budget`` — constraints preserved over context.
 
         Policy: constraints/gotchas are the load-bearing "what you must not break", so when the
@@ -874,7 +996,7 @@ class Planner:
         newest, oldest = self._recency_bounds(candidates)
         scored = sorted(
             (
-                (self._score_memory(c, superseded_map, newest, oldest), c)
+                (self._score_memory(c, superseded_map, newest, oldest, query), c)
                 for c in candidates
             ),
             key=lambda pair: pair[0],
@@ -903,6 +1025,7 @@ class Planner:
             return MemoryItem.from_scored(
                 ScoredMemory(record=c.record, score=score),
                 max_content_chars=cfg.max_memory_chars,
+                max_why_chars=cfg.max_why_chars,
                 stale_references=views.stale_references.get(ref, ()),
                 superseded=superseded_map.get(ref),
             )
@@ -911,7 +1034,55 @@ class Planner:
             tuple(render(s, c) for s, c in kept_constraints),
             tuple(render(s, c) for s, c in kept_context),
             omitted,
+            scored,
         )
+
+    def _log_gather(
+        self,
+        target: str,
+        scope: Scope | None,
+        scored: Sequence[tuple[float, _GatheredMemory]],
+        constraints: Sequence[MemoryItem],
+        context: Sequence[MemoryItem],
+    ) -> EventId | None:
+        """Emit one gather as a :class:`RetrievalEvent`, or ``None`` when no sink is wired.
+
+        Logs **every** scored candidate, not just the survivors: the budget cut is the decision
+        being recorded, so what lost is the half that makes it analysable. This is also the only
+        place the brain ever observes a memory ranked past recall's ``k`` — the recall log tops
+        out at 5, so ranks 6+ have never been seen.
+
+        ``policy_id="plan"`` and a separate sink keep these out of the recall stream on purpose: a
+        brief surfaces ~25 memories against recall's 5, so mixing them would silently redefine the
+        population of ``utility@k``, ``health``, ``verdict``, ``rung-eval``, and attribution."""
+        sink = self._event_sink
+        if sink is None or scope is None:
+            return None
+        event_id = self._event_id_factory()
+        shown = [
+            ShownItem(memory_id=item.memory_id, rank=rank, propensity=1.0)
+            for rank, item in enumerate([*constraints, *context])
+        ]
+        candidates = [
+            CandidateLog(
+                memory_id=candidate.record.memory_id,
+                features={"gather_score": score, "proximity": float(candidate.proximity)},
+            )
+            for score, candidate in scored
+        ]
+        sink.emit(
+            RetrievalEvent(
+                event_id=event_id,
+                timestamp=self._now(),
+                scope=scope,
+                policy_id="plan",
+                cue_text=target,
+                k_requested=self._config.memory_budget,
+                candidates=candidates,
+                shown=shown,
+            )
+        )
+        return event_id
 
     def _score_memory(
         self,
@@ -919,6 +1090,7 @@ class Planner:
         superseded_map: Mapping[MemoryRef, Supersession],
         newest: float | None,
         oldest: float | None,
+        query: frozenset[str] = frozenset(),
     ) -> float:
         """A gathered memory's relevance score — higher survives the budget cut.
 
@@ -942,6 +1114,12 @@ class Planner:
             candidate.record.created_at, newest, oldest
         )
         score += cfg.gather_weight_importance * _importance(candidate.record)
+        # - query: does this memory actually name what you are changing? Without it the gather
+        #   ranks purely on "near this code, recent, important", which admits topically-adjacent
+        #   but task-irrelevant memories - the distractor class that costs the most.
+        score += cfg.gather_weight_query * _query_match(
+            f"{candidate.record.content} {candidate.record.metadata.get('why', '')}", query
+        )
         if candidate.record.ref in superseded_map:
             score -= cfg.gather_supersession_penalty
         return score

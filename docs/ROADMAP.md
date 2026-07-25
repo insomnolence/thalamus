@@ -5,7 +5,7 @@ replace — [`design-notes.md`](design-notes.md) §16 (the canonical capability 
 deep-dives (per-area specs). This file is the **ranked, actionable superset**: every item carries a status, what it
 does, why, the concrete steps, its gate/dependency, and where it's spec'd.*
 
-*Last updated 2026-06-16.*
+*Last updated 2026-07-25.*
 
 ---
 
@@ -75,7 +75,7 @@ counterfactual) is **parked by nature** (terminal negatives are intrinsically sc
 | ✅8 | ~~C-3b findings-in-brief + C-8 line-aware footprints + M-2/M-4 eval~~ | C/M | **COMMITTED** `bc17a1e`/`a6ab5fd`; rung verdict acted on (centrality leads). |
 | ✅9 | ~~Track I (I-1 attribution-pass, I-2 retention, I-3 Architecture B)~~ | I | **DONE + live-validated**. Brain reads its own usage from Neo4j, not files. |
 | **1** | **Finish Architecture-B loose ends** *(optional; usage-disposal ✅ resolved 2026-06-23)* | I | Usage-log disposal verified already safe (consolidation re-folds the full retained history each tick before any segment ages out). The only remainder — consolidate retrieval/trajectory/attribution into the brain too — is a mirror-of-I-3 build that **unlocks nothing functional** (offline verdict/attribution read those from files fine). Recommend skip unless tidiness matters. |
-| **2** | **M-1 — full thesis ablation** *(M-1a delivery probe ✅ done)* | M | M-1a (delivery link) BUILT + ran POSITIVE 2026-06-23 (control-validated, curated). The full "does the brain reduce mistakes over time?" ablation (uncurated decision-point / IPS) is still the central open claim. |
+| **1** | **M-1b — git-replay decision-point ablation** *(PRE-REGISTERED 2026-07-25, unbuilt)* | M | **The thesis test, now unblocked.** M-1a is downgraded to a *pilot* (case set not preserved → not reproducible). M-1's drafted design sampled decision points from `retrieval.jsonl`, capping n at lifetime recalls (209, and *declining*) — that is what made it "calendar-gated." A decision point needs a **commit**, not a prior recall, so git history supplies volume today. Primary estimand = the **accumulation slope**. Protocol: [`eval/m1_preregistration.md`](eval/m1_preregistration.md). |
 | — | **PARKED:** the outcome loop (churn / monitor / counterfactual) | L | Built + gated but dormant — no captured code outcomes in this workflow. Kept for if instrumented coding resumes. |
 
 After these: multi-language ingestion (C-4), retrieval hardening (Track R), then the security
@@ -529,7 +529,21 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
 
 ## Track M — Measurement / eval
 
-### M-1. L3 brain-on vs brain-off ablation — `M-1a BUILT + POSITIVE; uncurated frontier = the live thesis lead` · **P1** *(M-1a 2026-06-23; uncurated design + ε-logging live 2026-06-26)*
+### M-1. L3 brain-on vs brain-off ablation — `M-1a = PILOT (not reproducible); M-1b PRE-REGISTERED, unbuilt` · **P1** *(M-1a 2026-06-23; M-1b protocol 2026-07-25)*
+> **⚠️ M-1a CORRECTION (2026-07-25).** M-1a was carried in this file and in STATUS as a
+> control-validated POSITIVE. **Its frozen case set does not exist on disk** — not committed, not
+> local — so the n=12+6 run is **not reproducible** and the verdict is downgraded to **pilot**. A
+> second, narrower correction: an interim look at n=3 was analysed with a *fixed-sample* cluster
+> bootstrap where the protocol required an **anytime-valid (e-process)** statistic that `stats.py`
+> documents as unimplemented. (n=12 was *inside* the pre-registered N=10–15 band, so this was a pilot
+> completed to target, **not** escalate-until-significant.) The **instrument is sound and reused** by
+> M-1b; only the quotable number is retracted. Note that `m1a_preregistration.md` and `m1a.md` both
+> stated the correct limits all along — **the drift was in the summary layer, here and in STATUS.**
+> **M-1b** ([`eval/m1_preregistration.md`](eval/m1_preregistration.md)) supersedes the recall-log
+> sampler below as the primary path: it samples decision points from **git history** rather than from
+> `retrieval.jsonl`, which is what lifts the "thin at single-operator scale" limit that kept this
+> item calendar-gated. It needs more **history**, not more **users** — `foundation.md` Decision 2 is
+> untouched.
 > **The thesis lead now that L-2→L-6 is parked.** Outcome-discrimination is dead, so this — the
 > uncurated decision-point ablation (interventional) + R-7 IPS (observational, ε now logging) — is the
 > only remaining test of "more use → more useful." It is **not** gated on negatives. Design drafted
@@ -590,11 +604,14 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   emits an action) + programmatic detectors. **Build order:** (a) ✅ **BUILT** — the actuator harness
   (`eval/m1a/`, commit `e6b5938`): pluggable actuator (Ollama/Claude/Codex/Gemini), deterministic
   oracles, the four arms, pre-committed stats; `m1a-draft` renders cases from a live brain's recalls.
-  (b) ✅ **M-1a RAN POSITIVE** (2026-06-23, n=12 + 6 controls, full−ablation mean δ≈+0.60, 90% CI
-  excludes 0, controls δ=0, sign p≈0.002) — the retrieval→actuator **delivery link is demonstrated**.
-  **NOT the thesis**: curated for headroom, one actuator, self-authored oracles. (c) decision-point
-  ablation — **DESIGN drafted 2026-06-26** (see "Better primitive" above; build = the decision sampler
-  + natural-oracle adapters on the existing harness) — and (d) R-7 IPS — **logging now LIVE**
+  (b) ⚠️ **M-1a = PILOT, NOT REPRODUCIBLE** (2026-06-23, n=12 + 6 controls, full−ablation mean δ≈+0.60,
+  sign p≈0.002 — but the frozen case set was never preserved, and the CI was fixed-sample under an
+  interim look). Read as: *the harness works end-to-end and produced a positive signal once*. **Not a
+  quotable delivery proof**, and never the thesis (curated, one actuator, self-authored oracles).
+  (c) decision-point ablation — **PRE-REGISTERED as M-1b 2026-07-25**
+  ([`eval/m1_preregistration.md`](eval/m1_preregistration.md)); build = the git-replay decision sampler
+  + temporal-cutoff replay-brain builder + natural-oracle adapter + the e-process CI (a headline
+  build-blocker) on the existing harness — and (d) R-7 IPS — **logging now LIVE**
   (`--explore-epsilon 0.05` on the dogfood serve, 2026-06-26; estimator deferred on ε-volume) — are the
   uncurated frontier (the actual "more use → more useful" claim, and it is NOT gated on negatives).
 - **Settled (2026-06-23, evidence-based):** outcome-*discrimination* (the negative half the proxy↔truth

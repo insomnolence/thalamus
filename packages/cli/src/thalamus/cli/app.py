@@ -32,6 +32,7 @@ from thalamus.cli.impact_eval import (
 )
 from thalamus.cli.m1a_draft import add_m1a_draft_arguments, m1a_draft_config, run_m1a_draft
 from thalamus.cli.m1a_eval import add_m1a_eval_arguments, m1a_eval_config, run_m1a_eval
+from thalamus.cli.plan import add_plan_arguments, plan_config, run_plan
 from thalamus.cli.plan_brief_eval import (
     add_plan_brief_eval_arguments,
     plan_brief_eval_config,
@@ -86,6 +87,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "remember", help="store a retained decision, constraint, or gotcha"
     )
     add_remember_arguments(parsers["remember"])
+    parsers["plan"] = sub.add_parser(
+        "plan", help="blast-radius brief for a target: what breaks, and the recorded why"
+    )
+    add_plan_arguments(parsers["plan"])
     parsers["serve"] = sub.add_parser("serve", help="serve the two-hemisphere brain over MCP")
     add_serve_arguments(parsers["serve"])
     parsers["capture-tests"] = sub.add_parser(
@@ -158,6 +163,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_sync(sync_config(args))
     elif args.command == "remember":
         run_remember(remember_config(args))
+    elif args.command == "plan":
+        return run_plan(plan_config(args))
     elif args.command == "serve":
         run_serve(serve_config(args))
     elif args.command == "capture-tests":

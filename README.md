@@ -1,6 +1,11 @@
 # Thalamus
 
+<!-- The CI gate badge is deliberately absent until this repo is pushed to GitHub: the workflow
+     exists (.github/workflows/gate.yml) but the Actions endpoint does not, so the badge would
+     render broken and link to a 404 — a worse claim than no claim.
+     Restore this line verbatim on the first push:
 [![gate](https://github.com/insomnolence/thalamus/actions/workflows/gate.yml/badge.svg)](https://github.com/insomnolence/thalamus/actions/workflows/gate.yml)
+-->
 [![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![python: 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 
@@ -91,25 +96,35 @@ uv run python -m thalamus.cli remember \
   --file packages/store/src/thalamus/store/neo4j_store.py
 ```
 
-**3. Materialize episodes from your git history**, then serve the brain over MCP:
+**3. Materialize episodes from your git history:**
 
 ```bash
-uv run python -m thalamus.cli sync  --repo .
-uv run python -m thalamus.cli serve --repo .
+uv run python -m thalamus.cli sync --repo .
 ```
 
-**4. Point your agent at it.** Copy a config template from [`examples/`](examples/) — Claude Code,
-Gemini CLI, and Codex are covered, with [`examples/README.md`](examples/README.md) explaining what to
-fill in. For Claude Code: copy [`examples/claude-code.mcp.json`](examples/claude-code.mcp.json) to a
-`.mcp.json` at your repo root, set `--repo-id`, then approve the `thalamus` server (`claude mcp get
-thalamus` to verify). The brain exposes `recall`, `remember`, `record_usage`, and `plan` — ask the
-agent to recall prior decisions, or to `plan` the blast radius of a change, and it answers from the
-brain.
+This is also the run that downloads the embedding model, so do it before wiring up an agent.
+
+**4. Point your agent at it — pick one transport.** The brain exposes `recall`, `remember`,
+`record_usage`, and `plan`; ask the agent to recall prior decisions, or to `plan` the blast radius of
+a change, and it answers from the brain. Config templates for Claude Code, Gemini CLI, and Codex live
+in [`examples/`](examples/), with [`examples/README.md`](examples/README.md) explaining what to fill in.
+
+- **stdio** (Claude Code, Gemini CLI) — the MCP client spawns and owns its own `serve` process, so
+  **do not run `serve` yourself**; a second one would just duplicate the work against the same Neo4j.
+  For Claude Code: copy [`examples/claude-code.mcp.json`](examples/claude-code.mcp.json) to a
+  `.mcp.json` at your repo root, set `--repo-id`, then approve the `thalamus` server (`claude mcp get
+  thalamus` to verify).
+- **HTTP** (Codex, or several agents at once) — *you* run one long-lived server and point clients at
+  it: `uv run python -m thalamus.cli serve --repo . --transport http --port 8787` (or
+  [`scripts/serve-http.sh`](scripts/serve-http.sh)).
 
 `remember` stores high-value facts (`decision` / `constraint` / `gotcha` / `investigation` /
 `preference`); `sync` derives commit episodes; `serve` exposes bounded MCP recall and logs retrieval +
-usage beneath `.thalamus/logs/`. For non-Python codebases, declare `[[corpus]]` tables in
-`thalamus.toml` (any language with a SCIP indexer works with no new code).
+usage beneath `.thalamus/logs/`. Instead of repeating flags on every command, drop a `thalamus.toml`
+at your repo root — see [`examples/thalamus.toml`](examples/thalamus.toml). For non-Python codebases,
+declare `[[corpus]]` tables there
+([`examples/thalamus.typescript.toml`](examples/thalamus.typescript.toml)): any language with a SCIP
+indexer works with no new code.
 
 ## Does it actually work?
 
@@ -126,11 +141,12 @@ dogfooding (this repo + a separate code-rich project), via the built-in `health`
   used higher, on both recall and MRR) in a de-leaked ablation — that's *why* it's enabled by default.
 
 **Honest caveats** (the same instruments enforce them): this is single-operator scale (by design). The retrieval→actuator
-*delivery link* — does surfacing the decisive memory actually change the action? — has a **first
-positive read**: the pre-registered M-1a probe came out positive and control-validated, but at small
-scale (one actuator, curated cases), so it proves the link, **not** the thesis. The over-time "more use
-→ more useful" *slope* is confounded (task drift, attribution lag) and **not** cleanly measurable yet —
-the full uncurated brain-on/off ablation is still unrun (see
+*delivery link* — does surfacing the decisive memory actually change the action? — has only a
+**pilot read**: the pre-registered M-1a probe came out positive against its controls, but at small
+scale (one actuator, curated cases) and **its frozen case set was not preserved, so that run is not
+reproducible from this repository**. We report it as a pilot, not a result; the instrument
+(`eval/m1a/`) is sound and reusable, the number is not quotable. The over-time "more use
+→ more useful" *slope* is **not** yet measured — the uncurated ablation is pre-registered and unrun (see
 [`docs/deep-dives/path-to-real-data.md`](docs/deep-dives/path-to-real-data.md) and the M-1
 pre-registration). Reproduce any of the above on your own repo:
 
