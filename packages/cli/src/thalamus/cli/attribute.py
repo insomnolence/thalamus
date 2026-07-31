@@ -36,7 +36,7 @@ from thalamus.instrumentation import (
     read_event_log,
     read_trajectory_log,
 )
-from thalamus.routing import build_encoder
+from thalamus.routing import ENCODER_NAMES, build_encoder
 from thalamus.structural import (
     FootprintAttributor,
     ShownMemory,
@@ -84,7 +84,7 @@ def add_attribute_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo-id", default=None, help="repo id (default: repo dir name)")
     parser.add_argument("--dim", type=int, default=_DEFAULT_DIM, help="embedding dim (store)")
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        "--encoder", choices=ENCODER_NAMES, default=_DEFAULT_ENCODER,
         help="encoder (only sizes the store for scanning; no embedding happens here)",
     )
     parser.add_argument(

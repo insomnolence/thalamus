@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from thalamus.core.types import RepoId, Scope, TenantId
+from thalamus.routing import ENCODER_NAMES
 
 _DEFAULT_DIM = 128
 _DEFAULT_ENCODER = "bge-small"
@@ -59,7 +60,7 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--dim", type=int, default=_DEFAULT_DIM, help="embedding dimensionality")
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        "--encoder", choices=ENCODER_NAMES, default=_DEFAULT_ENCODER,
         help="embedding model (default: bge-small; symbol-name targets resolve without it)",
     )
     parser.add_argument("--hops", type=int, default=2, help="blast-radius depth bound")
@@ -111,7 +112,18 @@ def run_plan(config: PlanConfig) -> int:
         neo4j_password=config.neo4j_password,
         session=False,
     )
-    gateway, store, *_rest = build_serve_gateway(serve_config)
+    (
+        gateway,
+        store,
+        _episodes,
+        _supersession,
+        _rederive,
+        _attribution_refresh,
+        _behavioral_consolidation,
+        _usage_refresh,
+        _centrality_refresh,
+        usage_ref,
+    ) = build_serve_gateway(serve_config)
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     try:
         # Mirror the served tool: mine the same co-change layer, so the printed brief is the one
@@ -129,7 +141,11 @@ def run_plan(config: PlanConfig) -> int:
         logs = config.repo / ".thalamus" / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         planner = build_planner(
-            gateway, store, cochange=cochange, event_sink=JsonlEventSink(logs / "plan.jsonl")
+            gateway,
+            store,
+            cochange=cochange,
+            usage_weights=usage_ref,
+            event_sink=JsonlEventSink(logs / "plan.jsonl"),
         )
         if planner is None:
             print(

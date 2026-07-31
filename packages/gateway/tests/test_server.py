@@ -20,7 +20,7 @@ from thalamus.core.types import (
     TenantId,
 )
 from thalamus.gateway import Gateway, build_server
-from thalamus.instrumentation import InMemoryEventSink, LoggingRetriever
+from thalamus.instrumentation import InMemoryEventSink, InMemoryUsageSink, LoggingRetriever
 from thalamus.retrieval import L0Retriever
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
@@ -74,7 +74,9 @@ async def test_recall_tool_returns_context_over_mcp() -> None:
         assert "why: json too slow" in text
 
 
-def _logging_gateway() -> tuple[Gateway, InMemoryEventSink]:
+def _logging_gateway(
+    usage_sink: InMemoryUsageSink | None = None,
+) -> tuple[Gateway, InMemoryEventSink]:
     encoder = DeterministicEncoder(dim=64)
     store = InMemoryStore(dim=64)
     content = "switched to sqlite; json too slow"
@@ -86,7 +88,7 @@ def _logging_gateway() -> tuple[Gateway, InMemoryEventSink]:
     retriever = LoggingRetriever(
         L0Retriever(encoder, store, now=lambda: NOW), sink, policy_id="L0"
     )
-    return Gateway(retriever, k=3), sink
+    return Gateway(retriever, k=3, usage_sink=usage_sink), sink
 
 
 async def test_recall_defaults_to_server_session_id_when_caller_omits_it() -> None:
@@ -109,6 +111,29 @@ async def test_caller_session_id_overrides_server_default() -> None:
             "recall", {"prompt": "why did we move to sqlite", "session_id": "caller-99"}
         )
     assert sink.events[-1].session_id == SessionId("caller-99")
+
+
+async def test_record_usage_preserves_explicit_empty_declaration() -> None:
+    from fastmcp import Client
+
+    usage_sink = InMemoryUsageSink()
+    gateway, event_sink = _logging_gateway(usage_sink)
+    server = build_server(gateway, SCOPE)
+    async with Client(server) as client:
+        await client.call_tool("recall", {"prompt": "why did we move to sqlite"})
+        event_id = str(event_sink.events[-1].event_id)
+        await client.call_tool(
+            "record_usage",
+            {
+                "event_id": event_id,
+                "output_text": "The recalled context did not shape this answer.",
+                "used_memory_ids": [],
+            },
+        )
+
+    declared = [signal for signal in usage_sink.signals if signal.kind == "declared"]
+    assert declared
+    assert not any(signal.used for signal in declared)
 
 
 async def test_per_connection_sessions_key_by_connection_not_process_default() -> None:

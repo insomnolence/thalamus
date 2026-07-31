@@ -33,6 +33,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Protocol
 
 from thalamus.core.protocols import Store
 from thalamus.core.types import (
@@ -87,6 +88,17 @@ _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
 # token matches several, since a descriptive target usually names the type it's about.
 _CODE_KINDS = ("interface", "class", "enum", "function", "method")
 _KIND_RANK = {kind: rank for rank, kind in enumerate(_CODE_KINDS)}
+
+
+class UsageWeightSource(Protocol):
+    """Refreshable behavioral-usage snapshot consumed by the gather ranker.
+
+    Kept structural so the gateway package does not depend on the retrieval package's concrete
+    ``UsageWeightsRef``. The composition root passes that holder directly.
+    """
+
+    @property
+    def weights(self) -> Mapping[MemoryRef | MemoryId, float]: ...
 
 
 def _identifier_tokens(text: str) -> list[str]:
@@ -151,6 +163,23 @@ def _importance(record: MemoryRecord) -> float:
         return float(raw)
     except (TypeError, ValueError):
         return 1.0
+
+
+def _usage_weight(
+    record: MemoryRecord, weights: Mapping[MemoryRef | MemoryId, float]
+) -> float:
+    """Behavioral usage for one memory, accepting either ref-keyed or id-keyed stores."""
+    value = weights.get(record.ref)
+    if value is None:
+        value = weights.get(record.memory_id, 0.0)
+    return max(float(value), 0.0)
+
+
+def _usage_fraction(weight: float, maximum: float) -> float:
+    """Scale usage to ``[0, 1]`` within one gather; cold/empty usage is an exact no-op."""
+    if weight <= 0.0 or maximum <= 0.0:
+        return 0.0
+    return min(weight / maximum, 1.0)
 
 
 def _recency_fraction(created_at: datetime, newest: float | None, oldest: float | None) -> float:
@@ -461,6 +490,7 @@ class PlannerConfig:
     gather_weight_recency: float = 1.0  # newest in-scope memory gets the full weight, oldest 0
     gather_weight_importance: float = 0.5  # scales metadata["importance"] (remember default 1.0)
     gather_weight_query: float = 1.0  # memory names the target's identifiers (see _query_match)
+    gather_weight_usage: float = 1.0  # reliably used across sessions; normalised within the gather
     gather_supersession_penalty: float = 5.0  # demotion applied to a superseded belief (sinks it)
 
 
@@ -484,6 +514,7 @@ class Planner:
         views: DerivedViewsRef,
         cochange: CoChangeIndex | None = None,
         config: PlannerConfig | None = None,
+        usage_weights: UsageWeightSource | None = None,
         event_sink: EventSink | None = None,
         event_id_factory: Callable[[], EventId] = lambda: EventId(uuid.uuid4().hex),
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -497,6 +528,9 @@ class Planner:
         # change together are folded into the blast radius alongside call-graph reachability.
         self._cochange = cochange
         self._config = config if config is not None else PlannerConfig()
+        # The same refreshable L-R1 holder used by recall. Snapshot once per gather below so a
+        # maintenance refresh is observed whole, never half-way through one ranking decision.
+        self._usage_weights = usage_weights
         # Optional gather telemetry (§14, removable). The gather is a graph join, not a
         # Retriever, so LoggingRetriever cannot wrap it — without this the ~25 memories a brief
         # surfaces are invisible to every downstream instrument, and nothing above recall's k=5
@@ -982,7 +1016,7 @@ class Planner:
         tuple[MemoryItem, ...],
         tuple[MemoryItem, ...],
         int,
-        Sequence[tuple[float, _GatheredMemory]],
+        Sequence[_GatheredScore],
     ]:
         """Score, sort, partition, and apply ``memory_budget`` — constraints preserved over context.
 
@@ -994,20 +1028,41 @@ class Planner:
         cfg = self._config
         superseded_map = views.superseded
         newest, oldest = self._recency_bounds(candidates)
+        usage = self._usage_weights.weights if self._usage_weights is not None else {}
+        usage_by_memory = {
+            candidate.record.memory_id: _usage_weight(candidate.record, usage)
+            for candidate in candidates
+        }
+        max_usage = max(usage_by_memory.values(), default=0.0)
         scored = sorted(
             (
-                (self._score_memory(c, superseded_map, newest, oldest, query), c)
-                for c in candidates
+                _GatheredScore(
+                    score=self._score_memory(
+                        candidate,
+                        superseded_map,
+                        newest,
+                        oldest,
+                        query,
+                        usage_weight=usage_by_memory[candidate.record.memory_id],
+                        max_usage=max_usage,
+                    ),
+                    candidate=candidate,
+                    usage_weight=usage_by_memory[candidate.record.memory_id],
+                    usage_fraction=_usage_fraction(
+                        usage_by_memory[candidate.record.memory_id], max_usage
+                    ),
+                )
+                for candidate in candidates
             ),
-            key=lambda pair: pair[0],
+            key=lambda item: item.score,
             reverse=True,
         )
 
         constraints_ranked = [
-            (score, c) for score, c in scored if c.record.kind in _CONSTRAINT_KINDS
+            item for item in scored if item.candidate.record.kind in _CONSTRAINT_KINDS
         ]
         context_ranked = [
-            (score, c) for score, c in scored if c.record.kind not in _CONSTRAINT_KINDS
+            item for item in scored if item.candidate.record.kind not in _CONSTRAINT_KINDS
         ]
 
         # Constraints first under a tight budget; context fills the remainder.
@@ -1020,10 +1075,11 @@ class Planner:
             + len(context_ranked) - len(kept_context)
         )
 
-        def render(score: float, c: _GatheredMemory) -> MemoryItem:
-            ref = c.record.ref
+        def render(item: _GatheredScore) -> MemoryItem:
+            candidate = item.candidate
+            ref = candidate.record.ref
             return MemoryItem.from_scored(
-                ScoredMemory(record=c.record, score=score),
+                ScoredMemory(record=candidate.record, score=item.score),
                 max_content_chars=cfg.max_memory_chars,
                 max_why_chars=cfg.max_why_chars,
                 stale_references=views.stale_references.get(ref, ()),
@@ -1031,8 +1087,8 @@ class Planner:
             )
 
         return (
-            tuple(render(s, c) for s, c in kept_constraints),
-            tuple(render(s, c) for s, c in kept_context),
+            tuple(render(item) for item in kept_constraints),
+            tuple(render(item) for item in kept_context),
             omitted,
             scored,
         )
@@ -1041,7 +1097,7 @@ class Planner:
         self,
         target: str,
         scope: Scope | None,
-        scored: Sequence[tuple[float, _GatheredMemory]],
+        scored: Sequence[_GatheredScore],
         constraints: Sequence[MemoryItem],
         context: Sequence[MemoryItem],
     ) -> EventId | None:
@@ -1065,10 +1121,15 @@ class Planner:
         ]
         candidates = [
             CandidateLog(
-                memory_id=candidate.record.memory_id,
-                features={"gather_score": score, "proximity": float(candidate.proximity)},
+                memory_id=item.candidate.record.memory_id,
+                features={
+                    "gather_score": item.score,
+                    "proximity": float(item.candidate.proximity),
+                    "usage_weight": item.usage_weight,
+                    "usage_fraction": item.usage_fraction,
+                },
             )
-            for score, candidate in scored
+            for item in scored
         ]
         sink.emit(
             RetrievalEvent(
@@ -1091,6 +1152,9 @@ class Planner:
         newest: float | None,
         oldest: float | None,
         query: frozenset[str] = frozenset(),
+        *,
+        usage_weight: float = 0.0,
+        max_usage: float = 0.0,
     ) -> float:
         """A gathered memory's relevance score — higher survives the budget cut.
 
@@ -1103,6 +1167,9 @@ class Planner:
           set (a single memory, or all-same-timestamp, contributes 0 — no spurious tie-break).
         - **importance**: the operator-set ``metadata["importance"]`` (the ``remember`` default is
           ``1.0``), scaled by its weight.
+        - **usage**: distinct prior sessions in which the memory was recalled and used (L-R1),
+          normalised to ``[0, 1]`` against the strongest candidate in this gather. An unused
+          memory contributes 0; an empty/cold usage store is therefore an exact identity.
         - **supersession**: a replaced belief is demoted by a flat penalty so it sinks below current
           beliefs (it is still surfaced — annotated — but ranks last under a tight budget).
         """
@@ -1120,6 +1187,7 @@ class Planner:
         score += cfg.gather_weight_query * _query_match(
             f"{candidate.record.content} {candidate.record.metadata.get('why', '')}", query
         )
+        score += cfg.gather_weight_usage * _usage_fraction(usage_weight, max_usage)
         if candidate.record.ref in superseded_map:
             score -= cfg.gather_supersession_penalty
         return score
@@ -1146,6 +1214,16 @@ class _GatheredMemory:
 
     record: MemoryRecord
     proximity: int
+
+
+@dataclass(frozen=True, slots=True)
+class _GatheredScore:
+    """One fully-instrumented gather ranking decision."""
+
+    score: float
+    candidate: _GatheredMemory
+    usage_weight: float
+    usage_fraction: float
 
 
 @dataclass(frozen=True, slots=True)

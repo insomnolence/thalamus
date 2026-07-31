@@ -322,8 +322,8 @@ def build_two_hemisphere_gateway(
     # ALL corpora — corpus names are arbitrary under [[corpus]], and link_by_footprint's resolver
     # filters to code kinds, so doc/finding nodes are ignored), else the persisted graph (a
     # no-change build skips parsing, but episodes may be new). Modules *and* symbols are passed so a
-    # line-aware footprint links to the smallest enclosing symbol (C-7); a file-only footprint
-    # (today's only shape) falls back to the module.
+    # line-aware footprint links to the smallest enclosing symbol (C-7); a legacy/file-only
+    # footprint falls back to the module.
     links = links if links is not None else InMemoryCrossLinkIndex()
     # Skip full-graph read + re-linking on warm no-change builds when links are persisted in Neo4j
     if ingest.rebuilt or isinstance(links, InMemoryCrossLinkIndex):
@@ -468,6 +468,7 @@ def build_planner(
     *,
     cochange: CoChangeIndex | None = None,
     config: PlannerConfig | None = None,
+    usage_weights: UsageWeightsRef | None = None,
     event_sink: EventSink | None = None,
 ) -> Planner | None:
     """A :class:`Planner` over the same Brain-2 collaborators the gateway already holds.
@@ -486,6 +487,7 @@ def build_planner(
         views=gateway.views,
         cochange=cochange,
         config=config,
+        usage_weights=usage_weights,
         event_sink=event_sink,
     )
 

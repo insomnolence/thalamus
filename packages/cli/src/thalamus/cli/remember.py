@@ -33,7 +33,7 @@ from thalamus.core.types import (
     Scope,
     TenantId,
 )
-from thalamus.routing import build_encoder
+from thalamus.routing import ENCODER_NAMES, build_encoder
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def add_remember_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--dim", type=int, default=_DEFAULT_DIM, help="embedding dimensionality")
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        "--encoder", choices=ENCODER_NAMES, default=_DEFAULT_ENCODER,
         help="embedding model (default: bge-small; deterministic is for smoke tests)",
     )
     parser.add_argument(

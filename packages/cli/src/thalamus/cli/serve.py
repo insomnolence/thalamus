@@ -104,7 +104,7 @@ from thalamus.retrieval import (
     render_recent,
     select_recent,
 )
-from thalamus.routing import build_encoder
+from thalamus.routing import ENCODER_NAMES, build_encoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import (
     CoChangeIndex,
@@ -220,7 +220,7 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--dim", type=int, default=_DEFAULT_DIM, help="embedding dimensionality")
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        "--encoder", choices=ENCODER_NAMES, default=_DEFAULT_ENCODER,
         help="embedding model (default: bge-small; deterministic is for smoke tests)",
     )
     parser.add_argument("--k", type=int, default=5, help="memories per recall")
@@ -450,6 +450,7 @@ def build_serve_gateway(
     BehavioralConsolidationPass,
     UsageRefreshPass,
     CentralityRefreshPass,
+    UsageWeightsRef,
 ]:
     """Assemble the two-hemisphere gateway from durable Brain 1 + the current repo.
 
@@ -457,7 +458,9 @@ def build_serve_gateway(
     supersession index (when Neo4j-backed; ``None`` for an injected/in-memory store — the gateway
     then uses its own ephemeral index), and a :class:`StructuralRederivePass` that re-derives
     Brain 2 live into the same durable handles (``None`` for the in-memory shell, which re-derives
-    at start). ``store`` may be injected (tests); otherwise it is built from the Neo4j config."""
+    at start). The final ``UsageWeightsRef`` is shared by recall and plan so both paths observe the
+    same live L-R1 refresh. ``store`` may be injected (tests); otherwise it is built from the
+    Neo4j config."""
     encoder = encoder or build_encoder(config.encoder, dim=config.dim)
     scope = Scope(tenant_id=TenantId(config.tenant), repo_id=RepoId(config.repo_id))
     # Persist Brain 2 (so restarts rebuild incrementally) when Neo4j is configured: one shared
@@ -642,6 +645,9 @@ def build_serve_gateway(
     def _recompute_usage_weights() -> dict[MemoryRef | MemoryId, float]:
         return {k: float(v) for k, v in behavioral_store.usage_weights().items()}
 
+    # Seed at composition, not only on the first maintenance tick: a freshly-started serve must
+    # rank both recall and plan with the durable usage the brain already accumulated.
+    usage_ref.refresh(_recompute_usage_weights())
     usage_refresh = UsageRefreshPass(_recompute_usage_weights, usage_ref.refresh)
 
     # Now the gateway holds the live graph + links (built inside for the in-memory shell, or the
@@ -676,6 +682,7 @@ def build_serve_gateway(
         behavioral_consolidation,
         usage_refresh,
         centrality_refresh,
+        usage_ref,
     )
 
 
@@ -888,6 +895,9 @@ def preflight_encoder(encoder: Encoder, name: str) -> None:
     reports only "thalamus server failed" — the silent-failure mode. Touching the encoder here
     turns it into one actionable line on stderr, first thing in the client's MCP log, and then
     re-raises: a serve without its encoder is not something to degrade quietly past.
+
+    The cache the download lands in is chosen by ``thalamus.routing.default_model_cache_dir`` and
+    is persistent, so this cost is paid once rather than after every reboot.
     """
     try:
         _ = encoder.dim  # forces the lazy model load (and, on a cold cache, the download)
@@ -986,6 +996,7 @@ def run_serve(config: ServeConfig) -> None:
         behavioral_consolidation,
         usage_refresh,
         centrality_refresh,
+        usage_ref,
     ) = build_serve_gateway(config, encoder=encoder)
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     # Brain data home (logs/session/dream) — may differ from the code root (--repo).
@@ -1110,6 +1121,7 @@ def run_serve(config: ServeConfig) -> None:
             node_budget=config.plan_node_budget,
         ),
         cochange=cochange_ref,
+        usage_weights=usage_ref,
         event_sink=(
             None
             if config.investigate

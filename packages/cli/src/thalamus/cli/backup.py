@@ -26,7 +26,7 @@ from thalamus.core.exceptions import ThalamusError
 from thalamus.core.protocols import EmbeddingStore, Encoder, Store
 from thalamus.core.serde import deserialize_memory_record, serialize_memory_record
 from thalamus.core.types import Hemisphere, RepoId, Scope, TenantId, Vector
-from thalamus.routing import build_encoder
+from thalamus.routing import ENCODER_NAMES, build_encoder
 
 _CURATED_KINDS = frozenset({"decision", "constraint", "gotcha", "investigation", "preference"})
 _DEFAULT_DIM = 128
@@ -74,7 +74,7 @@ def add_backup_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo-id", default=None, help="repo id (default: repo dir name)")
     parser.add_argument("--dim", type=int, default=_DEFAULT_DIM, help="embedding dim (store)")
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        "--encoder", choices=ENCODER_NAMES, default=_DEFAULT_ENCODER,
         help="encoder identity for the store (sizes it; no re-encoding happens)",
     )
     parser.add_argument(
@@ -144,7 +144,7 @@ def add_restore_arguments(parser: argparse.ArgumentParser) -> None:
         "--repo", type=Path, default=Path.cwd(), help="repo (for the default backup path)"
     )
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        "--encoder", choices=ENCODER_NAMES, default=_DEFAULT_ENCODER,
         help="encoder identity for the store (must match how it was created)",
     )
     parser.add_argument(

@@ -240,7 +240,14 @@ def build_server(
             **name them**; a memory that changed your thinking without changing which files you
             touched is otherwise invisible to the brain."""
             key = EventId(event_id)
-            declared = [MemoryId(m) for m in used_memory_ids] if used_memory_ids else None
+            # ``None`` means the caller supplied no explicit declaration; ``[]`` is a real
+            # all-negative label ("none of the shown memories helped").  Do not collapse them:
+            # normal-use evaluation needs both the positive and negative declared events.
+            declared = (
+                None
+                if used_memory_ids is None
+                else [MemoryId(memory_id) for memory_id in used_memory_ids]
+            )
             with pending_lock:
                 payload = pending.pop(key, None)
             if payload is not None:  # fast path: the live payload is still cached

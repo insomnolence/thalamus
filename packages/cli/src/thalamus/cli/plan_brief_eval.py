@@ -40,6 +40,7 @@ from thalamus.eval import (
     evaluate_plan_briefs,
     view_from_brief,
 )
+from thalamus.routing import ENCODER_NAMES
 
 _DEFAULT_DIM = 128
 _DEFAULT_ENCODER = "bge-small"
@@ -73,7 +74,7 @@ def add_plan_brief_eval_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--dim", type=int, default=_DEFAULT_DIM, help="embedding dimensionality")
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        "--encoder", choices=ENCODER_NAMES, default=_DEFAULT_ENCODER,
         help="embedding model (default: bge-small; symbol-name targets resolve without it)",
     )
     parser.add_argument("--hops", type=int, default=2, help="default blast-radius depth per case")
@@ -181,7 +182,18 @@ def run_plan_brief_eval(config: PlanBriefEvalConfig) -> None:
         neo4j_password=config.neo4j_password,
         session=False,
     )
-    gateway, store, *_rest = build_serve_gateway(serve_config)
+    (
+        gateway,
+        store,
+        _episodes,
+        _supersession,
+        _rederive,
+        _attribution_refresh,
+        _behavioral_consolidation,
+        _usage_refresh,
+        _centrality_refresh,
+        usage_ref,
+    ) = build_serve_gateway(serve_config)
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     try:
         # Mine the co-change radius layer the live `plan` tool uses, so the eval measures the same
@@ -197,6 +209,7 @@ def run_plan_brief_eval(config: PlanBriefEvalConfig) -> None:
         planner = build_planner(
             gateway, store, cochange=cochange,
             config=PlannerConfig(memory_budget=config.memory_budget),
+            usage_weights=usage_ref,
         )
         if planner is None:
             print("plan-brief-eval: experiential-only brain — no planner to evaluate")

@@ -43,6 +43,7 @@ from thalamus.instrumentation import (
     read_usage_log,
     reverted_shas,
 )
+from thalamus.routing import ENCODER_NAMES
 
 
 def build_dream_scheduler(
@@ -178,7 +179,7 @@ def add_dream_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo-id", default=None, help="repo id (default: repo dir name)")
     parser.add_argument("--dim", type=int, default=128, help="embedding dimensionality")
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default="bge-small",
+        "--encoder", choices=ENCODER_NAMES, default="bge-small",
         help="embedding model (default: bge-small; deterministic is for smoke tests)",
     )
     parser.add_argument(
@@ -246,6 +247,7 @@ def run_dream(config: DreamConfig) -> None:
         behavioral_consolidation,
         usage_refresh,
         centrality_refresh,
+        _usage_ref,
     ) = build_serve_gateway(serve_config)
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     try:

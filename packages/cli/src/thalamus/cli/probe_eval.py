@@ -53,7 +53,7 @@ from thalamus.retrieval import (
     CentralityWeightsRef,
     L0Retriever,
 )
-from thalamus.routing import build_encoder
+from thalamus.routing import ENCODER_NAMES, build_encoder
 from thalamus.store import Neo4jStore, connect
 from thalamus.structural import memory_centrality
 
@@ -98,7 +98,7 @@ def add_probe_eval_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--dim", type=int, default=_DEFAULT_DIM, help="embedding dimensionality")
     parser.add_argument(
-        "--encoder", choices=("bge-small", "deterministic"), default=_DEFAULT_ENCODER,
+        "--encoder", choices=ENCODER_NAMES, default=_DEFAULT_ENCODER,
         help="embedding model (default: bge-small; deterministic for offline smoke tests)",
     )
     parser.add_argument("--k", type=int, default=5, help="top-k cutoff per probe")

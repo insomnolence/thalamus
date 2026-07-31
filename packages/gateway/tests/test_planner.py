@@ -83,6 +83,14 @@ class _Retr:
         return [ScoredNode(node=n, score=s) for n, s in self._hits][:k]
 
 
+class _UsageRef:
+    def __init__(self, weights: Mapping[MemoryRef | MemoryId, float] | None = None) -> None:
+        self.weights: Mapping[MemoryRef | MemoryId, float] = weights or {}
+
+    def refresh(self, weights: Mapping[MemoryRef | MemoryId, float]) -> None:
+        self.weights = weights
+
+
 # --- a small call graph: bar() and baz() call foo(); foo() calls helper(); module contains foo()
 FOO = _node("mod:foo")
 BAR = _node("mod:bar")
@@ -132,6 +140,7 @@ def _build(
     config: PlannerConfig | None = None,
     cochange: CoChangeIndex | None = None,
     retrievers: Sequence[object] | None = None,
+    usage_weights: _UsageRef | None = None,
 ) -> Planner:
     graph = InMemoryStructuralGraph(SCOPE)
     graph.add(IngestResult(nodes=_NODES, edges=_EDGES))
@@ -146,6 +155,7 @@ def _build(
         views=DerivedViewsRef(),
         cochange=cochange,
         config=config,
+        usage_weights=usage_weights,
     )
 
 
@@ -457,6 +467,7 @@ def _build_with_views(
     superseded: Mapping[MemoryRef, Supersession] | None = None,
     config: PlannerConfig | None = None,
     hits: Sequence[tuple[StructuralNode, float]] = ((FOO, 0.9),),
+    usage_weights: _UsageRef | None = None,
 ) -> Planner:
     """Like ``_build`` but with an injectable ``superseded`` view (the gather demotes those)."""
     graph = InMemoryStructuralGraph(SCOPE)
@@ -472,6 +483,7 @@ def _build_with_views(
         structural_retrievers=[_Retr(hits)],
         views=views,
         config=config,
+        usage_weights=usage_weights,
     )
 
 
@@ -547,6 +559,57 @@ def test_gather_higher_importance_survives_a_tight_budget() -> None:
     brief = planner.plan(target="foo", scope=SCOPE)
     kept = [m.memory_id for m in (*brief.constraints, *brief.context)]
     assert kept == [MemoryId("m-high")]
+
+
+def test_gather_usage_lifts_a_reliably_used_memory_under_budget() -> None:
+    """C-3a/L-R1: prior declared use breaks the otherwise-tied plateau."""
+    records = [
+        _dated_record("m-unused", "decision", "same topic", at=NOW),
+        _dated_record("m-used", "decision", "same topic", at=NOW),
+    ]
+    planner = _build_with_views(
+        links=[("m-unused", FOO), ("m-used", FOO)],
+        records=records,
+        config=PlannerConfig(memory_budget=1),
+        usage_weights=_UsageRef({MemoryId("m-used"): 4.0}),
+    )
+
+    brief = planner.plan(target="foo", scope=SCOPE)
+
+    assert [item.memory_id for item in brief.context] == [MemoryId("m-used")]
+
+
+def test_gather_usage_is_ablatable_and_refreshes_between_plans() -> None:
+    """Weight zero restores the tie; swapping the live holder changes the next gather atomically."""
+    records = [
+        _dated_record("m-first", "decision", "same topic", at=NOW),
+        _dated_record("m-second", "decision", "same topic", at=NOW),
+    ]
+    usage = _UsageRef()
+    planner = _build_with_views(
+        links=[("m-first", FOO), ("m-second", FOO)],
+        records=records,
+        config=PlannerConfig(memory_budget=1),
+        usage_weights=usage,
+    )
+    assert [item.memory_id for item in planner.plan(target="foo", scope=SCOPE).context] == [
+        MemoryId("m-first")
+    ]
+
+    usage.refresh({MemoryId("m-second"): 2.0})
+    assert [item.memory_id for item in planner.plan(target="foo", scope=SCOPE).context] == [
+        MemoryId("m-second")
+    ]
+
+    ablated = _build_with_views(
+        links=[("m-first", FOO), ("m-second", FOO)],
+        records=records,
+        config=PlannerConfig(memory_budget=1, gather_weight_usage=0.0),
+        usage_weights=usage,
+    )
+    assert [item.memory_id for item in ablated.plan(target="foo", scope=SCOPE).context] == [
+        MemoryId("m-first")
+    ]
 
 
 def test_gather_preserves_constraints_over_context_under_budget() -> None:
@@ -834,6 +897,7 @@ def test_gather_emits_an_event_logging_every_candidate_not_just_the_shown() -> N
         links=[("m-a", FOO), ("m-b", BAR)],
         records=records,
         config=PlannerConfig(memory_budget=1),
+        usage_weights=_UsageRef({MemoryId("m-a"): 3.0}),
     )
     planner._event_sink = sink  # the wiring seam serve/CLI use
 
@@ -846,6 +910,10 @@ def test_gather_emits_an_event_logging_every_candidate_not_just_the_shown() -> N
     assert len(event.shown) == 1  # the budget kept one...
     # ...but both were logged, so the cut is analysable
     assert {c.memory_id for c in event.candidates} == {MemoryId("m-a"), MemoryId("m-b")}
+    by_id = {candidate.memory_id: candidate.features for candidate in event.candidates}
+    assert by_id[MemoryId("m-a")]["usage_weight"] == 3.0
+    assert by_id[MemoryId("m-a")]["usage_fraction"] == 1.0
+    assert by_id[MemoryId("m-b")]["usage_fraction"] == 0.0
     assert brief.event_id == event.event_id
     assert f"# retrieval_event_id: {event.event_id}" in brief.render()
 
