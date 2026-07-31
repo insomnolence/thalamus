@@ -30,8 +30,10 @@ jobs:
       - name: Cache the fastembed (ONNX) model
         uses: actions/cache@v4
         with:
-          path: /tmp/fastembed_cache
-          key: fastembed-bge-small-en-v1.5
+          # Must track thalamus.routing.default_model_cache_dir(), which deliberately does NOT
+          # use fastembed's system-temp default (tmpfs; erased on reboot).
+          path: ~/.cache/thalamus/fastembed
+          key: fastembed-bge-small-en-v1.5-v2
       - name: Install the workspace
         # --locked fails if uv.lock is stale, so the lockfile must be committed and current.
         run: uv sync --locked --all-packages --all-extras
@@ -68,8 +70,10 @@ jobs:
       - name: Cache the fastembed (ONNX) model
         uses: actions/cache@v4
         with:
-          path: /tmp/fastembed_cache
-          key: fastembed-bge-small-en-v1.5
+          # Must track thalamus.routing.default_model_cache_dir(), which deliberately does NOT
+          # use fastembed's system-temp default (tmpfs; erased on reboot).
+          path: ~/.cache/thalamus/fastembed
+          key: fastembed-bge-small-en-v1.5-v2
       - name: Install the workspace
         run: uv sync --locked --all-packages --all-extras
       - name: Wait for Neo4j to accept connections

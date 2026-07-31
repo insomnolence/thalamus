@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from thalamus.core.exceptions import EncoderError
@@ -36,6 +38,31 @@ if TYPE_CHECKING:
     from thalamus.core import Encoder
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+#: Honoured by ``fastembed`` itself, so an operator who has already set it keeps that location.
+_CACHE_ENV_VAR = "FASTEMBED_CACHE_PATH"
+
+
+def default_model_cache_dir() -> Path:
+    """Where downloaded encoder weights live — a **persistent** directory, chosen deliberately.
+
+    ``fastembed`` defaults to ``fastembed_cache`` under the *system temp directory*. On Linux
+    ``/tmp`` is commonly ``tmpfs`` (RAM-backed), so that default is erased on every reboot. The
+    weights are ~65 MB, and over stdio the serve is a subprocess of the agent, so the re-download
+    lands inside the MCP client's startup handshake window — the client then reports nothing more
+    useful than a closed connection. Inheriting an ephemeral cache for a large artifact on a
+    startup-timeout-sensitive path is not a decision worth leaving to a dependency's default, so
+    Thalamus picks the location itself.
+
+    Precedence: ``FASTEMBED_CACHE_PATH`` (an explicit operator choice) > ``XDG_CACHE_HOME`` >
+    ``~/.cache``. The last two resolve to ``<cache>/thalamus/fastembed``.
+    """
+    override = os.environ.get(_CACHE_ENV_VAR, "").strip()
+    if override:
+        return Path(override).expanduser()
+    xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".cache"
+    return base / "thalamus" / "fastembed"
 
 
 class DeterministicEncoder:
@@ -132,12 +159,30 @@ class FastEmbedEncoder:
     lists. Embeddings are interchangeable with :class:`BgeEncoder` (verified
     cosine ~1.0 on the same model). The model loads on first ``encode``/``dim``
     call (fast construction, testable). Requires the optional ``fastembed`` extra.
+
+    Note that ``fastembed`` resolves ``BAAI/bge-small-en-v1.5`` to Qdrant's quantized ONNX
+    conversion (``qdrant/bge-small-en-v1.5-onnx-q``, Apache-2.0) of that MIT-licensed model —
+    that conversion, not the BAAI repository, is what is downloaded.
+
+    ``cache_dir`` overrides where those weights are stored; it defaults to
+    :func:`default_model_cache_dir`, which is persistent across reboots by design.
     """
 
-    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5") -> None:
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-small-en-v1.5",
+        *,
+        cache_dir: Path | str | None = None,
+    ) -> None:
         self._model_name = model_name
+        self._cache_dir = Path(cache_dir).expanduser() if cache_dir is not None else None
         self._model: TextEmbedding | None = None
         self._dim: int | None = None
+
+    @property
+    def cache_dir(self) -> Path:
+        """The directory the weights are cached in (resolved lazily, like the model itself)."""
+        return self._cache_dir if self._cache_dir is not None else default_model_cache_dir()
 
     def _load(self) -> TextEmbedding:
         if self._model is None:
@@ -148,7 +193,7 @@ class FastEmbedEncoder:
                     "FastEmbedEncoder requires the 'fastembed' extra: "
                     "pip install 'thalamus-routing[fastembed]'"
                 ) from exc
-            self._model = TextEmbedding(model_name=self._model_name)
+            self._model = TextEmbedding(model_name=self._model_name, cache_dir=str(self.cache_dir))
         return self._model
 
     @property
@@ -173,6 +218,7 @@ class FastEmbedEncoder:
 
 
 _BGE_SMALL = "BAAI/bge-small-en-v1.5"
+ENCODER_NAMES = ("bge-small", "bge-small-st", "deterministic")
 
 
 def build_encoder(name: str, *, dim: int = 256) -> Encoder:
@@ -190,6 +236,4 @@ def build_encoder(name: str, *, dim: int = 256) -> Encoder:
         return BgeEncoder(_BGE_SMALL)
     if name == "deterministic":
         return DeterministicEncoder(dim=dim)
-    raise EncoderError(
-        f"unknown encoder {name!r} (choices: bge-small, bge-small-st, deterministic)"
-    )
+    raise EncoderError(f"unknown encoder {name!r} (choices: {', '.join(ENCODER_NAMES)})")

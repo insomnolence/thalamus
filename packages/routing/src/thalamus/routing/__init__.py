@@ -6,10 +6,19 @@ routing layer is built out). All encoders satisfy :class:`thalamus.core.Encoder`
 """
 
 from thalamus.routing.encoders import (
+    ENCODER_NAMES,
     BgeEncoder,
     DeterministicEncoder,
     FastEmbedEncoder,
     build_encoder,
+    default_model_cache_dir,
 )
 
-__all__ = ["BgeEncoder", "DeterministicEncoder", "FastEmbedEncoder", "build_encoder"]
+__all__ = [
+    "BgeEncoder",
+    "DeterministicEncoder",
+    "ENCODER_NAMES",
+    "FastEmbedEncoder",
+    "build_encoder",
+    "default_model_cache_dir",
+]
