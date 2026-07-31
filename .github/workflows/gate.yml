@@ -22,13 +22,14 @@ jobs:
         # 3.14 is what the project is developed and dogfooded on. Test both ends.
         python-version: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      # setup-uv stopped publishing floating major tags after v7, so this is pinned exactly.
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
       - name: Cache the fastembed (ONNX) model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # Must track thalamus.routing.default_model_cache_dir(), which deliberately does NOT
           # use fastembed's system-temp default (tmpfs; erased on reboot).
@@ -62,13 +63,14 @@ jobs:
       THALAMUS_TEST_NEO4J_USER: neo4j
       THALAMUS_TEST_NEO4J_PASSWORD: testpassword
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      # setup-uv stopped publishing floating major tags after v7, so this is pinned exactly.
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
           python-version: "3.12"
       - name: Cache the fastembed (ONNX) model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # Must track thalamus.routing.default_model_cache_dir(), which deliberately does NOT
           # use fastembed's system-temp default (tmpfs; erased on reboot).
