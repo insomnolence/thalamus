@@ -7,18 +7,20 @@ structural nodes of the files in its commit footprint — *no inference* (§13.1
 **Granularity (C-7).** When a footprint entry carries the *lines* it touched, the link
 is made to the **smallest enclosing symbol** (function/class/method) via
 :class:`~thalamus.structural.symbol_resolution.SymbolResolver`; when it does not (a bare
-file path — git's per-file ``diff-tree`` footprint, the only data captured today), it
-falls back to the **module** node. So symbol-level linking is the honest end-state and
-module-level the degraded floor — the same code path, chosen by whether line info exists.
+file path from a legacy or file-only producer), it falls back to the **module** node.
+New git episodes carry changed-line metadata; older episodes and other producers may not.
+So symbol-level linking is the honest end-state and module-level the degraded floor — the
+same code path, chosen by whether line info exists.
 k-hop expansion at recall still reaches contained/containing nodes either way.
 
 Footprint files are repo-relative (git ``diff-tree``); structural anchors carry the
 path the ingestor saw (absolute, when ingested from an absolute root), so anchors are
 normalized to repo-relative POSIX before matching. A footprint file with no code
-node simply does not link — links are never forced (§13.19), and a file that no longer
-resolves is the §13.18-D2 staleness signal (surfaced as a flag later, not here).
-Symbol-identity re-resolution across renames and outcome-weighted link credibility are
-the gated layers on top (§13.19); this is the deterministic floor they build on.
+node simply does not link — links are never forced (§13.19). A file absent from disk
+is surfaced by the current §13.18-D2 staleness view; present-but-unresolvable symbols
+need the curated anchor baseline documented under ROADMAP L-7. Symbol-identity
+re-resolution across renames and outcome-weighted link credibility are the gated
+layers on top (§13.19); this is the deterministic floor they build on.
 """
 
 from __future__ import annotations

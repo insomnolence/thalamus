@@ -103,8 +103,8 @@ re-derivable structural graph over an external corpus — code first, others beh
   resolves `(file, line)` to the smallest enclosing symbol. `link_by_footprint` (`linking.py`)
   accepts `(file, touched_lines)` pairs for symbol-level linking. `link_anchored_nodes`
   (`anchor_linking.py`) creates `annotates` edges from non-code nodes to the code they annotate.
-  Honest limit: live footprints from git `diff-tree` carry paths only (no line data), so
-  episode linking stays module-level until line-aware footprint capture lands (ROADMAP C-8).
+  New git episodes carry changed-line metadata and therefore link at symbol granularity; legacy
+  and file-only producer footprints fall back honestly to module-level links (ROADMAP C-7/C-8).
 
 ## Deferred / still open
 

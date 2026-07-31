@@ -137,6 +137,9 @@ prose), then the highest-scored survive the `memory_budget` cut:
   module-rollup-only link)
 - **Recency** — newer memories score higher, normalised across the gathered set
 - **Importance** — the operator-set `metadata["importance"]` (default 1.0)
+- **Behavioral usage (L-R1)** — distinct prior sessions in which the memory was recalled and
+  declared/attributed as used, normalised within the gathered set; the same live refreshable usage
+  holder drives recall and plan, and an empty cold-brain holder is an exact no-op
 - **Supersession demotion** — a replaced belief is penalised so it sinks below current beliefs
 
 Constraints/gotchas are preserved ahead of generic context under a tight budget: the full

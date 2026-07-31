@@ -14,8 +14,8 @@ point back to [`design-notes.md`](../design-notes.md).*
 > record. **Sharpened 2026-06-23: parked by nature, likely permanently** — clean *terminal* negatives
 > are intrinsically scarce (competent fix-forward work resolves its failures), so they don't accrue
 > regardless of volume/devs/capture, and even instrumented coding is unlikely to resurrect this. The
-> honest thesis proof is the **M-1a delivery probe** (ran positive), not outcome-discrimination. What
-> carries over unchanged: the **firewall** (§13.7 —
+> M-1a was later downgraded to a **non-reproducible mechanism pilot** because its frozen case set was
+> not preserved; it is not thesis proof. What carries over unchanged: the **firewall** (§13.7 —
 > external/behavioral facts only, never the model grading its own prose), the **modularity seams**,
 > and the **research toolkit** (SNIPS / anytime-valid CIs / ranking), which re-target cleanly onto a
 > usage-based ranker. Authoritative plan for the current direction: [`learning-loop.md`](learning-loop.md).

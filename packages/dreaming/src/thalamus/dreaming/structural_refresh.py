@@ -8,10 +8,9 @@ becomes structurally recallable without a serve restart. Deterministic and idemp
 (``link_by_footprint`` dedups on stable node ids), so it may *act* (§14.3 firewall).
 
 Granularity: re-link against the CURRENT graph's code nodes — modules *and* symbols, so a
-line-aware footprint links to the smallest enclosing symbol (C-7) while a file-only footprint
-falls back to the module (the only data git's per-file ``diff-tree`` captures today). Re-deriving
-Brain 2 itself (``incremental_ingest``, so files added/changed since startup appear as nodes) is
-the documented follow-up — an episode touching a file added after startup links on the next
+line-aware footprint links to the smallest enclosing symbol (C-7) while a legacy/file-only
+footprint falls back to the module. New git episodes carry changed-line metadata. Brain 2 is
+re-derived before this pass, so an episode touching a file added after startup links on the next
 re-parse.
 """
 

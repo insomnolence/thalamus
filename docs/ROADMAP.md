@@ -5,7 +5,7 @@ replace — [`design-notes.md`](design-notes.md) §16 (the canonical capability 
 deep-dives (per-area specs). This file is the **ranked, actionable superset**: every item carries a status, what it
 does, why, the concrete steps, its gate/dependency, and where it's spec'd.*
 
-*Last updated 2026-07-25.*
+*Last updated 2026-07-30.*
 
 ---
 
@@ -20,8 +20,8 @@ There are **two parallel tracks**, plus supporting work:
   (L-2…L-6) is **parked by nature, likely permanently**, not deferred-pending-effort. The track was
   **re-aimed (2026-06-15) to relevance credibility** — usage / supersession / recency / structural
   centrality — which *accrues every session* and **shipped** (L-R1, L-R2, validated by `rung-eval`).
-  The live thesis evidence is the **M-1a delivery proof** + those relevance signals, **not**
-  outcome-discrimination. Spec: §13
+  M-1a remains a **pilot mechanism probe**, not thesis proof; the honest live evidence today is
+  the shipped relevance signals plus normal-use telemetry, **not** outcome-discrimination. Spec: §13
   [`outcome-learned-retrieval.md`](deep-dives/outcome-learned-retrieval.md) +
   [`dreaming.md`](deep-dives/dreaming.md) (both redirect-bannered to the re-aim).
 - **Track C — Capability & Ingestion** (the planning brain). The forest-for-the-LLM features we've
@@ -46,7 +46,7 @@ There are **two parallel tracks**, plus supporting work:
    of the dollhouse collapsed ~28 candidate "rejections" to ~0–2 real). **So L-2→L-6 is not a
    near-term path and likely never will be** — do not treat it as "almost un-blocked." The honest,
    *feedable* learning is **relevance credibility** (shipped: L-R1/L-R2), and the honest thesis proof
-   is the **M-1a delivery probe** (ran positive) — neither needs outcome-discrimination. Shipping a
+   is the **M-1a pilot mechanism probe** — neither needs outcome-discrimination. Shipping a
    fate-trained ranker measured by a fate metric would be the self-validation trap anyway.
 
 **Status legend:** `built` (done, live) · `partial` (skeleton exists, gaps noted) · `design`
@@ -67,15 +67,15 @@ counterfactual) is **parked by nature** (terminal negatives are intrinsically sc
 |---|------|-------|---------------|
 | ✅1 | ~~Usage-weighted retrieval rung (L-R1)~~ | L | **SHIPPED** (`f5153a6`) + mid-serve refresh + a first cut of L-R2. |
 | ✅2 | ~~`plan` / impact tool (C-3)~~ | C | **SHIPPED + dogfooded + fixed**. |
-| ✅3 | ~~Findings producer v1 (C-1)~~ | C | **BUILT** (retrievable corpus). v2 = fuse into the plan radius (C-1/C-2/C-3b). |
+| ✅3 | ~~Findings producer v1 (C-1)~~ | C | **BUILT** (retrievable corpus); its plan-radius fusion is also built in C-3b. |
 | ✅4 | ~~Today's plan fixes + findings producer~~ | C | **COMMITTED** `5542954` (gather blindness + co-change flood fixes + findings v1). |
 | ✅5 | ~~C-3a — gather ranking~~ | C | **Built** (validated live: tight budget keeps the highest-value memories, constraints prioritized). |
-| ✅6 | ~~C-2 + C-7 — cross-link layer~~ | C | **Built** (annotates edges + symbol-level resolution; validated live over 1,917 nodes). C-3b still open. |
+| ✅6 | ~~C-2 + C-7 — cross-link layer~~ | C | **Built** (annotates edges + symbol-level resolution; line-aware footprints now activate it for new episodes). |
 | ✅7 | ~~L-R2 — structural-centrality weighting~~ | L | **Built** (validated live: 181/243 memories weighted, hubs float up). |
 | ✅8 | ~~C-3b findings-in-brief + C-8 line-aware footprints + M-2/M-4 eval~~ | C/M | **COMMITTED** `bc17a1e`/`a6ab5fd`; rung verdict acted on (centrality leads). |
 | ✅9 | ~~Track I (I-1 attribution-pass, I-2 retention, I-3 Architecture B)~~ | I | **DONE + live-validated**. Brain reads its own usage from Neo4j, not files. |
 | **1** | **Finish Architecture-B loose ends** *(optional; usage-disposal ✅ resolved 2026-06-23)* | I | Usage-log disposal verified already safe (consolidation re-folds the full retained history each tick before any segment ages out). The only remainder — consolidate retrieval/trajectory/attribution into the brain too — is a mirror-of-I-3 build that **unlocks nothing functional** (offline verdict/attribution read those from files fine). Recommend skip unless tidiness matters. |
-| **1** | **M-1b — git-replay decision-point ablation** *(PRE-REGISTERED 2026-07-25, unbuilt)* | M | **The thesis test, now unblocked.** M-1a is downgraded to a *pilot* (case set not preserved → not reproducible). M-1's drafted design sampled decision points from `retrieval.jsonl`, capping n at lifetime recalls (209, and *declining*) — that is what made it "calendar-gated." A decision point needs a **commit**, not a prior recall, so git history supplies volume today. Primary estimand = the **accumulation slope**. Protocol: [`eval/m1_preregistration.md`](eval/m1_preregistration.md). |
+| — | **PARKED:** M-1b public-repo git replay | M | No result was observed. Review found that it benchmarked structural co-change rather than first-person memory, while its runner rebuilt repository graphs far more often than the protocol's "one timeline walk" cost claim. The uncommitted runner and active protocol were removed 2026-07-30. |
 | — | **PARKED:** the outcome loop (churn / monitor / counterfactual) | L | Built + gated but dormant — no captured code outcomes in this workflow. Kept for if instrumented coding resumes. |
 
 After these: multi-language ingestion (C-4), retrieval hardening (Track R), then the security
@@ -96,8 +96,8 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
 >   *Built; verified working.*
 > - **Recency** — newer-on-a-topic ranks up. *Built (L0).*
 > - **Usage / cross-session reuse** — recalled-and-used memories rise (the "reliably-useful core").
->   *Partly built (usage_stability).* → **next:** a usage-weighted retrieval rung.
-> - **Structural centrality** — memories well-connected to Brain-2 knowledge. *Links built; weighting next.*
+>   *Built and live (L-R1); plan gather now consumes the same shared weights (C-3a).*
+> - **Structural centrality** — memories well-connected to Brain-2 knowledge. *Built and live (L-R2).*
 >
 > **Firewall (held):** elevate by external/behavioral facts only (used / superseded / recent / central),
 > **never** the model grading its own memory prose (the self-validation trap). Using top-ranked memory *content* to
@@ -111,7 +111,7 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
 
 > *Items **L-1 … L-5** below detail the now-**PARKED** outcome loop — kept for reference and for if
 > instrumented coding resumes. The active work is the relevance signals in the blockquote above
-> (usage-weighted rung next). The next active build item is **L-R1** (immediately after L-5).*
+> (L-R1/L-R2, both built).*
 
 ### L-1. Tier-2 join starvation — `LARGELY RESOLVED` · ✅ *(verified live 2026-06-17)*
 - **The old "`n_units≈1` forever" framing is obsolete.** `classify_outcome` now blesses the
@@ -137,7 +137,8 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   ~0–2 genuine; churn median ~0.02; reverts 0). The labeler isn't inert-pending-a-build; it's gated by a
   property of good work, fixable by neither more mining, more devs, nor looking outside the brain. What
   *does* accrue is **relevance** credibility (usage/recency/centrality — L-R1/L-R2, shipped). The strongest
-  *clean* evidence the brain helps is the **M-1a delivery proof**, not outcome-discrimination.
+  available signal is the shipped relevance behavior; M-1a is only a non-reproducible mechanism pilot,
+  not outcome-discrimination or thesis proof.
 - **Implication for L-2→L-6:** the whole outcome/credibility chain below inherits this gate — it is **not**
   a near-term build path. Treat it as parked-by-nature; do not re-promote to P0. Soft *process*-negatives
   (needed-rework / had-a-bug) exist but are weak and ambiguous (the work succeeded eventually).
@@ -234,8 +235,15 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   is currently file-vanished-only and proposes to the dream log, never auto-applies.
 - **Why:** Beliefs silently rot; the brain should *flag* drift (conservatively — propose, never
   delete).
-- **Do:** Add AST-drift detection to the dreaming pass; surface proposals on recall (not just the
-  log). Keep §14.4 discipline (coexist/flag, never auto-supersede).
+- **Design checkpoint (2026-07-30):** Do **not** implement this as a whole-file content or AST hash.
+  Curated memories name files, not symbols, so any unrelated edit in a large file would falsely mark
+  every belief about it stale. The safe useful prerequisite is to capture a stable symbol anchor
+  (qualified identity plus location) when a curated memory is written, then re-resolve that anchor
+  against the current Brain-2 graph. Existing line-aware episode links do not supply this baseline
+  for curated beliefs, and historical memories cannot be honestly backfilled without review.
+- **Do:** First add optional symbol anchors to curated-memory capture; then have link-resolution flag
+  failed/rebound anchors in the recall view and let `BeliefAudit` emit review proposals. Keep §14.4
+  discipline (coexist/flag, never auto-supersede). D3 remains separate and later.
 - **Spec:** §13.18 D2/D3; code: `dreaming/belief_audit.py`.
 
 ### L-8. Dreaming cross-cycle oscillation damping — `idea` · **P3**
@@ -286,23 +294,19 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   cluster; grep/reads for the rest."
 - **Spec:** [`planning.md`](deep-dives/planning.md); §16 step 5.
 
-### C-3a. Plan gather — relevance ranking before the memory budget — `built` · ✅ *(2026-06-16)*
-- **What:** With the gather rollup working, the live brief hits `memory_budget=30` and **omits the
-  rest with no ranking** (e.g. on `_compute_radius`: 30 surfaced, 40 omitted, trimmed in traversal
-  order). Rank gathered memories before the cut — by recency, importance, usage (L-R1 weights),
-  supersession (demote replaced), and cross-link proximity (integration point > radius node) — so the
-  surviving set is the *most* relevant, not the first encountered.
-- **Why:** The difference between "surfaces context" and "surfaces the *right* context"; reuses the
-  Track-L relevance signals already built.
+### C-3a. Plan gather — relevance ranking before the memory budget — `built` · ✅ *(completed 2026-07-30)*
+- **Built:** Gathered memories are ranked before the budget by query overlap, radius proximity,
+  recency, importance, supersession, and a bounded usage term from the same live
+  `UsageWeightsRef` used by recall. A cold/empty usage view is an exact no-op; plan telemetry records
+  the contribution so it remains measurable and ablatable.
+- **Why:** The difference between "surfaces context" and "surfaces the *right* context"; plan and
+  recall now learn from one behavioral-usage reality instead of diverging.
 - **Spec:** `gateway/planner.py` `_gather`; ties to L-R1/L-R2.
 
-### C-3b. Findings (and docs) in the plan blast radius — `design` · **P1** *(findings v2 — now unblocked)*
-- **What:** C-2 has landed finding→code `annotates` edges; fold the annotating finding/doc nodes into
-  the plan brief (follow `annotates` edges from the in-scope code, mirroring `_add_cochange`/`_gather`)
-  so the brief shows "what's already flagged here."
-- **Likely shape:** a **separate brief section** ("Known findings in scope"), not a radius *relation*
-  (findings are "already-flagged," not "what breaks").
-- **Gate:** ✅ unblocked — C-2 (annotates edges) + C-1 v1 both landed. The next concrete plan-tool build.
+### C-3b. Findings (and docs) in the plan blast radius — `built` · ✅ *(2026-06-17)*
+- **Built:** The planner follows `annotates` edges from in-scope code and renders matching external
+  findings in a separate "Known findings in scope" section. Findings remain evidence about the
+  radius, not fake "what breaks" relations.
 - **Spec:** planning.md; §16 step 4–5.
 
 ### C-4. Multi-language structural ingestion (tree-sitter producer) — `design` · **P2**
@@ -332,31 +336,20 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   seam).
 - **Spec:** structural-hemisphere.md (deferred).
 
-### C-7. Symbol-level cross-linking (finer than module) — `built — seam only, gated on line footprints` · ◑ *(2026-06-16)*
-- **What:** Cross-links are created at **module granularity** (`structural.linking` links a memory to
-  the *module* of each touched file — git's per-file diff is the finest footprint today). Recall
-  bridges to symbols via k-hop spread; the plan gather now bridges via a module-rollup (today's fix).
-  Both are *bridges*. Finer linking — map a memory's diff lines → the enclosing **symbol** — would
-  make per-node coverage real (symbol-level `nodes_with_context` instead of always ~0) and retire the
-  rollup. Proven live: 797 cross-links, 100% on module nodes, 0 on symbols.
-- **Why:** The honest end-state for coverage; the rollup over-attributes a file's notes to every symbol.
-- **Status (2026-06-16):** the **seam is built** — `link_by_footprint` accepts `(file, lines)`
-  and resolves to the smallest enclosing symbol via the new `SymbolResolver` (validated live: line
-  410→`_lexical_resolve`, 470→`_blast_radius`, module fallback when no line). But it **stays module-level
-  in practice** because live footprints carry no line data (see C-8). The machinery is proven correct
-  and lights up the moment line footprints exist.
-- **Gate:** depends on **C-8** (line-aware footprints) to actually produce symbol-level links live.
+### C-7. Symbol-level cross-linking (finer than module) — `built` · ✅ *(live for new line-aware episodes)*
+- **Built:** `link_by_footprint` resolves `(file, touched_lines)` to the smallest enclosing symbol via
+  `SymbolResolver`; file-only and legacy footprints fall back honestly to the module. C-8 now supplies
+  line data for newly captured episodes, so this is no longer only a dormant seam.
+- **Limit:** Legacy episodes without line metadata remain module-level; no backfill is invented.
 - **Spec:** §13.19 ("symbol-identity re-resolution" — the deferred layer); `structural/linking.py`,
   `structural/symbol_resolution.py`.
 
-### C-8. Line-aware footprint capture — `idea` · **P2** *(new 2026-06-16, the keystone)*
-- **What:** Episode footprints are git per-file diffs (`payload["files"]`) — **paths only, no lines**.
-  Capture the touched line ranges per file so a footprint becomes `(file, lines)`.
-- **Why:** The single unlock that upgrades **both** C-7 (symbol-level cross-links) and **L-R2**
-  (symbol-degree centrality instead of module-degree) from "seam built" to "fully effective." Without
-  it, both run at module granularity.
-- **Do:** Extend the episode/footprint producer (`experiential/episode.py`) to record diff line ranges;
-  thread them through `link_by_footprint` (already accepts the shape).
+### C-8. Line-aware footprint capture — `built` · ✅ *(2026-06-17)*
+- **Built:** Episode construction merges per-file changed lines from trajectory events into
+  `metadata["footprint_lines"]`; both startup linking and dreaming refresh consume it through
+  `footprint_from_metadata`.
+- **Limit:** Events captured before line metadata existed remain file-only and use C-7's module
+  fallback.
 - **Spec:** §13.19; `experiential/episode.py`, `structural/linking.py`.
 
 ---
@@ -368,10 +361,12 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   Fine at current sizes; swap a persistent inverted index later.
 - **Spec:** retrieval/lexical.py (documented deferral).
 
-### R-2. Meaningful structural relevance floor — `partial` · **P2**
-- **What:** `structural_min_relevance` defaults to 0.0 (filters only exact-zero cosine). Tune a real
-  BGE floor from usage logs so direct structural hits aren't noisy.
-- **Spec:** gateway.py:188-190.
+### R-2. Meaningful structural relevance floor — `built baseline; calibration open` · ◑
+- **Built:** Live CLI surfaces default to a conservative BGE cosine floor of `0.6`; the lower-level
+  gateway factory retains `0.0` as a caller-controlled neutral default.
+- **Open:** Derive adaptive/per-corpus floors only if real recall telemetry shows the fixed BGE
+  threshold is inadequate.
+- **Spec:** `cli/serve.py`; `cli/brain.py`.
 
 ### R-3. Calibrate cross-link injected scores — `partial` · **P2**
 - **What:** `StructuralLinkedRetriever` injects magic constants (2.0 seed / 1.9 expanded) that always
@@ -511,17 +506,16 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   it is idempotent — re-folding the same logs, or re-folding a *subset* after rotation drops old
   segments, never double-counts and never loses signal. So a **durable** store makes logs disposable
   with **no cursor needed for correctness** (a cursor is only a later efficiency optimization).
-- **Increment 1 — BUILT (additive, zero live-brain/schema change; gate 605 passed):**
+- **Increment 1 — BUILT:** the swappable in-memory/protocol seam and deterministic consolidation
+  pass established the accumulator and its disposability property.
   `experiential/behavioral.py` — `BehavioralStore` protocol + `InMemoryBehavioralStore` +
   `consolidate_usage`; `experiential/fate.py` — `usage_sessions_by_memory` (the session-set unit;
   `reuse_by_memory` now delegates to it, behavior-preserving); `dreaming/behavioral_consolidation.py` —
   `BehavioralConsolidationPass` (actor, injected seam, firewall-clean, mirrors the refresh passes).
-  8 tests incl. the disposability property (subset re-consolidation keeps prior signal). The swappable
-  seam everything plugs into; nothing wired live yet.
-- **Increment 2 — NEXT (the live/risky part; gated on a `thalamus backup`):** `Neo4jBehavioralStore`
-  (additive label, doesn't touch `M_experiential`), serve wiring, **shadow-validate** (brain weights ==
-  file-recomputed weights) before cutover, then repoint `_recompute_usage_weights` at the brain and let
-  I-2 rotation drop consolidated segments. Backup first (the Neo4j-wipe incident).
+  Its tests include the key property that re-consolidating a retained subset cannot erase prior use.
+- **Increment 2 — BUILT + LIVE:** `Neo4jBehavioralStore` uses an additive label without touching
+  `M_experiential`; serve wiring was backed up and shadow-validated before `_recompute_usage_weights`
+  cut over to the brain. The detailed live evidence is recorded at the top of this section.
 - **Spec:** `experiential/behavioral.py`, `dreaming/behavioral_consolidation.py`; ties to L-R1 (the
   consumer), I-1 (the sibling pass pattern), I-2 (disposability closes the loop).
 
@@ -529,98 +523,33 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
 
 ## Track M — Measurement / eval
 
-### M-1. L3 brain-on vs brain-off ablation — `M-1a = PILOT (not reproducible); M-1b PRE-REGISTERED, unbuilt` · **P1** *(M-1a 2026-06-23; M-1b protocol 2026-07-25)*
+### M-1. Does accumulated memory help? — `M-1a = PILOT; M-1b = PARKED` *(updated 2026-07-30)*
 > **⚠️ M-1a CORRECTION (2026-07-25).** M-1a was carried in this file and in STATUS as a
 > control-validated POSITIVE. **Its frozen case set does not exist on disk** — not committed, not
 > local — so the n=12+6 run is **not reproducible** and the verdict is downgraded to **pilot**. A
 > second, narrower correction: an interim look at n=3 was analysed with a *fixed-sample* cluster
 > bootstrap where the protocol required an **anytime-valid (e-process)** statistic that `stats.py`
 > documents as unimplemented. (n=12 was *inside* the pre-registered N=10–15 band, so this was a pilot
-> completed to target, **not** escalate-until-significant.) The **instrument is sound and reused** by
-> M-1b; only the quotable number is retracted. Note that `m1a_preregistration.md` and `m1a.md` both
+> completed to target, **not** escalate-until-significant.) The harness remains a useful mechanism
+> probe; only the quotable number is retracted. Note that `m1a_preregistration.md` and `m1a.md` both
 > stated the correct limits all along — **the drift was in the summary layer, here and in STATUS.**
-> **M-1b** ([`eval/m1_preregistration.md`](eval/m1_preregistration.md)) supersedes the recall-log
-> sampler below as the primary path: it samples decision points from **git history** rather than from
-> `retrieval.jsonl`, which is what lifts the "thin at single-operator scale" limit that kept this
-> item calendar-gated. It needs more **history**, not more **users** — `foundation.md` Decision 2 is
-> untouched.
-> **The thesis lead now that L-2→L-6 is parked.** Outcome-discrimination is dead, so this — the
-> uncurated decision-point ablation (interventional) + R-7 IPS (observational, ε now logging) — is the
-> only remaining test of "more use → more useful." It is **not** gated on negatives. Design drafted
-> under "Better primitive" below; the build is the decision sampler + natural-oracle adapters on the
-> existing M-1a harness.
-- **What:** The only metric that validates the thesis: does a brain-informed actuator make fewer
-  cross-cutting mistakes on real tasks? Hardest to measure; confounded by easier-tasks/changed-user.
-- **Panel verdict (convergent):** the naive "gotcha-avoidance ablation" is **NOT the thesis test** and
-  as-proposed is **circular** (if the memory is the warning, injecting it = injecting the answer;
-  curating cases the brain holds conditions on it winning; can't produce a negative result). Reframe it
-  as **M-1a — a conversion/delivery probe** (does surfacing the decisive memory cause an objective
-  behavior change *above salience*?) — a necessary-condition proof + regression guard for the §13.10
-  prohibitive-memory path, **not** the thesis.
-- **Hard gates (non-negotiable):** a held-out **negative-control set** (brain has no relevant memory →
-  brain-on must NOT win; clear *this* null, not zero); a **generic-salience arm**; a **content-ablation
-  arm** (strip only the relevant memory); memories must be **episodes/why** (reason-from, not
-  warning-shaped → no leakage); **programmatic blind judging** (a code detector, not an LLM grading
-  prose — firewall); **pre-registration**; **per-case** stats + anytime-valid CI / Beta-Binomial.
-- **Better primitive (the uncurated frontier — DESIGN, drafted 2026-06-26):** **within-task
-  decision-point ablation.** This is the real "more use → more useful" test and it is **NOT gated on
-  negatives** (it sidesteps the parked outcome loop) — so it is the live thesis frontier, not a
-  design-record. Shape:
-  - **Sample, don't curate.** A "decision point" = a real dogfood **recall event** (from
-    `retrieval.jsonl`) that preceded an actuator action, joined to the action/commit by session +
-    time. Decisions are *sampled from real trajectory*, never hand-picked — that's what makes it
-    uncurated and restores external validity (the thing M-1a trades away).
-  - **Fork at the decision (interventional).** Re-run the actuator (M-1a harness) on the same decision
-    with the four arms: **brain-context**, **content-ablation** (strip only the relevant memory),
-    **generic-salience** (equally-salient irrelevant context), **negative-control** (brain holds
-    nothing relevant → brain-on must NOT win). Paired (same decision across arms) → per-*decision* N,
-    the biggest power lever.
-  - **The hard part — a firewall-clean objective check, applied only where one *naturally* exists.**
-    Never an LLM grading prose. Three natural oracles, in priority: **(i) git-resolution match** — the
-    code that was actually committed at/after that decision is ground truth; score the action by
-    agreement (touched the right symbols / made the change that survived); **(ii) gate-as-judge** — if
-    the action is a code edit, does it pass the existing tests/ruff/mypy gate; **(iii) deterministic
-    detector** — a code-pattern check for a specific decision class (called the right API, avoided a
-    banned pattern). **Decisions with no natural oracle are EXCLUDED and counted** (coverage honesty) —
-    never curated-in, never prose-scored. *Why this dodges the negatives gate:* the contrast is
-    **within one decision** (A-vs-B on the same point), scored by a *present* oracle — it needs a
-    *discriminating check on the action*, not a terminal "negative outcome," so the
-    intrinsic-scarcity-of-negatives finding does not block it.
-  - **Stats:** paired per-decision, pre-registered, anytime-valid CI / sign test (as M-1a).
-  - **Reuses:** the M-1a actuator harness (`eval/m1a/`) is the in-loop machinery — what's *new* is the
-    **decision sampler** (real recalls from the log) + the **natural-oracle adapters**
-    (git-match / gate / detector). That's the concrete build.
-  - **Honest limit:** at single-operator scale the subset of decisions with a natural objective oracle is
-    **thin**, so this likely yields an *interval-delta*, not a tight ATE — state it, don't oversell.
-    Track-C capability work done *through* the brain grows the decision volume (building is using).
-- **Per-recall IPS — the observational companion (R-7 logging now LIVE).** The off-policy ATE estimator
-  over recalls served with exploration. R-7 shipped the propensity *logging*; **exploration is now ON in
-  the dogfood serve (`--explore-epsilon 0.05`, 2026-06-26)** so logs with real propensity accrue from
-  the next reconnect — the irreversible-if-delayed piece is unblocked. The **estimator itself stays
-  deferred until ε-volume exists** (calendar-gated, not effort-gated; thin at single-operator scale).
-  Decision-point ablation is *interventional* (fork the decision); IPS is *observational* over the same
-  exploration — two complementary roads to the ATE. Soft signals = guardrails only.
-- **The real new construction (shared):** an **actuator-in-the-loop harness** (consumes the served set →
-  emits an action) + programmatic detectors. **Build order:** (a) ✅ **BUILT** — the actuator harness
-  (`eval/m1a/`, commit `e6b5938`): pluggable actuator (Ollama/Claude/Codex/Gemini), deterministic
-  oracles, the four arms, pre-committed stats; `m1a-draft` renders cases from a live brain's recalls.
-  (b) ⚠️ **M-1a = PILOT, NOT REPRODUCIBLE** (2026-06-23, n=12 + 6 controls, full−ablation mean δ≈+0.60,
-  sign p≈0.002 — but the frozen case set was never preserved, and the CI was fixed-sample under an
-  interim look). Read as: *the harness works end-to-end and produced a positive signal once*. **Not a
-  quotable delivery proof**, and never the thesis (curated, one actuator, self-authored oracles).
-  (c) decision-point ablation — **PRE-REGISTERED as M-1b 2026-07-25**
-  ([`eval/m1_preregistration.md`](eval/m1_preregistration.md)); build = the git-replay decision sampler
-  + temporal-cutoff replay-brain builder + natural-oracle adapter + the e-process CI (a headline
-  build-blocker) on the existing harness — and (d) R-7 IPS — **logging now LIVE**
-  (`--explore-epsilon 0.05` on the dogfood serve, 2026-06-26; estimator deferred on ε-volume) — are the
-  uncurated frontier (the actual "more use → more useful" claim, and it is NOT gated on negatives).
-- **Settled (2026-06-23, evidence-based):** outcome-*discrimination* (the negative half the proxy↔truth
-  monitor needs) is **intrinsically gated, not deferred** — competent fix-forward work *resolves* its
-  failures, so clean terminal negatives are scarce in the brain AND in git (a commit-anchored scan of the
-  dollhouse collapsed ~28 "rejections" to ~0–2 real). Not fixable by mining harder, more devs, or
-  looking outside the brain. The strongest *clean* evidence the brain helps is the M-1a delivery proof +
-  the relevance-credibility signals (usage/recency/centrality) that *do* accrue. Do **not** mine
-  supersessions/rejections as terminal-negatives (they are weak resolved-process signals).
+- **M-1b parked and removed (2026-07-30, no run and no observed result).** It had become a
+  40-public-repository git-replay benchmark of structural co-change accumulation. That can test a
+  useful plan-tool component, but it does not touch first-person experiential memory and therefore
+  cannot validate Thalamus's differentiating claim. The runner also rebuilt structural graphs per
+  candidate and per sampled point, contradicting the protocol's bounded "one timeline walk per repo"
+  cost model. The uncommitted runner/tests and the active protocol were deleted; git history keeps
+  the design if it is ever useful as a standalone research benchmark.
+- **Current stance: no replacement harness.** The existing `rung-eval` now supports the bounded
+  normal-use comparison directly: `--label-kind declared` selects explicit actuator labels and
+  `--source recall|plan` keeps the two event populations separate. Plan mode reports declared-used
+  graph deliveries absent from flat `brain-on` top-k, explicitly as a one-sided result conditioned
+  on the graph having shown the memory. Let genuine cross-session data accrue before reading a
+  verdict. This reuses existing logs, requires no curated cases or repository reconstruction, and
+  validates relevance/delivery only — not productivity or task success.
+- **M-1a remains a mechanism probe.** The actuator harness (`eval/m1a/`, commit `e6b5938`) is retained
+  because it is small, generic, and tests whether supplied context changes behavior. Any future run
+  still needs a frozen case set, deterministic oracles, controls, and pre-registered analysis.
 - **Spec:** §16; planning.md; path-to-real-data.md; `eval/m1a/`, `docs/eval/m1a_preregistration.md`.
 
 ### M-2. `plan`-tool brief-quality eval (L1.5 gotcha-cases) — `built` · ✅ *(2026-06-17)*
@@ -635,11 +564,16 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   recall's cue through `brain-off/+usage/+structrel/+central/+full` and score recall@k/MRR/hit of the
   memory **actually used** (label from the usage/attribution logs, joined by `eval.cases_from_usage`).
   `--split` does a leak-free temporal split (weights from older recalls, test on newer *labeled* ones).
+  `--label-kind declared` isolates explicit self-report from footprint/citation proxies;
+  `--source plan` reads the intentionally separate plan telemetry and reports the one-sided
+  graph-delivered/flat-missed count with its selection-bias caveat. Explicit empty declarations are
+  preserved and reported as "none used" events instead of disappearing.
   Reuses `serve_config` so a config-rich brain (sample-project SCIP/corpora/`data_dir`) builds as the live
   tool does. **This is what M-1 needs at L1** — the surface metric (`probe-eval`) can't judge re-rankers.
 - **Verdict delivered:** see L-R1 (usage: real but recall tradeoff) and L-R2 (centrality: clean winner;
   structrel: dropped). **Open follow-on:** more `record_usage`/attribution volume (L-1) for a larger,
-  multi-brain test set; the explicit `record_usage` signal is dead — attribution carries it (D-4).
+  multi-brain test set; attribution remains the higher-volume signal, while explicit
+  `record_usage` is now durable across restarts and supplies declared conceptual use (D-4).
 - **Spec:** `eval/benchmark.py` (`cases_from_usage`), `cli/rung_eval.py`, `cli/rung_arms.py`.
 
 ### M-3. Benchmark freeze-vs-refresh (Goodhart) — `idea` · **P3**
@@ -668,9 +602,10 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
 
 ### D-4. The `used:true` rate — `ANSWERED` · ✅ *(2026-06-17)*
 - **Answered (not a write-path bug):** explicit `record_usage` (the SECONDARY *citation* signal) is
-  genuinely low — sample project 0 / this repo ~6 `used:true` — because actuators rarely cite recalled
-  *content* strongly. The PRIMARY signal is footprint **attribution** (`usage_attributed.jsonl`: 261
-  sample project / 83 this repo `used:true`), which is durable and works — so the rungs + verdict are fed.
+  lower-volume than footprint **attribution**, but it is not dead: the gateway durably reconstructs
+  shown memories from retrieval/plan logs after a restart, and agents can declare conceptual use that
+  file overlap cannot see. Attribution remains the primary high-volume signal; both feed the shared
+  behavioral usage store and the recall/plan ranking rungs.
 - **The live signal worth pursuing instead → see R-9:** 52 of 75 memories surfaced ≥2× are reliably
   *ignored* (only 2 reliably-used). That's a **recall-precision** question, not a capture bug.
 - **Spec:** `experiential/fate.reuse_by_memory`, `cli/attribute.py`.
@@ -679,26 +614,26 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
 
 ## Track S — Security & content-trust  *(tracked, deliberately lower priority)*
 
-> §17 [`security.md`](deep-dives/security.md). **Stance: scoped, not "more is better."** Zero code
-> today, correctly — solo operator, own repos. Build order is deterministic (no learned model) and
-> **gated**: this workstream does *not* jump ahead of credibility step B unless the threat surface
-> changes (ingesting un-authored corpus, or exposing the brain beyond the local operator).
+> §17 [`security.md`](deep-dives/security.md). **Stance: scoped, not "more is better."** The
+> deterministic content-trust slice (provenance, fencing, redaction) is built because public release
+> activated its threat trigger. Learned poison resistance remains gated on an actual path for
+> un-authored content to become experiential memory.
 
-### S-1. Provenance tagging at capture — `design` · **P2/P3** *(do first within S)*
-- **What:** Tag every memory/node `trust: operator | derived | third-party` at capture, keyed on the
-  producer. Near-free, and the prerequisite for everything else in S.
-- **Why:** Addresses T1 (injection) + T3 (poisoning) groundwork; cheap to add now so later fencing has
-  the signal.
-- **Spec:** §17.x; ties to the producer registry (producer → trust level).
+### S-1. Provenance tagging at capture — `built` · ✅ *(2026-06-26)*
+- **Built:** `Trust{operator|derived|third-party}` plus producer/corpus-level stamping on structural
+  nodes. Operator memories remain the explicit default.
+- **Spec:** §17.4; `core/trust.py`, `structural/trust_stamp.py`.
 
-### S-2. Recall-path content fencing — `design` · **P3**
-- **What:** Fence ingested third-party content at the single choke point (`gateway/payload.py`) so
-  instruction-shaped text in code/docstrings/commit messages can't hijack the actuator (T1).
-- **Gate:** needs S-1 (provenance).
+### S-2. Recall-path content fencing — `built` · ✅ *(2026-06-26)*
+- **Built:** Recall and plan renderers visibly fence non-operator memory and structural content,
+  including call-graph labels, at the actuator-facing boundary.
+- **Spec:** §17.4; `gateway/payload.py`, `gateway/planner.py`.
 
-### S-3. Secret redaction at ingest — `design` · **P3**
-- **What:** Redact API keys/tokens/`.env`/hostnames before they enter the vector index + Neo4j (T2 —
-  far harder to expunge once embedded).
+### S-3. Secret redaction at ingest — `built` · ✅ *(2026-06-26)*
+- **Built:** Deterministic credential-shape redaction runs before embed/store at curated-memory,
+  episode, doc, and text boundaries; kind/count-only telemetry makes coverage observable. It is
+  default-on and removable via config/CLI.
+- **Spec:** §17.4; `core/redaction.py`, `instrumentation/redaction_log.py`.
 
 ### S-4. Poison-resistance in credibility — `design` · **P3**
 - **What:** Compose adversarial-content resistance into the credibility layer (supersession/credibility
@@ -721,12 +656,12 @@ security boundary.
 ## Strategic open decisions (not tasks — choices to make deliberately)
 
 - **Which track leads next** — with L-2→L-6 parked by nature, the live learning (relevance
-  credibility) is *already shipped*, so the lead is **Track C capability** (done *through* the brain,
-  which keeps feeding the relevance signal) + the **uncurated M-1 frontier** (decision-point ablation
-  / R-7 IPS — the real "more use → more useful" test). Decide the mix explicitly.
+  credibility) is *already shipped*. Prefer capability work that solves a demonstrated use-case
+  (C-4 only when SCIP is unavailable; C-5 only after its eval preconditions) and symptom-driven
+  retrieval hardening. M-1b is parked; no replacement harness is active while normal-use telemetry
+  accrues.
 - **Is the thesis metric cleanly measurable at all** (M-1/M-3) — **partially answered:** the **M-1a
-  delivery probe ran positive** (2026-06-23, control-validated, curated), so the retrieval→actuator
-  link is demonstrated. The *full* uncurated thesis (does the brain reduce mistakes over time?) is
-  still open and may only ever be an interval-delta + soft-signal story at single-operator scale —
-  **not** an outcome-discrimination story (that's parked by nature).
-
+  actuator probe is a non-reproducible pilot**, so it shows a plausible mechanism but is not thesis
+  evidence. The full uncurated thesis (does the brain reduce mistakes over time?) remains open and
+  may only ever be an interval-delta + soft-signal story at single-operator scale — **not** an
+  outcome-discrimination story (that's parked by nature).

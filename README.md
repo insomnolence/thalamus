@@ -1,11 +1,6 @@
 # Thalamus
 
-<!-- The CI gate badge is deliberately absent until this repo is pushed to GitHub: the workflow
-     exists (.github/workflows/gate.yml) but the Actions endpoint does not, so the badge would
-     render broken and link to a 404 — a worse claim than no claim.
-     Restore this line verbatim on the first push:
 [![gate](https://github.com/insomnolence/thalamus/actions/workflows/gate.yml/badge.svg)](https://github.com/insomnolence/thalamus/actions/workflows/gate.yml)
--->
 [![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![python: 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 
@@ -72,9 +67,11 @@ Architecture, research map, and roadmap: [`docs/design-notes.md`](docs/design-no
 
 **Requirements:** [`uv`](https://docs.astral.sh/uv/), Docker (for Neo4j), Python 3.12+. The encoder
 runs locally via [`fastembed`](https://github.com/qdrant/fastembed) (ONNX Runtime — no PyTorch); first
-run downloads a small embedding model ([BGE-small](https://huggingface.co/BAAI/bge-small-en-v1.5),
-MIT-licensed) from the Hugging Face Hub. An offline, dependency-free fallback encoder ships for tests
-and air-gapped use.
+run downloads a small (~65 MB) embedding model from the Hugging Face Hub — Qdrant's quantized ONNX
+build ([`qdrant/bge-small-en-v1.5-onnx-q`](https://huggingface.co/qdrant/bge-small-en-v1.5-onnx-q),
+Apache-2.0) of [BGE-small](https://huggingface.co/BAAI/bge-small-en-v1.5) (`BAAI/bge-small-en-v1.5`,
+MIT). Both are permissive and free for commercial use; no account or gated-terms acceptance is
+involved. An offline, dependency-free fallback encoder ships for tests and air-gapped use.
 
 **1. Start Neo4j and install the workspace** (a [`docker-compose.yml`](docker-compose.yml) is included):
 
@@ -102,7 +99,10 @@ uv run python -m thalamus.cli remember \
 uv run python -m thalamus.cli sync --repo .
 ```
 
-This is also the run that downloads the embedding model, so do it before wiring up an agent.
+This is also the run that downloads the embedding model, so do it before wiring up an agent. It is
+cached under `~/.cache/thalamus/fastembed` (override with `FASTEMBED_CACHE_PATH`) — a persistent
+location on purpose, so the download is paid once and never again inside an agent's MCP startup
+window.
 
 **4. Point your agent at it — pick one transport.** The brain exposes `recall`, `remember`,
 `record_usage`, and `plan`; ask the agent to recall prior decisions, or to `plan` the blast radius of
@@ -145,10 +145,16 @@ dogfooding (this repo + a separate code-rich project), via the built-in `health`
 **pilot read**: the pre-registered M-1a probe came out positive against its controls, but at small
 scale (one actuator, curated cases) and **its frozen case set was not preserved, so that run is not
 reproducible from this repository**. We report it as a pilot, not a result; the instrument
-(`eval/m1a/`) is sound and reusable, the number is not quotable. The over-time "more use
-→ more useful" *slope* is **not** yet measured — the uncurated ablation is pre-registered and unrun (see
-[`docs/deep-dives/path-to-real-data.md`](docs/deep-dives/path-to-real-data.md) and the M-1
-pre-registration). Reproduce any of the above on your own repo:
+(`eval/m1a/`) is sound and reusable, the number is not quotable
+([`docs/eval/m1a_preregistration.md`](docs/eval/m1a_preregistration.md) states its limits). The
+over-time "more use → more useful" *slope* is **not** yet measured, and there is currently **no
+harness that measures it**: the planned multi-repository git-replay study was reviewed and **parked
+before any run**, because it would have tested structural co-change accumulation rather than
+first-person experiential memory — the thing that actually differentiates this project. The present
+stance is to let genuine cross-session usage accrue and read it with the existing `rung-eval`, which
+validates relevance and delivery only — not productivity or task success (see
+[`docs/deep-dives/path-to-real-data.md`](docs/deep-dives/path-to-real-data.md) and §M-1 of
+[`docs/ROADMAP.md`](docs/ROADMAP.md)). Reproduce any of the above on your own repo:
 
 ```bash
 uv run python -m thalamus.cli health  --repo . --code-root .
@@ -172,7 +178,9 @@ the measurement tools exist precisely so claims can be checked; if a number look
 worth filing.
 
 **Acknowledgments.** Semantic recall uses the [BGE-small](https://huggingface.co/BAAI/bge-small-en-v1.5)
-embedding model (`BAAI/bge-small-en-v1.5`, MIT-licensed), downloaded from the Hugging Face Hub at
-runtime — it is **not** redistributed here. SCIP code-graph support derives from
+embedding model (`BAAI/bge-small-en-v1.5`, MIT-licensed) by way of Qdrant's quantized ONNX conversion
+([`qdrant/bge-small-en-v1.5-onnx-q`](https://huggingface.co/qdrant/bge-small-en-v1.5-onnx-q),
+Apache-2.0), which is what `fastembed` actually fetches. Both are downloaded from the Hugging Face
+Hub at runtime — neither is redistributed here. SCIP code-graph support derives from
 [`sourcegraph/scip`](https://github.com/sourcegraph/scip) (Apache-2.0; see [`NOTICE`](NOTICE)). A
 deterministic, offline encoder ships as a dependency-free fallback.

@@ -79,8 +79,9 @@ ablation) it serves:
   layers honestly.
 - **R4 — The learning thesis.** "More use → more useful." The *outcome-weighted* form (→ bent geometry
   §13.4) is **parked by nature** (terminal negatives are intrinsically scarce; see ROADMAP Track L).
-  The live form is **relevance credibility** (shipped) + the **M-1a delivery proof** (positive) and the
-  uncurated decision-point ablation. The brain is **single-operator by design** ([`foundation.md`](foundation.md)
+  The live form is **relevance credibility** (shipped); M-1a remains only a non-reproducible mechanism
+  pilot, and no replacement uncurated harness is active while normal-use telemetry accrues. The brain
+  is **single-operator by design** ([`foundation.md`](foundation.md)
   Decision 2) — thin volume is an accepted limit, not a scale-up trigger.
 
 So: **ready to start generating real data (R1/R2); not ready to render the verdict (R3/R4).** The verdict
@@ -131,8 +132,8 @@ dogfooding, and it converts the project from "framework" to "framework with real
   *exercise and debug* the pipeline and compute directional `utility@k`, likely **not enough to validate
   an outcome-trained ranker** (which is parked by nature anyway). This is an **accepted** limit of a
   single-operator brain (by design — [`foundation.md`](foundation.md) Decision 2), not something more
-  users would fix. The thesis evidence is the M-1a delivery proof + the relevance signals that accrue
-  fine at this scale. Dogfood proves the machinery runs on real data; it does not, alone, prove the slope.
+  users would fix. The relevance signals accrue fine at this scale, but M-1a is only a mechanism
+  pilot. Dogfood proves the machinery runs on real data; it does not, alone, prove the slope.
 - **The double-role bias.** When we are both the authors of the brain *and* its users, we will
   unconsciously feed it what it handles well. Treat dogfood metrics as *plumbing validation and anecdote*,
   not as the L3 verdict; the §13.20 integrity layer (proxy↔truth divergence, etc.) still arbitrates, and a

@@ -18,8 +18,9 @@ and M-1 panel findings woven in 2026-06-17.*
 > failures, so they're rare in the brain AND git regardless of volume, more devs, or capture tooling
 > (a commit-anchored dollhouse scan collapsed ~28 candidate "rejections" to ~0–2 real). So even heavy
 > instrumented coding is unlikely to resurrect it — do not treat it as "pending capture." The honest
-> thesis proof is the **M-1a delivery probe** (ran positive); the *feedable* learning is relevance
-> credibility (shipped). What **carries over**: the **firewall** (elevate by
+> M-1a result was later downgraded to a **non-reproducible mechanism pilot** (its frozen case set was
+> not preserved); the *feedable* learning is relevance credibility (shipped). What **carries over**:
+> the **firewall** (elevate by
 > external/behavioral facts — used / superseded / recent / central — never the model grading its own
 > prose), the **modularity seams**, and the **research toolkit** (SNIPS / anytime-valid CIs / ranking),
 > which re-target cleanly onto a *usage-based retrieval ranker*. New direction tracked in `ROADMAP.md`
@@ -365,18 +366,23 @@ for rung quality is unreliable. Keep `probe-eval` as a regression guard / sanity
 and cheap for that purpose), not as the arbiter of rung benefit.
 
 **`rung-eval` (CLI) + `eval.cases_from_usage` + `cli.rung_arms.compose_rung_arms`** — the
-**utility-join ablation**: re-runs each past recall's cue through arms (`brain-off` / `+usage` /
+**utility-join ablation**: re-runs each past event's cue through arms (`brain-off` / `+usage` /
 `+structrel` / `+central` / `+full`) and scores recall@k / MRR / hit@k of the memory **actually
-used** — the behavioral label from the attribution log (`usage_attributed.jsonl`). `--split` enables
-a leak-free **temporal split** (usage weights computed from older recalls; test cases drawn from
-the newest labeled ones). This is the right metric for re-rankers and the instrument that produced
-the rung verdict below.
+used**. `--label-kind declared` selects explicit actuator self-report instead of mixing it with the
+footprint/citation proxies; `--source recall|plan` keeps plan's larger graph-gather population out of
+recall metrics. In plan mode the evaluator also counts declared-used graph deliveries absent from
+flat `brain-on` top-k, while stating the one-sided selection limit: an agent cannot label a useful
+flat-only memory the plan never showed. `--split` enables a leak-free **temporal split** (usage
+weights computed from older events; test cases drawn from the newest labeled ones). This is the
+right metric for re-rankers and the instrument that produced the rung verdict below.
 
 **Usage-signal reality (important context for any rung eval):** explicit `record_usage` calls are
-effectively dead on both brains (this repo ~6 true, the sample project 0). The **time-window attribution log**
-(`usage_attributed.jsonl`, produced by `attribute.py`) carries the real usage signal — 261 attributed
-on the sample project, 83 on this repo. Attribution is **backward-looking**: a recall is labeled "used"
-only once later commits touch its structural footprint, so the newest recalls are unlabeled. `rung-eval
+now being collected deliberately during normal use; Dollhouse had zero declared rows before its
+2026-07-30 agent instruction was added. An explicit `used_memory_ids=[]` is retained as a genuine
+"none helped" event, not collapsed into a missing declaration. The higher-volume **time-window
+attribution log** (`usage_attributed.jsonl`, produced by `attribute.py`) remains available for its
+narrow code-footprint question. Attribution is **backward-looking**: a recall is labeled "used" only
+once later commits touch its structural footprint, so the newest recalls are unlabeled. `rung-eval
 --split` handles this by holding out the newest labeled recalls as the test set.
 
 **Rung verdict (de-leaked, on both brains):**
