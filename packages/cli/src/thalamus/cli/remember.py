@@ -126,23 +126,74 @@ def remember_config(args: argparse.Namespace) -> RememberConfig:
     )
 
 
+def _reroot_from_parent(rel_path: Path, repo: Path) -> Path | None:
+    """Repair a footprint path written against a PARENT of ``repo``, else ``None``.
+
+    The silent-orphan trap: a caller whose working directory is the repo's parent naturally
+    writes ``mcp-server/src/x.ts`` for a brain whose ``code_root`` is already ``…/mcp-server``.
+    That is validly *inside* the repo, so the escape check below passes and the entry is stored
+    as ``mcp-server/src/x.ts`` — a path that can never resolve. It then links to nothing (no
+    ``TOUCHES`` edge, so the memory loses its structural-centrality boost and effectively drops
+    out of recall) *and* trips ``footprint_staleness`` as "no longer in the codebase".
+
+    Repair only that exact mistake: strip a leading prefix that duplicates the TAIL of ``repo``'s
+    own path, longest match first, and only when the remainder actually exists on disk. Anything
+    that doesn't resolve is left alone — a genuinely deleted file must keep flagging as stale.
+    """
+    repo_parts = repo.parts
+    rel_parts = rel_path.parts
+    for depth in range(min(len(rel_parts) - 1, len(repo_parts)), 0, -1):
+        if rel_parts[:depth] != repo_parts[-depth:]:
+            continue
+        candidate = Path(*rel_parts[depth:])
+        if (repo / candidate).exists():
+            return candidate
+    return None
+
+
 def _footprint(config: RememberConfig) -> list[str]:
     """Repo-relative footprint paths. A file outside the repo (or escaping via ``..``) is SKIPPED
     with a warning, never fatal — a stray or out-of-corpus path must not cost the whole memory
     (§14.4: losing the memory is worse than a missing footprint entry). E.g. a multi-root brain
     (a sample project: code root vs. outer doc roots) legitimately cites docs outside the code
-    root; those simply don't become footprint entries (which only link to code modules anyway)."""
+    root; those simply don't become footprint entries (which only link to code modules anyway).
+
+    A path that lands inside the repo but does not EXIST is kept (staleness is a real signal and
+    §14.4 says never drop the memory) but warned about, after one attempt to repair the
+    parent-relative form via :func:`_reroot_from_parent`. Without that warning the failure is
+    invisible: the only prior check was the escape check, so a non-existent path was stored
+    silently and the memory was orphaned with no diagnostic anywhere.
+    """
+    repo = config.repo.resolve()
     footprint: list[str] = []
     for file_path in config.files:
-        path = file_path if file_path.is_absolute() else (config.repo / file_path)
+        path = file_path if file_path.is_absolute() else (repo / file_path)
         try:
-            rel_path = path.resolve().relative_to(config.repo)
+            rel_path = path.resolve().relative_to(repo)
         except ValueError:
             logger.warning("related file outside the repository — skipped: %s", file_path)
             continue
         if ".." in rel_path.parts:
             logger.warning("related file escapes the repository — skipped: %s", file_path)
             continue
+        if not (repo / rel_path).exists():
+            rerooted = _reroot_from_parent(rel_path, repo)
+            if rerooted is not None:
+                logger.warning(
+                    "related file looks relative to the repository's parent — "
+                    "recorded as %s (was %s); footprint paths are relative to %s",
+                    rerooted.as_posix(),
+                    rel_path.as_posix(),
+                    repo,
+                )
+                rel_path = rerooted
+            else:
+                logger.warning(
+                    "related file is not on disk — recorded anyway, and it will be flagged "
+                    "stale: %s (footprint paths are relative to %s)",
+                    rel_path.as_posix(),
+                    repo,
+                )
         footprint.append(rel_path.as_posix())
     return footprint
 

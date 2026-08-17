@@ -114,6 +114,54 @@ def test_remember_skips_file_outside_repository(tmp_path: Path) -> None:
     assert record.metadata["footprint"] == []  # the out-of-repo file dropped; memory kept
 
 
+def test_remember_reroots_a_footprint_written_against_the_repository_parent(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The silent-orphan trap: a caller working from the repo's PARENT writes `mcp-server/src/x.ts`
+    # for a brain whose code_root is already `…/mcp-server`. That is validly inside the repo, so
+    # the escape check passes and it used to be stored verbatim — a path that can never resolve,
+    # which links to nothing (no TOUCHES edge, so the memory drops out of recall) and also trips
+    # the staleness check. It must be re-rooted to the path that actually exists.
+    repo = tmp_path / "mcp-server"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "x.ts").write_text("export const x = 1;\n")
+
+    with caplog.at_level("WARNING"):
+        record = build_retained_record(
+            _config(repo, files=(Path("mcp-server/src/x.ts"),)), now=lambda: NOW
+        )
+
+    assert record.metadata["footprint"] == ["src/x.ts"]
+    assert "relative to the repository's parent" in caplog.text
+
+
+def test_remember_keeps_and_warns_about_a_footprint_file_that_is_genuinely_gone(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A deleted file is a REAL staleness signal, so the entry is kept rather than repaired away —
+    # but it must no longer be recorded silently, which is what made the orphaning invisible.
+    with caplog.at_level("WARNING"):
+        record = build_retained_record(
+            _config(tmp_path, files=(Path("src/deleted.ts"),)), now=lambda: NOW
+        )
+
+    assert record.metadata["footprint"] == ["src/deleted.ts"]
+    assert "not on disk" in caplog.text
+
+
+def test_remember_does_not_reroot_when_the_stripped_path_does_not_exist(tmp_path: Path) -> None:
+    # Re-rooting is only safe when the remainder actually resolves; otherwise the original path is
+    # preserved so the staleness signal stays truthful instead of being silently rewritten.
+    repo = tmp_path / "mcp-server"
+    repo.mkdir(parents=True)
+
+    record = build_retained_record(
+        _config(repo, files=(Path("mcp-server/src/absent.ts"),)), now=lambda: NOW
+    )
+
+    assert record.metadata["footprint"] == ["mcp-server/src/absent.ts"]
+
+
 def test_remember_rejects_invalid_mcp_inputs(tmp_path: Path) -> None:
     with pytest.raises(ThalamusError, match="unsupported retained memory kind"):
         build_retained_record(_config(tmp_path, kind="conversation"), now=lambda: NOW)
