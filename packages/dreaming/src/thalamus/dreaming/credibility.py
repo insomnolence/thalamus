@@ -41,7 +41,7 @@ class CredibilityPass:
             return PassOutcome.skipped("no store handle wired")
         memories = [
             record
-            for record in ctx.store.scan(ctx.scope)
+            for record in ctx.memories()
             if not record.memory_id.startswith("episode:")  # credibility is for the belief layer
         ]
         verdicts = self._assess(memories)

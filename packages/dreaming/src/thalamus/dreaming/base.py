@@ -11,13 +11,26 @@ collaborators as their own constructor arguments, never on this contract.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from thalamus.core import Scope, Store, SupersessionIndex
+from thalamus.core import MemoryRecord, Scope, Store, SupersessionIndex
+
+
+class _ScanCache:
+    """One cycle's Brain-1 read, held so the passes share it instead of each re-scanning.
+
+    A plain mutable holder because :class:`PassContext` is frozen; it is per-cycle, and the
+    scheduler runs passes sequentially on one thread, so no lock is needed.
+    """
+
+    __slots__ = ("records",)
+
+    def __init__(self) -> None:
+        self.records: tuple[MemoryRecord, ...] | None = None
 
 
 class PassKind(StrEnum):
@@ -53,7 +66,9 @@ class PassContext:
     (Commit 2+). Only the universal handles live here — ``scope``/``now`` plus
     the durable Brain-1 source of truth (``store``/``supersession``). They are
     optional so the framework runs with whatever the composition root wired; a
-    pass needing an absent handle reports ``SKIPPED``. Pass-specific
+    pass needing an absent handle reports ``SKIPPED``. Read Brain 1 through
+    :meth:`memories`, never ``store.scan`` directly, so the cycle shares one
+    snapshot. Pass-specific
     collaborators (structural graph, cross-link index, the gateway refresh hook,
     the repo root) are injected into the individual pass, keeping this contract
     on ``core`` only.
@@ -64,6 +79,21 @@ class PassContext:
     store: Store | None = None
     supersession: SupersessionIndex | None = None
     repo_root: str | None = None
+    _scan: _ScanCache = field(default_factory=_ScanCache, compare=False, repr=False)
+
+    def memories(self) -> Sequence[MemoryRecord]:
+        """Brain 1 for this cycle — scanned **once** and shared by every pass that needs it.
+
+        Five passes used to call ``store.scan`` independently, so a cycle paid the enumeration
+        five times and the passes could each see a *different* Brain 1 if a write landed
+        mid-cycle. One read per cycle is both cheaper and more coherent: the cycle now has a
+        single consistent view, which is what the passes always assumed they had.
+        """
+        if self.store is None:
+            return ()
+        if self._scan.records is None:
+            self._scan.records = tuple(self.store.scan(self.scope))
+        return self._scan.records
 
 
 @dataclass(frozen=True, slots=True)

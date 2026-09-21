@@ -47,7 +47,7 @@ class BeliefAuditPass:
             return PassOutcome.skipped("no store/repo_root handle wired")
         root = Path(ctx.repo_root).resolve()
         proposals: list[SupersessionProposal] = []
-        for ref, footprint in curated_footprints(ctx.store, ctx.scope):
+        for ref, footprint in curated_footprints(ctx.memories()):
             if not footprint:
                 continue  # a belief with no footprint has no code to vanish
             missing = tuple(f for f in footprint if not (root / f).exists())

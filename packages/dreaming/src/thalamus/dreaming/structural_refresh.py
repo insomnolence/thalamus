@@ -79,7 +79,7 @@ class StructuralRefreshPass:
         ]
         footprints = [
             (record.ref, footprint_from_metadata(record.metadata))
-            for record in ctx.store.scan(ctx.scope)
+            for record in ctx.memories()
             if record.memory_id not in self._linked  # only memories new since the last tick
         ]
         applied = link_by_footprint(
