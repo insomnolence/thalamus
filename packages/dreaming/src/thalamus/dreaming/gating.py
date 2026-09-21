@@ -31,8 +31,16 @@ import hashlib
 import os
 from collections.abc import Callable, Sequence
 
-from thalamus.dreaming.base import DreamingPass, PassContext, PassKind, PassOutcome, PassStatus
+from thalamus.core import Scope
+from thalamus.dreaming.base import (
+    DreamingPass,
+    PassContext,
+    PassKind,
+    PassOutcome,
+    PassStatus,
+)
 from thalamus.dreaming.equivalence import digest
+from thalamus.structural import FileManifest
 
 #: Renders the pass's inputs to a comparable token. ``None`` means "cannot tell" -> run.
 ChangeToken = Callable[[PassContext], str | None]
@@ -97,6 +105,32 @@ def file_digest_token(paths: Sequence[str], *, chunk: int = 1 << 20) -> ChangeTo
                 return None  # cannot tell -> run
             parts.append(f"{path}:{sha.hexdigest()}")
         return digest(parts)
+
+    return token
+
+
+def manifest_token(manifest: FileManifest, scope: Scope) -> ChangeToken:
+    """A token over Brain 2's derivation state — the file manifest, read from durable storage.
+
+    The manifest records ``path -> sha256`` for every corpus file of the last build, and
+    ``incremental_ingest`` rewrites it only when it actually rebuilt. So its digest changes
+    exactly when Brain 2 changed, which makes it a **complete** signal rather than a proxy.
+
+    Crucially it is *durable and shared*: an in-process counter is blind to another process
+    rebuilding the same brain (a second serve, a manual ``thalamus dream`` against a live one),
+    which would leave a consumer holding a stale graph until the forced run. Every writer updates
+    this manifest, so every reader sees it.
+
+    ``node_ids`` are ignored — they are a function of the content hash, so hashing paths and
+    shas is both sufficient and cheaper.
+    """
+
+    def token(ctx: PassContext) -> str | None:
+        try:
+            entries = manifest.load(scope)
+        except Exception:
+            return None  # cannot tell -> run
+        return digest(sorted((path, entry.sha256) for path, entry in entries.items()))
 
     return token
 

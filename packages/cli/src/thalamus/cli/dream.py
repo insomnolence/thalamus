@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from thalamus.cli.cochange import recent_commit_shas
 from thalamus.core.protocols import Store, SupersessionIndex
 from thalamus.core.types import MemoryId, MemoryRecord, RepoId, Scope, TenantId
 from thalamus.dreaming import (
@@ -40,6 +41,7 @@ from thalamus.dreaming import (
     check_convergence,
     combine,
     file_digest_token,
+    manifest_token,
 )
 from thalamus.experiential import build_fate_context, compute_fate
 from thalamus.gateway import Gateway
@@ -49,7 +51,9 @@ from thalamus.instrumentation import (
     read_usage_log,
     reverted_shas,
 )
+from thalamus.retrieval import CentralityWeightsRef
 from thalamus.routing import ENCODER_NAMES
+from thalamus.structural import CoChangeRef, FileManifest
 
 
 def build_dream_scheduler(
@@ -63,6 +67,8 @@ def build_dream_scheduler(
     usage_refresh: DreamingPass | None = None,
     centrality_refresh: DreamingPass | None = None,
     cochange_refresh: DreamingPass | None = None,
+    manifest: FileManifest | None = None,
+    scope: Scope | None = None,
     gate_passes: bool = True,
 ) -> Scheduler:
     """The v0 pass set, in dreaming.md DAG order.
@@ -89,14 +95,14 @@ def build_dream_scheduler(
     passes: list[DreamingPass] = []
     if structural_rederive is not None:
         passes.append(structural_rederive)
+    structural_refresh: StructuralRefreshPass | None = None
     if gateway.graph is not None and gateway.links is not None:
-        passes.append(
-            StructuralRefreshPass(
-                gateway.graph,
-                gateway.links,
-                relink=structural_rederive.relink if structural_rederive is not None else None,
-            )
+        structural_refresh = StructuralRefreshPass(
+            gateway.graph,
+            gateway.links,
+            relink=structural_rederive.relink if structural_rederive is not None else None,
         )
+        passes.append(structural_refresh)
     passes.append(LinkResolutionPass(gateway.refresh))
     if attribution_refresh is not None:  # re-derive footprint attribution before usage consumes it
         passes.append(attribution_refresh)
@@ -107,8 +113,27 @@ def build_dream_scheduler(
     # Refresh the structural-centrality rung from the freshly-derived graph + links — AFTER the
     # re-derive + re-link passes above, so it reads the current topology, not the pre-tick one.
     if centrality_refresh is not None:
+        # Tier 1 — this one FEEDS RECALL, so it was gated only after `--check-convergence` showed
+        # `rung.centrality` identical across repeated cycles. Its inputs are the code graph and
+        # the cross-links. Both are covered *durably*: the manifest changes iff Brain 2 was
+        # rebuilt, and `link_by_footprint` — the sole writer of TOUCHES edges — only writes when
+        # a memory is new (Brain 1 moved) or a rebuild destroyed links (the manifest moved). So
+        # no separate links signal is needed, and unlike an in-process counter both halves are
+        # visible to every process sharing the database.
+        if gate_passes and manifest is not None and scope is not None:
+            centrality_refresh = GatedPass(
+                centrality_refresh, combine(brain1_token, manifest_token(manifest, scope))
+            )
         passes.append(centrality_refresh)
     if cochange_refresh is not None:  # refresh the plan tool's file co-change index from new code
+        # Tier 1 — also recall-feeding (the plan blast radius), gated after `plan.cochange` was
+        # shown to converge. Inputs: the commit history it mines (HEAD) and the graph it maps
+        # files onto (the manifest). Both durable, so a rebuild by another process is seen.
+        if gate_passes and manifest is not None and scope is not None:
+            cochange_refresh = GatedPass(
+                cochange_refresh,
+                combine(_git_head_token, manifest_token(manifest, scope)),
+            )
         passes.append(cochange_refresh)
     if credibility is not None:
         passes.append(credibility)
@@ -204,6 +229,20 @@ def make_dream_context_factory(
     return make
 
 
+def _git_head_token(ctx: PassContext) -> str | None:
+    """The code repo's HEAD sha — the co-change index is a function of the commits it mines.
+
+    Lives here rather than in ``dreaming`` because shelling out to git is the composition root's
+    business, and ``recent_commit_shas`` already reads HEAD-first history: if HEAD has not moved,
+    neither has the window the index is built from. Returns ``None`` (run the pass) when the repo
+    root is absent or git cannot answer — never a guess.
+    """
+    if ctx.repo_root is None:
+        return None
+    shas = recent_commit_shas(Path(ctx.repo_root), 1)
+    return shas[0] if shas else None
+
+
 def dream_log_path(repo: Path) -> Path:
     return repo / ".thalamus" / "logs" / "dream.jsonl"
 
@@ -280,7 +319,12 @@ _PROBE_KINDS = ("module", "interface", "class", "enum", "function", "method", "d
 
 
 def _convergence_probes(
-    gateway: Gateway, store: Store, scope: Scope
+    gateway: Gateway,
+    store: Store,
+    scope: Scope,
+    *,
+    centrality_ref: CentralityWeightsRef | None = None,
+    cochange_ref: CoChangeRef | None = None,
 ) -> dict[str, Callable[[], object]]:
     """Named readers for the derived views reachable from an assembled brain.
 
@@ -305,6 +349,22 @@ def _convergence_probes(
         probes["crosslinks"] = lambda: {
             str(record.ref): sorted(n.node_id for n in links.nodes_for(record.ref))
             for record in store.scan(scope)
+        }
+    # The two recall-feeding rungs. Unlike the views above, a stale value here is served to the
+    # actuator, so their gates may not be trusted until these probes show them converging.
+    if centrality_ref is not None:
+        probes["rung.centrality"] = lambda: {
+            str(ref): weight for ref, weight in centrality_ref.weights.items()
+        }
+    if cochange_ref is not None and graph is not None:
+        # Probed through ``cochanged`` — the exact surface the planner queries — rather than the
+        # index's internals, so the view compared is the one that reaches a plan brief. Order is
+        # kept rather than sorted: the planner consumes the ranking, so a reordering IS a change.
+        probes["plan.cochange"] = lambda: {
+            node.node_id: [
+                (str(ref), weight) for ref, weight in cochange_ref.cochanged(node.ref)
+            ]
+            for node in graph.nodes_of_kind(scope, "module")
         }
     return probes
 
@@ -332,18 +392,10 @@ def run_dream(config: DreamConfig) -> None:
         neo4j_password=os.environ.get("THALAMUS_NEO4J_PASSWORD"),
         session=False,
     )
-    (
-        gateway,
-        store,
-        _episodes,
-        supersession,
-        rederive,
-        attribution_refresh,
-        behavioral_consolidation,
-        usage_refresh,
-        centrality_refresh,
-        _usage_ref,
-    ) = build_serve_gateway(serve_config)
+    brain = build_serve_gateway(serve_config)
+    gateway, store, supersession, rederive = (
+        brain.gateway, brain.store, brain.supersession, brain.rederive
+    )
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     try:
         scheduler = build_dream_scheduler(
@@ -353,17 +405,27 @@ def run_dream(config: DreamConfig) -> None:
                 logs_dir=config.repo, code_repo=config.repo, supersession=supersession, scope=scope
             ),
             structural_rederive=rederive,
-            attribution_refresh=attribution_refresh,
-            behavioral_consolidation=behavioral_consolidation,
-            usage_refresh=usage_refresh,
-            centrality_refresh=centrality_refresh,
+            attribution_refresh=brain.attribution_refresh,
+            behavioral_consolidation=brain.behavioral_consolidation,
+            usage_refresh=brain.usage_refresh,
+            centrality_refresh=brain.centrality_refresh,
+            # Now built by build_serve_gateway, so the dream cycle exercises the same pass set
+            # the serve does — it previously had no co-change pass at all.
+            cochange_refresh=brain.cochange_refresh,
+            manifest=brain.manifest,
+            scope=brain.scope,
         )
         context = make_dream_context_factory(
             store=store, supersession=supersession, scope=scope, repo=config.repo
         )
         if config.check_convergence:
             report = check_convergence(
-                scheduler, context, _convergence_probes(gateway, store, scope),
+                scheduler,
+                context,
+                _convergence_probes(
+                    gateway, store, scope,
+                    centrality_ref=brain.centrality_ref, cochange_ref=brain.cochange_ref,
+                ),
                 rounds=config.rounds,
             )
             for cycle in report.reports:

@@ -15,6 +15,9 @@ from thalamus.cli.dream import (
 from thalamus.core import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
 from thalamus.dreaming import (
     InMemoryDreamLog,
+    PassContext,
+    PassKind,
+    PassOutcome,
     PassStatus,
     StructuralRederivePass,
     check_convergence,
@@ -223,3 +226,62 @@ def test_convergence_over_the_real_pass_set_is_stable(tmp_path: Path) -> None:
         scheduler, context, _convergence_probes(gateway, store, SCOPE), rounds=3
     )
     assert report.converged, report.render()
+
+
+def test_the_centrality_gate_releases_when_brain2_actually_changes(tmp_path: Path) -> None:
+    """The half of a gate that is easy to get wrong: it must stop skipping once its inputs move.
+
+    Centrality feeds recall, so a gate that latched shut would quietly freeze the rung at its
+    startup value — the same silent-staleness shape as the cross-hemisphere link bug.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    record = _curated("ep", "why mod.py is like that", ("mod.py",))
+    store.add(record, encoder.encode([record.content])[0])
+
+    graph = InMemoryStructuralGraph(SCOPE)
+    links = InMemoryCrossLinkIndex()
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW), k=5, views=DerivedViewsRef(),
+        graph=graph, links=links,
+    )
+    manifest = InMemoryFileManifest()
+    rederive = StructuralRederivePass(
+        [CorpusSpec(PythonAstIngestor(), InMemoryStructuralIndex(dim=32), python_files, "code")],
+        graph, manifest, encoder,
+    )
+    runs: list[int] = []
+
+    class _CountingCentrality:
+        name = "centrality-refresh"
+        kind = PassKind.ACTOR
+
+        def run(self, ctx: PassContext) -> PassOutcome:
+            runs.append(1)
+            return PassOutcome(summary="recomputed")
+
+    scheduler = build_dream_scheduler(
+        gateway,
+        structural_rederive=rederive,
+        centrality_refresh=_CountingCentrality(),
+        manifest=manifest,
+        scope=SCOPE,
+    )
+    context = make_dream_context_factory(
+        store=store, supersession=InMemorySupersessionIndex(), scope=SCOPE, repo=repo
+    )
+
+    scheduler.run(context())          # cold: builds Brain 2, links, recomputes
+    scheduler.run(context())          # settled: must skip
+    assert len(runs) == 1, "a quiet cycle should not recompute centrality"
+
+    (repo / "mod.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+    report = scheduler.run(context())  # Brain 2 rebuilt -> the gate must release
+
+    centrality = next(p for p in report.passes if p.name == "centrality-refresh")
+    assert centrality.status is PassStatus.OK, "the gate latched shut on a real change"
+    assert len(runs) == 2

@@ -22,9 +22,11 @@ from thalamus.dreaming import (
     combine,
     file_digest_token,
     file_state_token,
+    manifest_token,
 )
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
+from thalamus.structural import InMemoryFileManifest, ManifestEntry
 
 SCOPE = Scope(TenantId("t"), RepoId("r"))
 NOW = datetime(2026, 9, 21, tzinfo=UTC)
@@ -202,3 +204,50 @@ def test_digest_token_settles_for_a_file_rewritten_with_identical_content(
 
     derived.write_text('{"a":2}\n', encoding="utf-8")
     assert by_content(_ctx()) != content_before
+
+
+def test_manifest_token_moves_only_when_brain2_is_rebuilt() -> None:
+    """The Tier-1 graph signal. It must settle on a quiet cycle (or the gate never fires) and
+    move on a real rebuild (or centrality/co-change serve a stale rung)."""
+    manifest = InMemoryFileManifest()
+    manifest.save(SCOPE, {"a.py": ManifestEntry("sha-a", ("module:a",))})
+    token = manifest_token(manifest, SCOPE)
+    settled = token(_ctx())
+
+    assert token(_ctx()) == settled  # nothing rebuilt
+    manifest.save(SCOPE, {"a.py": ManifestEntry("sha-a2", ("module:a",))})
+    assert token(_ctx()) != settled  # a file's content changed
+
+
+def test_manifest_token_is_insensitive_to_entry_order_and_node_ids() -> None:
+    """Order would make every cycle look like a rebuild; node_ids are a function of the sha,
+    so including them would only add noise."""
+    a, b = InMemoryFileManifest(), InMemoryFileManifest()
+    a.save(SCOPE, {"a.py": ManifestEntry("s1", ("module:a",)),
+                   "b.py": ManifestEntry("s2", ("module:b",))})
+    b.save(SCOPE, {"b.py": ManifestEntry("s2", ("module:b", "function:b.f")),
+                   "a.py": ManifestEntry("s1", ())})
+    assert manifest_token(a, SCOPE)(_ctx()) == manifest_token(b, SCOPE)(_ctx())
+
+
+def test_manifest_token_sees_another_process_rebuild() -> None:
+    """The reason this replaced an in-process counter: a durable manifest is shared, so a
+    rebuild performed by a *different* reader of the same store still busts the gate."""
+    shared = InMemoryFileManifest()  # stands in for the durable Neo4j manifest
+    mine = manifest_token(shared, SCOPE)
+    shared.save(SCOPE, {"a.py": ManifestEntry("sha-a", ())})
+    before = mine(_ctx())
+
+    # Someone else rebuilds Brain 2 and writes the manifest; my process did nothing.
+    shared.save(SCOPE, {"a.py": ManifestEntry("sha-a-rebuilt", ())})
+    assert mine(_ctx()) != before
+
+
+def test_manifest_token_fails_open_when_the_manifest_cannot_be_read() -> None:
+    class _Broken:
+        def load(self, scope: Scope) -> dict[str, ManifestEntry]:
+            raise RuntimeError("backend down")
+
+        def save(self, scope: Scope, entries: object) -> None: ...
+
+    assert manifest_token(_Broken(), SCOPE)(_ctx()) is None  # type: ignore[arg-type]

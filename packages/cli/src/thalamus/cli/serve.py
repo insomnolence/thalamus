@@ -438,20 +438,41 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ServeBrain:
+    """Everything :func:`build_serve_gateway` assembles, named rather than positional.
+
+    It was a 10-tuple every caller unpacked positionally with placeholder names; adding the two
+    refs the gating instrument needs to probe would have made it twelve. Named fields also let a
+    caller take the two things it wants without spelling out the eight it does not.
+    """
+
+    gateway: Gateway
+    store: Store
+    episodes: list[MemoryRecord]
+    supersession: SupersessionIndex | None
+    rederive: StructuralRederivePass | None
+    attribution_refresh: AttributionRefreshPass[UsageSignal]
+    behavioral_consolidation: BehavioralConsolidationPass
+    usage_refresh: UsageRefreshPass
+    centrality_refresh: CentralityRefreshPass
+    usage_ref: UsageWeightsRef
+    centrality_ref: CentralityWeightsRef
+    # The plan tool's co-change layer. Built here rather than in ``run_serve`` so every caller —
+    # the serve, ``thalamus dream``, and the convergence harness — exercises the same pass set;
+    # it was previously invisible to the dream cycle entirely. ``None`` without a graph or when
+    # ``plan_cochange_commits`` is 0.
+    cochange_ref: CoChangeRef | None
+    cochange_refresh: CoChangeRefreshPass | None
+    # Brain 2's durable derivation state. Exposed because the Tier-1 pass gates fingerprint it:
+    # it changes exactly when Brain 2 was rebuilt, by any process sharing the database.
+    manifest: FileManifest | None
+    scope: Scope
+
+
 def build_serve_gateway(
     config: ServeConfig, *, store: Store | None = None, encoder: Encoder | None = None
-) -> tuple[
-    Gateway,
-    Store,
-    list[MemoryRecord],
-    SupersessionIndex | None,
-    StructuralRederivePass | None,
-    AttributionRefreshPass[UsageSignal],
-    BehavioralConsolidationPass,
-    UsageRefreshPass,
-    CentralityRefreshPass,
-    UsageWeightsRef,
-]:
+) -> ServeBrain:
     """Assemble the two-hemisphere gateway from durable Brain 1 + the current repo.
 
     Returns the gateway, the (open) store, the episodes scanned for re-linking, the durable
@@ -672,17 +693,38 @@ def build_serve_gateway(
         if corpora is not None and graph is not None and manifest is not None
         else None
     )
-    return (
-        gateway,
-        store,
-        episodes,
-        supersession,
-        rederive,
-        attribution_refresh,
-        behavioral_consolidation,
-        usage_refresh,
-        centrality_refresh,
-        usage_ref,
+    cochange_ref: CoChangeRef | None = None
+    cochange_refresh: CoChangeRefreshPass | None = None
+    if config.plan_cochange_commits > 0 and gateway.graph is not None:
+        code_graph = gateway.graph
+
+        def _recompute_cochange() -> CoChangeIndex:
+            return build_file_cochange(
+                config.repo,
+                code_graph,
+                scope,
+                recent_commit_shas(config.repo, config.plan_cochange_commits),
+            )
+
+        cochange_ref = CoChangeRef(_recompute_cochange())  # seed at startup
+        cochange_refresh = CoChangeRefreshPass(_recompute_cochange, cochange_ref.refresh)
+
+    return ServeBrain(
+        gateway=gateway,
+        store=store,
+        episodes=episodes,
+        supersession=supersession,
+        rederive=rederive,
+        attribution_refresh=attribution_refresh,
+        behavioral_consolidation=behavioral_consolidation,
+        usage_refresh=usage_refresh,
+        centrality_refresh=centrality_refresh,
+        usage_ref=usage_ref,
+        centrality_ref=centrality_ref,
+        cochange_ref=cochange_ref,
+        cochange_refresh=cochange_refresh,
+        manifest=manifest,
+        scope=scope,
     )
 
 
@@ -986,18 +1028,10 @@ def run_serve(config: ServeConfig) -> None:
 
     encoder: Encoder = build_encoder(config.encoder, dim=config.dim)
     preflight_encoder(encoder, config.encoder)
-    (
-        gateway,
-        store,
-        episodes,
-        supersession,
-        rederive,
-        attribution_refresh,
-        behavioral_consolidation,
-        usage_refresh,
-        centrality_refresh,
-        usage_ref,
-    ) = build_serve_gateway(config, encoder=encoder)
+    brain = build_serve_gateway(config, encoder=encoder)
+    gateway, store, episodes = brain.gateway, brain.store, brain.episodes
+    supersession, rederive, usage_ref = brain.supersession, brain.rederive, brain.usage_ref
+    cochange_ref, cochange_refresh = brain.cochange_ref, brain.cochange_refresh
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     # Brain data home (logs/session/dream) — may differ from the code root (--repo).
     data_dir = config.data_dir or config.repo
@@ -1012,26 +1046,6 @@ def run_serve(config: ServeConfig) -> None:
         FileSessionContextStore(default_session_path(data_dir)).publish(
             SessionContext(session_id=default_session_id, started_at=datetime.now(UTC))
         )
-
-    # The plan tool's file co-change layer: symbols whose files historically change together, fused
-    # into the blast radius (validated to lift cross-file recall). Held in a CoChangeRef so a
-    # dreaming pass can swap a freshly-mined index in without a restart; seeded once at startup so
-    # the tool has coupling immediately. Skipped without a graph (experiential-only) or when off.
-    cochange_ref: CoChangeRef | None = None
-    cochange_refresh: CoChangeRefreshPass | None = None
-    if config.plan_cochange_commits > 0 and gateway.graph is not None:
-        code_graph = gateway.graph
-
-        def _recompute_cochange() -> CoChangeIndex:
-            return build_file_cochange(
-                config.repo,
-                code_graph,
-                scope,
-                recent_commit_shas(config.repo, config.plan_cochange_commits),
-            )
-
-        cochange_ref = CoChangeRef(_recompute_cochange())  # seed at startup
-        cochange_refresh = CoChangeRefreshPass(_recompute_cochange, cochange_ref.refresh)
 
     # One background daemon thread runs the serve's upkeep off the FastMCP event loop: a periodic
     # wake perceives (capture new commits → episodes) then consolidates (dreaming refreshes the
@@ -1068,19 +1082,22 @@ def run_serve(config: ServeConfig) -> None:
                 # Re-derive footprint usage attribution from the freshly-derived graph + the logs
                 # each cycle (before usage-refresh, which consumes it), so the primary Tier-1 signal
                 # never goes stale mid-serve — un-staling both the usage rung and the verdict.
-                attribution_refresh=attribution_refresh,
+                attribution_refresh=brain.attribution_refresh,
                 # Consolidate the log WAL's behavioral usage into the brain each cycle (after
                 # attribution, before usage-refresh reads it) — the brain accumulates its own usage.
-                behavioral_consolidation=behavioral_consolidation,
+                behavioral_consolidation=brain.behavioral_consolidation,
                 # Refresh the usage-weighted recall rung from accrued usage each cycle, so memories
                 # that keep proving useful rise without a restart (the relevance-credibility loop).
-                usage_refresh=usage_refresh,
+                usage_refresh=brain.usage_refresh,
                 # Refresh the structural-centrality rung from the re-derived graph + links each
                 # cycle, so a memory's "well-connected to Brain 2" standing tracks the live code.
-                centrality_refresh=centrality_refresh,
+                centrality_refresh=brain.centrality_refresh,
                 # Refresh the plan tool's file co-change index from new commits each cycle, so fresh
                 # coupling reaches the blast radius without a restart (mirrors structural-rederive).
                 cochange_refresh=cochange_refresh,
+                # Brain 2's durable manifest is what the Tier-1 gates fingerprint.
+                manifest=brain.manifest,
+                scope=brain.scope,
             )
             context_factory = make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo

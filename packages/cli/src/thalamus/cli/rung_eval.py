@@ -276,7 +276,8 @@ def run_rung_eval(config: RungEvalConfig) -> None:
         )
 
     encoder = _encoder(serve)
-    gateway, store, *_rest = build_serve_gateway(serve, encoder=encoder)
+    brain = build_serve_gateway(serve, encoder=encoder)
+    gateway, store = brain.gateway, brain.store
     try:
         graph, links = gateway.graph, gateway.links
         if graph is None or links is None:

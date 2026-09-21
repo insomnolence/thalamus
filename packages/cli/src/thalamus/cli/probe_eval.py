@@ -291,7 +291,8 @@ def _run_with_rungs(
         neo4j_uri=config.neo4j_uri, neo4j_user=config.neo4j_user,
         neo4j_password=config.neo4j_password, session=False,
     )
-    gateway, store, *_rest = build_serve_gateway(serve_config, encoder=encoder)
+    brain = build_serve_gateway(serve_config, encoder=encoder)
+    gateway, store = brain.gateway, brain.store
     try:
         graph, links = gateway.graph, gateway.links
         if graph is None or links is None:

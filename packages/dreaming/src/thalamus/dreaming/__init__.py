@@ -36,6 +36,7 @@ from thalamus.dreaming.gating import (
     combine,
     file_digest_token,
     file_state_token,
+    manifest_token,
 )
 from thalamus.dreaming.link_resolution import LinkResolutionPass
 from thalamus.dreaming.log import (
@@ -88,6 +89,7 @@ __all__ = [
     "digest",
     "file_digest_token",
     "file_state_token",
+    "manifest_token",
     "snapshot",
     "SupersessionProposal",
     "UsageRefreshPass",

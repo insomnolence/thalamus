@@ -182,18 +182,8 @@ def run_plan_brief_eval(config: PlanBriefEvalConfig) -> None:
         neo4j_password=config.neo4j_password,
         session=False,
     )
-    (
-        gateway,
-        store,
-        _episodes,
-        _supersession,
-        _rederive,
-        _attribution_refresh,
-        _behavioral_consolidation,
-        _usage_refresh,
-        _centrality_refresh,
-        usage_ref,
-    ) = build_serve_gateway(serve_config)
+    brain = build_serve_gateway(serve_config)
+    gateway, store, usage_ref = brain.gateway, brain.store, brain.usage_ref
     scope = Scope(TenantId(config.tenant), RepoId(config.repo_id))
     try:
         # Mine the co-change radius layer the live `plan` tool uses, so the eval measures the same
