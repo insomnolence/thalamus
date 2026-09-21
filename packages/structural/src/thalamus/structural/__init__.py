@@ -77,6 +77,7 @@ from thalamus.structural.manifest import (
 from thalamus.structural.neo4j_graph import Neo4jCrossLinkIndex, Neo4jStructuralGraph
 from thalamus.structural.neo4j_index import Neo4jStructuralIndex
 from thalamus.structural.python_ast import PythonAstIngestor
+from thalamus.structural.relink import RelinkQueue
 from thalamus.structural.schema import (
     IngestResult,
     SourceAnchor,
@@ -159,6 +160,7 @@ __all__ = [
     "findings_files",
     "incremental_ingest",
     "link_anchored_nodes",
+    "RelinkQueue",
     "link_by_footprint",
     "linked_nodes_for",
     "markdown_files",

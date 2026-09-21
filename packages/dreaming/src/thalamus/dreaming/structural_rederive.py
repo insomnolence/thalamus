@@ -19,11 +19,15 @@ freshly-added code modules exist before episode footprints are re-linked against
 Honest limit: the underlying ingest removes-then-re-MERGEs changed files' nodes, so a recall in
 that sub-second window could miss a node. Brain 2 is a derived view and the next recall is correct;
 a single-transaction swap is the documented robustness follow-up.
+
+That same remove-then-re-MERGE also destroys the cross-hemisphere ``TOUCHES`` edges into the
+rebuilt nodes on a ``DETACH DELETE`` backend, so each rebuild publishes the affected paths to a
+:class:`RelinkQueue` that ``StructuralRefreshPass`` drains and repairs. See ``relink.py``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from thalamus.core.protocols import Encoder
@@ -31,6 +35,7 @@ from thalamus.dreaming.base import PassContext, PassKind, PassOutcome
 from thalamus.structural import (
     CorpusSpec,
     FileManifest,
+    RelinkQueue,
     StructuralGraph,
     incremental_ingest,
     link_anchored_nodes,
@@ -55,6 +60,7 @@ class StructuralRederivePass:
         encoder: Encoder,
         *,
         regen: Callable[[Sequence[CorpusSpec]], None] | None = None,
+        relink: RelinkQueue | None = None,
     ) -> None:
         # The same graph/index/manifest handles the gateway queries — re-ingesting into them is
         # seen by live recall, no restart. ``corpora`` are the exact specs the startup build used.
@@ -63,6 +69,14 @@ class StructuralRederivePass:
         self._manifest = manifest
         self._encoder = encoder
         self._regen = regen
+        # Owned by default so a caller that wants the repair only has to hand ``relink`` to the
+        # consumer; injectable so a composition root can share one queue explicitly.
+        self._relink = relink if relink is not None else RelinkQueue()
+
+    @property
+    def relink(self) -> RelinkQueue:
+        """The queue this pass publishes rebuilt paths to — hand it to ``StructuralRefreshPass``."""
+        return self._relink
 
     def run(self, ctx: PassContext) -> PassOutcome:
         if ctx.repo_root is None:
@@ -79,6 +93,9 @@ class StructuralRederivePass:
         )
         if not result.rebuilt:
             return PassOutcome.skipped("no source changes")
+        # Publish BEFORE re-anchoring so a failure below still leaves the repair queued: a missed
+        # re-link is silent and permanent, a redundant one is a cheap idempotent MERGE.
+        self._relink.publish(_repo_relative(result.rebuilt_paths, Path(ctx.repo_root)))
         # C-2: re-anchor non-code nodes (findings/docs) to the code they annotate, since a rebuild
         # may have added/moved either side. Idempotent — the graph dedups identical ``annotates``
         # edges, so re-running over a settled graph is a no-op.
@@ -112,3 +129,20 @@ class StructuralRederivePass:
         return link_anchored_nodes(
             annotators, code_nodes, self._graph, ctx.scope, repo_root=Path(ctx.repo_root)
         )
+
+
+def _repo_relative(paths: Iterable[str], repo_root: Path) -> frozenset[str]:
+    """Normalize ingest paths to the repo-relative POSIX form footprints use.
+
+    Mirrors ``module_index``'s normalization so a published path and a memory's footprint entry
+    compare as equal strings. A corpus rooted outside the repo (e.g. a sibling ``docs/``) raises
+    ``ValueError`` and is dropped — correct, since a git footprint can only name files under the
+    repo root. A vanished file resolves fine; ``resolve()`` does not require existence."""
+    root = repo_root.resolve()
+    relative: set[str] = set()
+    for raw in paths:
+        try:
+            relative.add(Path(raw).resolve().relative_to(root).as_posix())
+        except (ValueError, OSError):
+            continue
+    return frozenset(relative)

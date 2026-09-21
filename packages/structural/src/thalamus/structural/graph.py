@@ -25,7 +25,21 @@ Direction = Literal["out", "in", "both"]
 
 @runtime_checkable
 class StructuralGraph(Protocol):
-    """A re-derivable graph of structural nodes + typed edges, with k-hop traversal."""
+    """A re-derivable graph of structural nodes + typed edges, with k-hop traversal.
+
+    **``remove`` may destroy cross-hemisphere edges, and implementations differ.** A backend that
+    stores the §13.19 ``(memory)-[:TOUCHES]->(node)`` link as a native edge on the node — Neo4j,
+    where removal is ``DETACH DELETE`` — takes those links with the node; one that keeps links in a
+    separate index (the in-memory pair) does not. Re-adding the node under its canonical id does
+    **not** restore them. So a caller that removes and re-derives nodes must republish the affected
+    paths to a :class:`~thalamus.structural.relink.RelinkQueue` for ``StructuralRefreshPass`` to
+    repair; ``incremental_ingest`` does this via ``IncrementalResult.rebuilt_paths``.
+
+    This divergence is deliberate rather than reconciled: making the backends identical would mean
+    either coupling the in-memory graph to a link index or giving up ``DETACH DELETE``, both worse
+    than repairing after the fact. It is documented here because its absence is what let a rebuild
+    silently sever memories from the code graph for the life of a serve.
+    """
 
     def add(self, result: IngestResult) -> None: ...
     def replace(self, result: IngestResult) -> None: ...

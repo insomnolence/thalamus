@@ -5,7 +5,7 @@ replace — [`design-notes.md`](design-notes.md) §16 (the canonical capability 
 deep-dives (per-area specs). This file is the **ranked, actionable superset**: every item carries a status, what it
 does, why, the concrete steps, its gate/dependency, and where it's spec'd.*
 
-*Last updated 2026-07-30.*
+*Last updated 2026-09-21.*
 
 ---
 
@@ -430,6 +430,21 @@ workstream (Track S — content-trust slice now shipped). The outcome-trained re
   footprint-dominated labels on *both* brains (`cases_from_usage`), so it means "centrality best ranks
   *code-footprinted* memories for *code-touching* sessions" and is silent on conceptual recall.
 - **Spec:** `eval/stability.py`, `eval/benchmark.py`, `instrumentation/usage.py`, `structural/attribution.py`.
+
+### R-10. Reconcile the two `StructuralGraph.remove` semantics — `documented, not reconciled` · **P3**
+- **What:** Neo4j's `remove` is `DETACH DELETE`, so it destroys the `(memory)-[:TOUCHES]->(node)`
+  cross-hemisphere edges into the nodes it drops; the in-memory graph keeps links in a separate
+  index and loses nothing. Same protocol, divergent destructive semantics — which is why the
+  in-memory unit suite could not see the resulting bug (a rebuild silently severed memories from
+  the code graph for the life of a serve; fixed by the re-derive → `RelinkQueue` →
+  `StructuralRefreshPass` repair, with a Neo4j-backed regression test).
+- **Why P3, not higher:** with the repair wired, both backends now behave the same *observably*.
+  What remains is a latent trap for a future node-removal path that forgets to republish. Making
+  them genuinely identical would need either coupling the in-memory graph to a link index or
+  giving up `DETACH DELETE` — both worse than repairing after the fact, so the contract is
+  documented on the protocol instead.
+- **Spec:** `structural/graph.py` (`StructuralGraph` docstring), `structural/relink.py`,
+  `tests/integration/test_crosslink_survives_rederive.py`. Same code path as **R-4**.
 
 ---
 

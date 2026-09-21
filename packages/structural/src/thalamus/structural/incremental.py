@@ -69,6 +69,10 @@ class IncrementalResult:
     stats: IngestStats
     results: dict[str, IngestResult]  # per corpus; empty when nothing changed (rebuilt=False)
     rebuilt: bool  # False when a no-change build skipped parse/jedi/embed entirely
+    # The changed + vanished files whose nodes were dropped and re-MERGEd. Their cross-hemisphere
+    # links do NOT survive that on a DETACH DELETE backend, so a consumer (RelinkQueue ->
+    # StructuralRefreshPass) must repair them; empty when nothing was rebuilt.
+    rebuilt_paths: frozenset[str] = frozenset()
 
 
 def _sha256(path: Path) -> str:
@@ -168,4 +172,6 @@ def incremental_ingest(
         embedded=embedded,
         removed=len(removed_ids),
     )
-    return IncrementalResult(stats=stats, results=results, rebuilt=True)
+    return IncrementalResult(
+        stats=stats, results=results, rebuilt=True, rebuilt_paths=frozenset(changed | vanished)
+    )

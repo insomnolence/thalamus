@@ -91,3 +91,49 @@ def test_regen_hook_runs_before_ingest(tmp_path: Path) -> None:
     )
     rederive.run(_ctx(repo))
     assert seen == [1]  # the regen hook ran once, handed this corpus to (re)build its artifact
+
+
+def test_rebuilt_paths_are_published_repo_relative(tmp_path: Path) -> None:
+    """The re-derive tells the re-link which files' cross-hemisphere edges it just destroyed,
+    in the repo-relative POSIX form a memory footprint uses."""
+    repo = tmp_path / "repo"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    graph = InMemoryStructuralGraph(SCOPE)
+    index = InMemoryStructuralIndex(dim=32)
+    rederive = StructuralRederivePass(
+        _corpora(index), graph, InMemoryFileManifest(), DeterministicEncoder(dim=32)
+    )
+
+    # First build: every file is "changed", so every file is published.
+    assert rederive.run(_ctx(repo)).status is not PassStatus.SKIPPED
+    assert rederive.relink.drain() == frozenset({"pkg/mod.py"})
+
+    # A no-change tick publishes nothing (it never removes a node).
+    assert rederive.run(_ctx(repo)).status is PassStatus.SKIPPED
+    assert rederive.relink.drain() == frozenset()
+
+    # Only the file that actually changed is published.
+    (repo / "pkg" / "mod.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+    (repo / "pkg" / "other.py").write_text("def g():\n    return 3\n", encoding="utf-8")
+    rederive.run(_ctx(repo))
+    assert rederive.relink.drain() == frozenset({"pkg/mod.py", "pkg/other.py"})
+
+
+def test_a_vanished_file_is_published_too(tmp_path: Path) -> None:
+    """A deleted file's nodes are dropped as well, so memories pointing at it must re-resolve
+    (and legitimately end up unlinked) rather than keep a stale cache entry."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gone.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    graph = InMemoryStructuralGraph(SCOPE)
+    rederive = StructuralRederivePass(
+        _corpora(InMemoryStructuralIndex(dim=32)), graph, InMemoryFileManifest(),
+        DeterministicEncoder(dim=32),
+    )
+    rederive.run(_ctx(repo))
+    rederive.relink.drain()
+
+    (repo / "gone.py").unlink()
+    rederive.run(_ctx(repo))
+    assert rederive.relink.drain() == frozenset({"gone.py"})

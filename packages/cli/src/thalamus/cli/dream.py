@@ -33,6 +33,7 @@ from thalamus.dreaming import (
     PassContext,
     PassStatus,
     Scheduler,
+    StructuralRederivePass,
     StructuralRefreshPass,
 )
 from thalamus.experiential import build_fate_context, compute_fate
@@ -51,7 +52,7 @@ def build_dream_scheduler(
     *,
     dream_log: DreamLog | None = None,
     credibility: DreamingPass | None = None,
-    structural_rederive: DreamingPass | None = None,
+    structural_rederive: StructuralRederivePass | None = None,
     attribution_refresh: DreamingPass | None = None,
     behavioral_consolidation: DreamingPass | None = None,
     usage_refresh: DreamingPass | None = None,
@@ -64,7 +65,12 @@ def build_dream_scheduler(
     (new/changed/removed code), so it runs FIRST — before ``structural-refresh`` re-links episode
     footprints, which must see the freshly-added module nodes. ``structural-refresh`` (actor)
     re-links episodes to current code modules — included only when the gateway exposes a structural
-    graph + link index (Brain 2 present). ``link-resolution`` (actor) refreshes the gateway's
+    graph + link index (Brain 2 present). It takes its invalidation queue from
+    ``structural_rederive`` so the re-link repairs the cross-hemisphere edges a rebuild destroys —
+    derived here rather than passed in, because a caller that forgot to connect them would switch
+    the repair off silently, with every test still green (the failure that produced it). With no
+    re-derive there is nothing to invalidate and the repair layer is simply absent.
+    ``link-resolution`` (actor) refreshes the gateway's
     derived views (superseded frontier + staleness). ``attribution-refresh`` (actor, when supplied)
     re-derives the footprint usage attribution from the freshly-derived graph + the logs — it runs
     AFTER re-derive/re-link (needs the current graph) and BEFORE ``usage-refresh`` (which consumes
@@ -78,7 +84,13 @@ def build_dream_scheduler(
     if structural_rederive is not None:
         passes.append(structural_rederive)
     if gateway.graph is not None and gateway.links is not None:
-        passes.append(StructuralRefreshPass(gateway.graph, gateway.links))
+        passes.append(
+            StructuralRefreshPass(
+                gateway.graph,
+                gateway.links,
+                relink=structural_rederive.relink if structural_rederive is not None else None,
+            )
+        )
     passes.append(LinkResolutionPass(gateway.refresh))
     if attribution_refresh is not None:  # re-derive footprint attribution before usage consumes it
         passes.append(attribution_refresh)

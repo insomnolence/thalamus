@@ -9,13 +9,21 @@ from pathlib import Path
 
 from thalamus.cli.dream import build_dream_scheduler, make_dream_context_factory
 from thalamus.core import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
-from thalamus.dreaming import InMemoryDreamLog, PassStatus
+from thalamus.dreaming import InMemoryDreamLog, PassStatus, StructuralRederivePass
 from thalamus.experiential import InMemorySupersessionIndex
 from thalamus.gateway import DerivedViewsRef, Gateway, SupersededDemotingRetriever
 from thalamus.retrieval import L0Retriever
 from thalamus.routing import DeterministicEncoder
 from thalamus.store import InMemoryStore
-from thalamus.structural import InMemoryCrossLinkIndex, InMemoryStructuralGraph
+from thalamus.structural import (
+    CorpusSpec,
+    InMemoryCrossLinkIndex,
+    InMemoryFileManifest,
+    InMemoryStructuralGraph,
+    InMemoryStructuralIndex,
+    PythonAstIngestor,
+    python_files,
+)
 
 SCOPE = Scope(TenantId("t"), RepoId("r"))
 NOW = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
@@ -99,3 +107,47 @@ def test_scheduler_includes_structural_refresh_when_brain2_present(tmp_path: Pat
         "link-resolution",
         "belief-audit",
     ]
+
+
+def test_scheduler_shares_the_rederive_queue_with_the_relink(tmp_path: Path) -> None:
+    """The composition-root wiring: a re-derive's rebuilt paths must reach the re-link pass.
+
+    Unit tests cover each pass in isolation; this pins the seam between them, which is where the
+    repair would silently regress (the passes would both still pass their own tests).
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    episode = _curated("ep", "why mod.py is like that", ("mod.py",))
+    store.add(episode, encoder.encode([episode.content])[0])
+
+    graph = InMemoryStructuralGraph(SCOPE)
+    links = InMemoryCrossLinkIndex()
+    views = DerivedViewsRef()
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW), k=5, views=views,
+        graph=graph, links=links,
+    )
+    rederive = StructuralRederivePass(
+        [CorpusSpec(PythonAstIngestor(), InMemoryStructuralIndex(dim=32), python_files, "code")],
+        graph, InMemoryFileManifest(), encoder,
+    )
+    # No `relink` argument: the scheduler derives it from the re-derive, so the repair cannot be
+    # switched off by a caller forgetting to connect them.
+    scheduler = build_dream_scheduler(gateway, structural_rederive=rederive)
+    context = make_dream_context_factory(
+        store=store, supersession=InMemorySupersessionIndex(), scope=SCOPE, repo=repo
+    )
+
+    scheduler.run(context())  # first cycle: build Brain 2 and link the episode
+    assert [node.node_id for node in links.nodes_for(episode.ref)] == ["module:mod"]
+
+    # A changed file rebuilds its nodes; the re-link must be told, and repair in the same cycle.
+    (repo / "mod.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+    report = scheduler.run(context())
+
+    refresh = next(p for p in report.passes if p.name == "structural-refresh")
+    assert refresh.details["repaired"] == 1
