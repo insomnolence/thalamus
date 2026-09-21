@@ -94,11 +94,16 @@ def incremental_ingest(
     returns early without parsing — O(hash files), independent of repo size; with fresh ones it
     is a full build (the re-derive oracle)."""
     # 1. Cheap: enumerate + hash corpus files (NO parse, NO jedi) and diff against the last build.
-    #    Each corpus may target its own root (``spec.root``), e.g. docs outside the code root.
+    #    Tracked PER CORPUS, because a corpus whose files are untouched must not be re-parsed just
+    #    because a sibling changed — editing one markdown file used to re-run the whole code
+    #    ingest (for a SCIP corpus, the external indexer too).
     current_sha: dict[str, str] = {}
+    files_by_corpus: dict[str, set[str]] = {}
     for spec in corpora:
-        for path in spec.files(spec.root or repo):
-            current_sha[str(path)] = _sha256(path)
+        paths = {str(path) for path in spec.files(spec.root or repo)}
+        files_by_corpus[spec.corpus] = paths
+        for path in paths:
+            current_sha[path] = _sha256(Path(path))
     previous = manifest.load(scope)
     changed = {
         path for path, sha in current_sha.items()
@@ -113,12 +118,28 @@ def incremental_ingest(
             stats=IngestStats(len(current_sha), 0, 0, 0, 0), results={}, rebuilt=False
         )
 
-    # 3. Something changed -> parse every corpus (the ~9s jedi pass runs HERE, only when needed).
+    # 3. Re-parse ONLY the corpora that actually changed. A corpus whose files are untouched
+    #    keeps the nodes it already has — nothing removed them. This is what stops a markdown
+    #    edit from re-running the code ingest (and, for a SCIP corpus, its external indexer).
+    #
+    #    A *vanished* file is the exception: the manifest records no corpus, so there is no
+    #    reliable way to attribute a deleted path to the corpus that owned it. Deletions are rare
+    #    and the safe direction is a full re-parse — exactly today's behaviour — so take it.
+    owner_of = {
+        path: spec.corpus for spec in corpora for path in files_by_corpus[spec.corpus]
+    }
+    if vanished:
+        stale_corpora = {spec.corpus for spec in corpora}
+    else:
+        stale_corpora = {owner_of[path] for path in changed}
+
     all_nodes: list[StructuralNode] = []
     all_edges: list[StructuralEdge] = []
     path_node_ids: dict[str, list[str]] = {}
     results: dict[str, IngestResult] = {}
     for spec in corpora:
+        if spec.corpus not in stale_corpora:
+            continue
         result = spec.ingestor.ingest_path(spec.root or repo, scope)
         results[spec.corpus] = result
         all_edges.extend(result.edges)
@@ -139,14 +160,19 @@ def incremental_ingest(
     for spec in corpora:
         spec.index.remove(removed_refs)
 
-    # 5. Re-MERGE all current nodes + edges (idempotent; preserves unchanged embeddings, and
-    #    re-creates any cross-file edge dropped in step 4).
+    # 5. Re-MERGE the re-parsed corpora's nodes + edges (idempotent; preserves unchanged
+    #    embeddings, and re-creates any cross-file edge dropped in step 4). Untouched corpora keep
+    #    the nodes they already have — nothing removed them. Ingestors only ever emit edges within
+    #    their own corpus; the cross-corpus ``annotates`` edges are re-created afterwards by the
+    #    re-derive pass over the whole graph, so per-corpus isolation cannot orphan them.
     graph.add(IngestResult(nodes=all_nodes, edges=all_edges))
 
     # 6. Re-embed ONLY changed/new files' nodes (the dominant cost, skipped for unchanged),
     #    batched per corpus index (one write, not one round-trip per node).
     embedded = 0
     for spec in corpora:
+        if spec.corpus not in results:
+            continue
         nodes = [
             node for node in results[spec.corpus].nodes
             if node.anchor is not None and node.anchor.path in changed
@@ -157,10 +183,17 @@ def incremental_ingest(
             embedded += len(nodes)
 
     # 7. Persist the manifest keyed by the authoritative file set (every file -> sha + node ids).
+    #    A file in a corpus we did NOT re-parse keeps its PREVIOUS node ids: they are still the
+    #    nodes it owns, and dropping them would silently orphan those nodes forever (step 4 could
+    #    never remove them again).
     manifest.save(
         scope,
         {
-            path: ManifestEntry(current_sha[path], tuple(path_node_ids.get(path, ())))
+            path: ManifestEntry(
+                current_sha[path],
+                tuple(path_node_ids[path]) if path in path_node_ids
+                else (previous[path].node_ids if path in previous else ()),
+            )
             for path in current_sha
         },
     )

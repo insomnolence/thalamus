@@ -50,8 +50,8 @@ class _CountingEncoder:
 class _CountingIngestor:
     """Counts how many times it actually parses — to prove a no-change build never parses."""
 
-    def __init__(self) -> None:
-        self._inner = PythonAstIngestor()
+    def __init__(self, inner: object | None = None) -> None:
+        self._inner = inner if inner is not None else PythonAstIngestor()
         self.parses = 0
 
     def ingest_path(self, root: Path, scope: object) -> object:
@@ -236,3 +236,94 @@ def test_corpus_root_override_ingests_from_outside_the_repo(tmp_path: Path) -> N
 
     (docs / "guide.md").write_text("# Guide\n\nhello there\n", encoding="utf-8")  # edit the doc
     assert build().rebuilt is True  # change in the override root is detected
+
+
+def _two_corpus_build(
+    repo: Path,
+    code_ingestor: _CountingIngestor,
+    docs_ingestor: _CountingIngestor,
+    graph: InMemoryStructuralGraph,
+    manifest: InMemoryFileManifest,
+    encoder: Encoder,
+) -> IncrementalResult:
+    return incremental_ingest(
+        repo, SCOPE,
+        corpora=[
+            CorpusSpec(  # type: ignore[arg-type]
+                code_ingestor, InMemoryStructuralIndex(dim=32), python_files, "code"
+            ),
+            CorpusSpec(  # type: ignore[arg-type]
+                docs_ingestor, InMemoryStructuralIndex(dim=32), markdown_files, "docs",
+                root=repo / "docs",
+            ),
+        ],
+        graph=graph, manifest=manifest, encoder=encoder,
+    )
+
+
+def test_a_docs_change_does_not_reparse_the_code_corpus(tmp_path: Path) -> None:
+    """The point of per-corpus change sets: editing one markdown file used to re-run the whole
+    code ingest — for a SCIP corpus, its external indexer too."""
+    repo = tmp_path / "repo"
+    _write(repo, "a.py", "def a():\n    return 1\n")
+    _write(repo, "docs/guide.md", "# Guide\n\nsome text\n")
+    graph, _index, manifest = _fresh()
+    code, docs = _CountingIngestor(), _CountingIngestor(DocIngestor())
+    enc = _CountingEncoder()
+
+    _two_corpus_build(repo, code, docs, graph, manifest, enc)
+    assert (code.parses, docs.parses) == (1, 1)  # cold build parses both
+
+    _write(repo, "docs/guide.md", "# Guide\n\nrevised text\n")
+    result = _two_corpus_build(repo, code, docs, graph, manifest, enc)
+
+    assert result.rebuilt is True
+    assert docs.parses == 2, "the changed corpus must re-parse"
+    assert code.parses == 1, "the untouched corpus must NOT re-parse"
+
+
+def test_an_untouched_corpus_keeps_its_nodes_and_its_manifest_node_ids(tmp_path: Path) -> None:
+    """The subtle half. Step 7 rewrites the manifest for every file; a file whose corpus was not
+    re-parsed has no freshly-collected node ids, so it must keep its previous ones — otherwise
+    those nodes could never be dropped again and would be orphaned in the graph forever."""
+    repo = tmp_path / "repo"
+    _write(repo, "a.py", "def a():\n    return 1\n")
+    _write(repo, "docs/guide.md", "# Guide\n\ntext\n")
+    graph, _index, manifest = _fresh()
+    code, docs = _CountingIngestor(), _CountingIngestor(DocIngestor())
+    enc = _CountingEncoder()
+
+    _two_corpus_build(repo, code, docs, graph, manifest, enc)
+    code_ids_before = manifest.load(SCOPE)[str(repo / "a.py")].node_ids
+    assert code_ids_before, "the code file should own nodes"
+
+    _write(repo, "docs/guide.md", "# Guide\n\nrevised\n")
+    _two_corpus_build(repo, code, docs, graph, manifest, enc)
+
+    # The untouched corpus keeps both its graph nodes and its manifest bookkeeping.
+    assert manifest.load(SCOPE)[str(repo / "a.py")].node_ids == code_ids_before
+    assert {n.node_id for n in graph.nodes_of_kind(SCOPE, "function")}
+
+    # And the node ids stay usable: changing the code file now drops exactly those nodes.
+    _write(repo, "a.py", "def renamed():\n    return 1\n")
+    _two_corpus_build(repo, code, docs, graph, manifest, enc)
+    assert {n.node_id for n in graph.nodes_of_kind(SCOPE, "function")} == {
+        f"function:{(repo / 'a.py').stem}.renamed"
+    }
+
+
+def test_a_deletion_falls_back_to_reparsing_everything(tmp_path: Path) -> None:
+    """A vanished path cannot be attributed to a corpus, so the safe direction is a full
+    re-parse — the behaviour before per-corpus isolation."""
+    repo = tmp_path / "repo"
+    _write(repo, "a.py", "def a():\n    return 1\n")
+    _write(repo, "docs/guide.md", "# Guide\n\ntext\n")
+    graph, _index, manifest = _fresh()
+    code, docs = _CountingIngestor(), _CountingIngestor(DocIngestor())
+    enc = _CountingEncoder()
+
+    _two_corpus_build(repo, code, docs, graph, manifest, enc)
+    (repo / "docs" / "guide.md").unlink()
+    _two_corpus_build(repo, code, docs, graph, manifest, enc)
+
+    assert code.parses == 2, "a deletion re-parses every corpus, conservatively"

@@ -318,20 +318,18 @@ def build_two_hemisphere_gateway(
     ingest = incremental_ingest(
         repo, scope, corpora=corpora, graph=graph, manifest=manifest, encoder=encoder
     )
-    # Code nodes to link episode footprints against: the fresh parse if Brain 2 was rebuilt (from
-    # ALL corpora — corpus names are arbitrary under [[corpus]], and link_by_footprint's resolver
-    # filters to code kinds, so doc/finding nodes are ignored), else the persisted graph (a
-    # no-change build skips parsing, but episodes may be new). Modules *and* symbols are passed so a
-    # line-aware footprint links to the smallest enclosing symbol (C-7); a legacy/file-only
-    # footprint falls back to the module.
+    # Code nodes to link episode footprints against, read from the GRAPH rather than the parse.
+    # The parse is now per-corpus (an untouched corpus is not re-ingested), so ``ingest.results``
+    # holds only the corpora that changed — linking against it would silently miss every code
+    # node whose corpus happened not to change. The graph always holds the full current set.
+    # Modules *and* symbols, so a line-aware footprint links to the smallest enclosing symbol
+    # (C-7); a legacy/file-only footprint falls back to the module.
     links = links if links is not None else InMemoryCrossLinkIndex()
     # Skip full-graph read + re-linking on warm no-change builds when links are persisted in Neo4j
     if ingest.rebuilt or isinstance(links, InMemoryCrossLinkIndex):
-        code_nodes = (
-            [node for result in ingest.results.values() for node in result.nodes]
-            if ingest.rebuilt
-            else [node for kind in _LINK_CODE_KINDS for node in graph.nodes_of_kind(scope, kind)]
-        )
+        code_nodes = [
+            node for kind in _LINK_CODE_KINDS for node in graph.nodes_of_kind(scope, kind)
+        ]
         footprints = [
             (episode.ref, footprint_from_metadata(episode.metadata)) for episode in episodes
         ]
