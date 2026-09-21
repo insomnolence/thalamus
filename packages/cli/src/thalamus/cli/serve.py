@@ -148,6 +148,7 @@ class ServeConfig:
     rebuild: bool = False
     dream_tick: bool = True
     dream_tick_minutes: float = 30.0
+    pass_gating: bool = True
     # Perceive new commits into Brain 1 on the same background clock as dreaming: each periodic
     # tick polls the code repo's git history and ingests new episodes with the already-warm
     # encoder (no per-commit cold start), then consolidates them. The durable replacement for an
@@ -365,6 +366,12 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "without writing to it or polluting its verdict with the inspection itself.",
     )
     parser.add_argument(
+        "--pass-gating", action=argparse.BooleanOptionalAction, default=True,
+        help="skip a maintenance pass whose inputs have not changed since its last run "
+        "(default on). --no-pass-gating runs every pass every cycle: the ablation baseline the "
+        "§14 measurement compares against, and the escape hatch if a gate is ever suspect",
+    )
+    parser.add_argument(
         "--transport", choices=("stdio", "http"), default="stdio",
         help="MCP transport: stdio (default, one client, used by Claude Code) or http "
         "(Streamable HTTP, many concurrent clients over the network)",
@@ -420,6 +427,7 @@ def serve_config(args: argparse.Namespace) -> ServeConfig:
         rebuild=bool(args.rebuild),
         dream_tick=bool(args.dream_tick),
         dream_tick_minutes=float(args.dream_tick_minutes),
+        pass_gating=bool(args.pass_gating),
         capture_tick=bool(args.capture_tick),
         structural_tick=bool(args.structural_tick),
         hybrid_retrieval=bool(args.hybrid_retrieval),
@@ -1073,7 +1081,8 @@ def run_serve(config: ServeConfig) -> None:
                 # The credibility pass runs in the automatic loop too — logs from the data dir,
                 # git reverts from the code root (they differ for e.g. a sample project).
                 credibility=build_credibility_pass(
-                    logs_dir=data_dir, code_repo=config.repo, supersession=supersession, scope=scope
+                    logs_dir=data_dir, code_repo=config.repo, supersession=supersession,
+                    scope=scope, gate=config.pass_gating,
                 ),
                 # Re-derive Brain 2 from current source each cycle (durable serves only) so new/
                 # changed code becomes recallable without a restart — hash-gated, so a no-change
@@ -1098,6 +1107,7 @@ def run_serve(config: ServeConfig) -> None:
                 # Brain 2's durable manifest is what the Tier-1 gates fingerprint.
                 manifest=brain.manifest,
                 scope=brain.scope,
+                gate_passes=config.pass_gating,
             )
             context_factory = make_dream_context_factory(
                 store=store, supersession=supersession, scope=scope, repo=config.repo

@@ -76,6 +76,7 @@ _KEY_TO_DEST: dict[str, str] = {
     "hybrid_retrieval": "hybrid_retrieval",
     "secret_redaction": "redact_secrets",
     "dream_tick": "dream_tick",
+    "pass_gating": "pass_gating",
     "dream_tick_minutes": "dream_tick_minutes",
     "checkpoint": "checkpoint",
     "plan_memory_budget": "plan_memory_budget",

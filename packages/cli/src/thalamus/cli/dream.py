@@ -257,6 +257,7 @@ class DreamConfig:
     resolve_calls: bool
     check_convergence: bool = False
     rounds: int = 2
+    pass_gating: bool = True
 
 
 def add_dream_arguments(parser: argparse.ArgumentParser) -> None:
@@ -274,6 +275,11 @@ def add_dream_arguments(parser: argparse.ArgumentParser) -> None:
         "--resolve-calls", action=argparse.BooleanOptionalAction, default=False,
         help="resolve Brain-2 call edges with jedi (off by default — a dream cycle does not "
         "need the call graph, and skipping it keeps the cycle fast)",
+    )
+    parser.add_argument(
+        "--pass-gating", action=argparse.BooleanOptionalAction, default=True,
+        help="skip a pass whose inputs have not changed (default on); --no-pass-gating is the "
+        "ungated baseline — pair it with --check-convergence to compare the two",
     )
     parser.add_argument(
         "--check-convergence", action="store_true",
@@ -296,6 +302,7 @@ def dream_config(args: argparse.Namespace) -> DreamConfig:
         dim=int(args.dim),
         encoder=str(args.encoder),
         resolve_calls=bool(args.resolve_calls),
+        pass_gating=bool(getattr(args, "pass_gating", True)),
         check_convergence=bool(getattr(args, "check_convergence", False)),
         rounds=int(getattr(args, "rounds", 2)),
     )
@@ -402,7 +409,8 @@ def run_dream(config: DreamConfig) -> None:
             gateway,
             dream_log=JsonlDreamLog(dream_log_path(config.repo)),
             credibility=build_credibility_pass(
-                logs_dir=config.repo, code_repo=config.repo, supersession=supersession, scope=scope
+                logs_dir=config.repo, code_repo=config.repo, supersession=supersession,
+                scope=scope, gate=config.pass_gating,
             ),
             structural_rederive=rederive,
             attribution_refresh=brain.attribution_refresh,
@@ -414,6 +422,7 @@ def run_dream(config: DreamConfig) -> None:
             cochange_refresh=brain.cochange_refresh,
             manifest=brain.manifest,
             scope=brain.scope,
+            gate_passes=config.pass_gating,
         )
         context = make_dream_context_factory(
             store=store, supersession=supersession, scope=scope, repo=config.repo
