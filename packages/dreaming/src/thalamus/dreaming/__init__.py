@@ -21,6 +21,22 @@ from thalamus.dreaming.belief_audit import BeliefAuditPass, SupersessionProposal
 from thalamus.dreaming.centrality_refresh import CentralityRefreshPass
 from thalamus.dreaming.cochange_refresh import CoChangeRefreshPass
 from thalamus.dreaming.credibility import CredibilityAssessor, CredibilityPass
+from thalamus.dreaming.equivalence import (
+    ConvergenceReport,
+    DerivedState,
+    StateProbe,
+    check_convergence,
+    digest,
+    snapshot,
+)
+from thalamus.dreaming.gating import (
+    ChangeToken,
+    GatedPass,
+    brain1_token,
+    combine,
+    file_digest_token,
+    file_state_token,
+)
 from thalamus.dreaming.link_resolution import LinkResolutionPass
 from thalamus.dreaming.log import (
     DreamLog,
@@ -60,7 +76,19 @@ __all__ = [
     "PassStatus",
     "Scheduler",
     "StructuralRederivePass",
+    "ChangeToken",
+    "ConvergenceReport",
+    "DerivedState",
+    "GatedPass",
+    "StateProbe",
     "StructuralRefreshPass",
+    "brain1_token",
+    "check_convergence",
+    "combine",
+    "digest",
+    "file_digest_token",
+    "file_state_token",
+    "snapshot",
     "SupersessionProposal",
     "UsageRefreshPass",
     "deserialize_dream_record",

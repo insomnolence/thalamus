@@ -7,9 +7,19 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from thalamus.cli.dream import build_dream_scheduler, make_dream_context_factory
+from thalamus.cli.dream import (
+    _convergence_probes,
+    build_dream_scheduler,
+    make_dream_context_factory,
+)
 from thalamus.core import Hemisphere, MemoryId, MemoryRecord, RepoId, Scope, TenantId
-from thalamus.dreaming import InMemoryDreamLog, PassStatus, StructuralRederivePass
+from thalamus.dreaming import (
+    InMemoryDreamLog,
+    PassStatus,
+    StructuralRederivePass,
+    check_convergence,
+    snapshot,
+)
 from thalamus.experiential import InMemorySupersessionIndex
 from thalamus.gateway import DerivedViewsRef, Gateway, SupersededDemotingRetriever
 from thalamus.retrieval import L0Retriever
@@ -151,3 +161,65 @@ def test_scheduler_shares_the_rederive_queue_with_the_relink(tmp_path: Path) -> 
 
     refresh = next(p for p in report.passes if p.name == "structural-refresh")
     assert refresh.details["repaired"] == 1
+
+
+def test_convergence_probes_read_live_state(tmp_path: Path) -> None:
+    """The probes must re-read on each call — one that captured a value at construction would
+    report convergence no matter what the passes did."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    record = _curated("ep", "why mod.py is like that", ("mod.py",))
+    store.add(record, encoder.encode([record.content])[0])
+
+    graph = InMemoryStructuralGraph(SCOPE)
+    links = InMemoryCrossLinkIndex()
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW), k=5, views=DerivedViewsRef(),
+        graph=graph, links=links,
+    )
+    probes = _convergence_probes(gateway, store, SCOPE)
+    assert set(probes) == {
+        "views.superseded", "views.stale_references", "brain2.nodes", "crosslinks"
+    }
+
+    before = snapshot(probes)
+    graph.add(PythonAstIngestor().ingest_path(repo, SCOPE))
+    after = snapshot(probes)
+    assert "brain2.nodes" in before.differences(after)
+
+
+def test_convergence_over_the_real_pass_set_is_stable(tmp_path: Path) -> None:
+    """End-to-end: the assembled cycle must leave its own derived views alone on a repeat run.
+    This is the precondition every future pass gate depends on."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    record = _curated("ep", "why mod.py is like that", ("mod.py",))
+    store.add(record, encoder.encode([record.content])[0])
+
+    graph = InMemoryStructuralGraph(SCOPE)
+    links = InMemoryCrossLinkIndex()
+    gateway = Gateway(
+        L0Retriever(encoder, store, now=lambda: NOW), k=5, views=DerivedViewsRef(),
+        graph=graph, links=links,
+    )
+    rederive = StructuralRederivePass(
+        [CorpusSpec(PythonAstIngestor(), InMemoryStructuralIndex(dim=32), python_files, "code")],
+        graph, InMemoryFileManifest(), encoder,
+    )
+    scheduler = build_dream_scheduler(gateway, structural_rederive=rederive)
+    context = make_dream_context_factory(
+        store=store, supersession=InMemorySupersessionIndex(), scope=SCOPE, repo=repo
+    )
+
+    report = check_convergence(
+        scheduler, context, _convergence_probes(gateway, store, SCOPE), rounds=3
+    )
+    assert report.converged, report.render()

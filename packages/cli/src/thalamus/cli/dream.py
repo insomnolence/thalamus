@@ -28,6 +28,7 @@ from thalamus.dreaming import (
     CycleReport,
     DreamingPass,
     DreamLog,
+    GatedPass,
     JsonlDreamLog,
     LinkResolutionPass,
     PassContext,
@@ -35,6 +36,10 @@ from thalamus.dreaming import (
     Scheduler,
     StructuralRederivePass,
     StructuralRefreshPass,
+    brain1_token,
+    check_convergence,
+    combine,
+    file_digest_token,
 )
 from thalamus.experiential import build_fate_context, compute_fate
 from thalamus.gateway import Gateway
@@ -58,6 +63,7 @@ def build_dream_scheduler(
     usage_refresh: DreamingPass | None = None,
     centrality_refresh: DreamingPass | None = None,
     cochange_refresh: DreamingPass | None = None,
+    gate_passes: bool = True,
 ) -> Scheduler:
     """The v0 pass set, in dreaming.md DAG order.
 
@@ -106,7 +112,14 @@ def build_dream_scheduler(
         passes.append(cochange_refresh)
     if credibility is not None:
         passes.append(credibility)
-    passes.append(BeliefAuditPass())
+    # Gated on Brain 1 only: the pass also depends on footprint files existing on disk, which is
+    # too expensive to fingerprint separately (statting them IS the pass's work). A file deleted
+    # without a Brain-1 write is therefore missed until the forced run — acceptable precisely
+    # because the output is an advisory dream-log proposal, never something recall serves.
+    audit: DreamingPass = BeliefAuditPass()
+    if gate_passes:
+        audit = GatedPass(audit, brain1_token)
+    passes.append(audit)
     return Scheduler(passes, log=dream_log)
 
 
@@ -116,7 +129,8 @@ def build_credibility_pass(
     code_repo: Path,
     supersession: SupersessionIndex | None,
     scope: Scope,
-) -> CredibilityPass | None:
+    gate: bool = True,
+) -> DreamingPass | None:
     """Wire the fate-based credibility pass to the brain's logs + git reverts (the composition that
     closes over the ``experiential`` fate primitives, keeping ``dreaming`` decoupled). ``logs_dir``
     holds ``.thalamus/logs`` (the data dir); ``code_repo`` is the git repo whose reverts are read
@@ -145,7 +159,28 @@ def build_credibility_pass(
             for memory_id, verdict in compute_fate(memories, context).items()
         }
 
-    return CredibilityPass(assess)
+    pass_: DreamingPass = CredibilityPass(assess)
+    if not gate:
+        return pass_
+    # Its inputs are Brain 1 plus the three append-only logs its assessor reads and the code
+    # repo's reverts. Brain 1 comes free from the cycle's shared scan; the logs are fingerprinted
+    # by CONTENT, not size+mtime: attribution-refresh rewrites usage_attributed.jsonl every cycle
+    # (a derived view is overwritten, never appended — §14.1), so an mtime token would never
+    # settle and the gate would never fire. Hashing is still far cheaper than parsing, which is
+    # what the pass does with the same bytes. Reverts move only with a commit, which also moves
+    # the logs in practice — and the forced run covers the case where it does not. Safe to gate
+    # because the pass only reports a distribution; nothing behavioral reads it (ROADMAP L-5:
+    # the durable credibility store was never built).
+    return GatedPass(
+        pass_,
+        combine(
+            brain1_token,
+            file_digest_token(
+                [str(logs / name) for name in
+                 ("retrieval.jsonl", "usage.jsonl", "usage_attributed.jsonl")]
+            ),
+        ),
+    )
 
 
 def make_dream_context_factory(
@@ -181,6 +216,8 @@ class DreamConfig:
     dim: int
     encoder: str
     resolve_calls: bool
+    check_convergence: bool = False
+    rounds: int = 2
 
 
 def add_dream_arguments(parser: argparse.ArgumentParser) -> None:
@@ -199,6 +236,16 @@ def add_dream_arguments(parser: argparse.ArgumentParser) -> None:
         help="resolve Brain-2 call edges with jedi (off by default — a dream cycle does not "
         "need the call graph, and skipping it keeps the cycle fast)",
     )
+    parser.add_argument(
+        "--check-convergence", action="store_true",
+        help="run the cycle repeatedly over unchanging inputs and report any derived view that "
+        "moves. A pass that keeps moving cannot be safely gated (and is probably a bug), so this "
+        "is the precondition for any pass-gating work — see dreaming/equivalence.py",
+    )
+    parser.add_argument(
+        "--rounds", type=int, default=2,
+        help="cycles to run with --check-convergence (default 2; more catches slow drift)",
+    )
 
 
 def dream_config(args: argparse.Namespace) -> DreamConfig:
@@ -210,6 +257,8 @@ def dream_config(args: argparse.Namespace) -> DreamConfig:
         dim=int(args.dim),
         encoder=str(args.encoder),
         resolve_calls=bool(args.resolve_calls),
+        check_convergence=bool(getattr(args, "check_convergence", False)),
+        rounds=int(getattr(args, "rounds", 2)),
     )
 
 
@@ -224,6 +273,40 @@ def _print_report(report: CycleReport) -> None:
                 f"      ⚠ proposed supersede {proposal['memory_id']}: {proposal['reason']}",
                 file=sys.stderr,
             )
+
+
+_PROBE_KINDS = ("module", "interface", "class", "enum", "function", "method", "document",
+                "section", "chunk", "finding")
+
+
+def _convergence_probes(
+    gateway: Gateway, store: Store, scope: Scope
+) -> dict[str, Callable[[], object]]:
+    """Named readers for the derived views reachable from an assembled brain.
+
+    Coverage is deliberately explicit rather than magical: these cover ``link-resolution``
+    (the served views), ``structural-refresh`` (cross-links), and ``structural-rederive``
+    (the graph's node set). ``centrality-refresh`` and ``cochange-refresh`` hold their state in
+    refs the composition root does not hand back, so they are **not** covered yet — each should
+    add its probe here when its gate is built, which is the point at which it matters.
+    """
+    probes: dict[str, Callable[[], object]] = {
+        "views.superseded": lambda: dict(gateway.views.views.superseded),
+        "views.stale_references": lambda: {
+            str(ref): list(paths) for ref, paths in gateway.views.views.stale_references.items()
+        },
+    }
+    graph, links = gateway.graph, gateway.links
+    if graph is not None:
+        probes["brain2.nodes"] = lambda: sorted(
+            node.node_id for kind in _PROBE_KINDS for node in graph.nodes_of_kind(scope, kind)
+        )
+    if links is not None:
+        probes["crosslinks"] = lambda: {
+            str(record.ref): sorted(n.node_id for n in links.nodes_for(record.ref))
+            for record in store.scan(scope)
+        }
+    return probes
 
 
 def run_dream(config: DreamConfig) -> None:
@@ -278,6 +361,17 @@ def run_dream(config: DreamConfig) -> None:
         context = make_dream_context_factory(
             store=store, supersession=supersession, scope=scope, repo=config.repo
         )
+        if config.check_convergence:
+            report = check_convergence(
+                scheduler, context, _convergence_probes(gateway, store, scope),
+                rounds=config.rounds,
+            )
+            for cycle in report.reports:
+                _print_report(cycle)
+            print(report.render(), file=sys.stderr)
+            if not report.converged:
+                raise SystemExit(1)
+            return
         _print_report(scheduler.run(context()))
     finally:
         close_store(store)
