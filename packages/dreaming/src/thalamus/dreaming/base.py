@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from thalamus.core import MemoryRecord, Scope, Store, SupersessionIndex
@@ -79,7 +80,22 @@ class PassContext:
     store: Store | None = None
     supersession: SupersessionIndex | None = None
     repo_root: str | None = None
+    # The brain's data directory, when it differs from the code root. A footprint may name a file
+    # beside the code root rather than under it (a package inside a larger repo), and resolving
+    # those against the code root alone reports present files as deleted.
+    data_root: str | None = None
     _scan: _ScanCache = field(default_factory=_ScanCache, compare=False, repr=False)
+
+    def footprint_roots(self) -> tuple[Path, ...]:
+        """Every root a footprint may be relative to — the code root, then the data dir.
+
+        One source of truth for the two passes that resolve footprints against disk, so they
+        cannot drift apart on which roots count.
+        """
+        roots = [Path(self.repo_root)] if self.repo_root is not None else []
+        if self.data_root is not None and self.data_root != self.repo_root:
+            roots.append(Path(self.data_root))
+        return tuple(roots)
 
     def memories(self) -> Sequence[MemoryRecord]:
         """Brain 1 for this cycle — scanned **once** and shared by every pass that needs it.

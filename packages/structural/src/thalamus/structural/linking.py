@@ -134,8 +134,9 @@ def footprint_staleness(
     items: Iterable[tuple[MemoryRef, Sequence[FootprintFile]]],
     *,
     repo_root: Path,
+    extra_roots: Sequence[Path] = (),
 ) -> dict[MemoryRef, list[str]]:
-    """For each memory, the footprint files no longer present on disk under ``repo_root``.
+    """For each memory, the footprint files no longer present on disk under any given root.
 
     The §13.18-D2 staleness signal as a deterministic disk check: a memory whose footprint
     references a file that has been deleted or moved is a *staleness candidate* — the code it
@@ -143,12 +144,19 @@ def footprint_staleness(
     resolve). Surfaced as a review flag, never auto-deleted (§14.4: conservative against silent
     poisons — heavy refactors throw false positives, so time + outcomes arbitrate). Returns only
     memories with at least one missing file; order preserved for stable reporting.
+
+    ``extra_roots`` exist because a footprint is not necessarily rooted at the code root. A brain
+    whose ``data_dir`` differs from its ``code_root`` — a package inside a larger repo, with the
+    brain's data kept in the parent — carries memories about files that live *beside* the code
+    root, not under it (docs, scripts, handoff notes). Resolving those against the code root alone
+    reported present files as deleted. Checking every plausible root can only *reduce* false
+    staleness: a genuinely deleted file exists under none of them.
     """
-    root = repo_root.resolve()
+    roots = [repo_root.resolve(), *(r.resolve() for r in extra_roots)]
     stale: dict[MemoryRef, list[str]] = {}
     for memory, footprint in items:
         files = [_file_and_lines(entry)[0] for entry in footprint]
-        missing = [file for file in files if not (root / file).exists()]
+        missing = [file for file in files if not any((root / file).exists() for root in roots)]
         if missing:
             stale[memory] = missing
     return stale

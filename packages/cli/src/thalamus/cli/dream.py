@@ -190,6 +190,7 @@ def make_dream_context_factory(
     supersession: SupersessionIndex | None,
     scope: Scope,
     repo: Path,
+    data_dir: Path | None = None,
 ) -> Callable[[], PassContext]:
     """A factory that stamps a fresh ``now`` on each cycle's read-only context."""
 
@@ -200,6 +201,7 @@ def make_dream_context_factory(
             store=store,
             supersession=supersession,
             repo_root=str(repo),
+            data_root=str(data_dir) if data_dir is not None else None,
         )
 
     return make
@@ -401,7 +403,8 @@ def run_dream(config: DreamConfig) -> None:
             gate_passes=config.pass_gating,
         )
         context = make_dream_context_factory(
-            store=store, supersession=supersession, scope=scope, repo=config.repo
+            store=store, supersession=supersession, scope=scope, repo=config.repo,
+            data_dir=config.repo,
         )
         if config.check_convergence:
             report = check_convergence(

@@ -1112,7 +1112,10 @@ def run_serve(config: ServeConfig) -> None:
                 gate_passes=config.pass_gating,
             )
             context_factory = make_dream_context_factory(
-                store=store, supersession=supersession, scope=scope, repo=config.repo
+                store=store, supersession=supersession, scope=scope, repo=config.repo,
+                # Footprints may name files beside the code root when the brain's data lives in
+                # a parent directory (a package inside a larger repo).
+                data_dir=data_dir,
             )
 
         # Housekeeping phase (Track I): cap the unbounded append-only logs by rotating each to

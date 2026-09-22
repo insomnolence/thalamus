@@ -43,7 +43,9 @@ class LinkResolutionPass:
         stale: dict[MemoryRef, list[str]] = {}
         if ctx.repo_root is not None:
             stale = footprint_staleness(
-                curated_footprints(ctx.memories()), repo_root=Path(ctx.repo_root)
+                curated_footprints(ctx.memories()),
+                repo_root=Path(ctx.repo_root),
+                extra_roots=ctx.footprint_roots()[1:],
             )
         self._refresh(DerivedViews(superseded=superseded, stale_references=dict(stale)))
         return PassOutcome(

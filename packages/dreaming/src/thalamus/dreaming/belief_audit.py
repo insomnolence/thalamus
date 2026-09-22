@@ -17,7 +17,6 @@ the documented extensions behind this same proposer.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from thalamus.dreaming._curated import curated_footprints
@@ -45,12 +44,15 @@ class BeliefAuditPass:
     def run(self, ctx: PassContext) -> PassOutcome:
         if ctx.store is None or ctx.repo_root is None:
             return PassOutcome.skipped("no store/repo_root handle wired")
-        root = Path(ctx.repo_root).resolve()
+        # Every plausible root, not just the code root: a footprint may name a file beside it.
+        roots = [r.resolve() for r in ctx.footprint_roots()]
         proposals: list[SupersessionProposal] = []
         for ref, footprint in curated_footprints(ctx.memories()):
             if not footprint:
                 continue  # a belief with no footprint has no code to vanish
-            missing = tuple(f for f in footprint if not (root / f).exists())
+            missing = tuple(
+                f for f in footprint if not any((root / f).exists() for root in roots)
+            )
             if len(missing) == len(footprint):
                 proposals.append(
                     SupersessionProposal(

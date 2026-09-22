@@ -99,3 +99,63 @@ def test_skips_without_a_store_or_supersession_handle() -> None:
     pass_ = LinkResolutionPass(lambda views: None)
     outcome = pass_.run(PassContext(scope=SCOPE, now=NOW))
     assert outcome.summary == "no store/supersession handle wired"
+
+
+def test_a_footprint_beside_the_code_root_is_not_reported_stale(tmp_path: Path) -> None:
+    """The split-layout bug: a brain whose data_dir differs from its code_root carries memories
+    about files that live BESIDE the code root (docs, scripts, handoff notes). Resolving those
+    against the code root alone reported files that are present as deleted — and
+    `stale_references` is served in recall."""
+    outer = tmp_path / "project"
+    code = outer / "pkg"
+    code.mkdir(parents=True)
+    (outer / "docs").mkdir()
+    (outer / "docs" / "DESIGN.md").write_text("# design\n", encoding="utf-8")
+    (code / "mod.py").write_text("x = 1\n", encoding="utf-8")
+
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    for memory_id, footprint in (
+        ("beside", "docs/DESIGN.md"),   # present, but outside the code root
+        ("inside", "mod.py"),           # present, under the code root
+        ("gone", "docs/DELETED.md"),    # genuinely absent everywhere
+    ):
+        record = MemoryRecord(
+            MemoryId(memory_id), Hemisphere.EXPERIENTIAL, "decision", memory_id, SCOPE, NOW,
+            metadata={"source": "curated", "footprint": [footprint]},
+        )
+        store.add(record, encoder.encode([record.content])[0])
+
+    views = DerivedViewsRef()
+    ctx = PassContext(
+        scope=SCOPE, now=NOW, store=store, supersession=InMemorySupersessionIndex(),
+        repo_root=str(code), data_root=str(outer),
+    )
+    LinkResolutionPass(views.refresh).run(ctx)
+
+    stale = {str(ref.memory_id) for ref in views.views.stale_references}
+    assert stale == {"gone"}, f"only the truly deleted file should be stale, got {stale}"
+
+
+def test_without_a_data_root_behaviour_is_unchanged(tmp_path: Path) -> None:
+    """A single-root brain (code root == data dir) must behave exactly as before."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "kept.py").write_text("x = 1\n", encoding="utf-8")
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    for memory_id, footprint in (("kept", "kept.py"), ("gone", "removed.py")):
+        record = MemoryRecord(
+            MemoryId(memory_id), Hemisphere.EXPERIENTIAL, "decision", memory_id, SCOPE, NOW,
+            metadata={"source": "curated", "footprint": [footprint]},
+        )
+        store.add(record, encoder.encode([record.content])[0])
+
+    views = DerivedViewsRef()
+    LinkResolutionPass(views.refresh).run(
+        PassContext(
+            scope=SCOPE, now=NOW, store=store, supersession=InMemorySupersessionIndex(),
+            repo_root=str(repo),
+        )
+    )
+    assert {str(r.memory_id) for r in views.views.stale_references} == {"gone"}
