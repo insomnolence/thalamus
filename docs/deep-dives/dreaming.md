@@ -55,7 +55,8 @@ attribution-refresh        ← re-derive footprint usage attribution from the li
 behavioral-consolidation   ← fold the log WAL's used-session sets into the behavioral store
                               (AFTER attribution; BEFORE usage-refresh reads the store)
 usage-refresh              ← swap fresh usage weights from the behavioral store into the rung
-centrality-refresh         ← recompute structural-centrality weights (reads freshly re-derived graph)
+centrality-refresh         ← recompute structural-centrality weights (reads freshly re-derived graph;
+                              weighted over the CYCLE's Brain 1, not a startup snapshot)
 cochange-refresh           ← refresh the plan tool's file co-change index from new commits
 credibility                ← assess each curated memory's fate-based standing
 belief-audit               ← propose-only supersession suggestions (proposer, last)
@@ -68,6 +69,63 @@ Together they form a three-step pipeline: re-derive the attribution signal → a
 → serve it to the rung.
 
 > **Note on Concurrency Surfaces:** `DerivedViewsRef` provides single-slot atomic swaps for experiential views (supersession and stale references). Brain-2's `StructuralRederivePass` acts as a second shared surface that safely updates the Neo4j graph substrate mid-serve.
+
+### Pass gating — skipping a pass whose inputs have not moved (2026-09-21)
+
+The scheduler always described its passes as *individually-gated*; `dreaming/gating.py` is that
+gate, built as a **decorator** so pass bodies are untouched and the layer ablates cleanly
+(`--no-pass-gating`, or `pass_gating = false`). Measured on a large brain, same binary with the
+flag flipped: an idle cycle fell **25.4 → 14.6 CPU-s (43%)**.
+
+**A gate is a correctness claim, not an optimisation.** It asserts the token captures every input
+the pass reads; miss one and the pass silently serves a stale answer. Three rules are enforced in
+the mechanism rather than left to caller discipline: **fail open** (an uncomputable token runs the
+pass), **self-heal** (`force_every` ignores the gate periodically, so an incomplete token converges
+in a bounded window), and **record only on success**.
+
+**Tokens must be durable, not in-process.** An in-memory counter is blind to *another* process
+rebuilding the same brain. `manifest_token` digests the `FileManifest` — written by whoever
+rebuilds, content-addressed, so every reader sees it. The cross-links need no token of their own:
+`link_by_footprint` is their sole writer and only writes when a memory is new (a live Brain-1 scan
+sees it) or a rebuild destroyed links (the manifest sees it).
+
+**Two independent questions, and both are needed.** *Is it safe?* — a recall-feeding pass needs
+`check_convergence` before it is gated at all. *Is it worth it?* — **the token must be cheaper than
+the pass**. `belief-audit` (0.07s) and `credibility` (0.43s) were gated first because they were
+safest, and both measured as net losses against a ~0.50s Brain-1 token; both are ungated again.
+They had become cheap *because* the cycle started sharing one Brain-1 read — an earlier
+optimisation silently expired the case for a later one. **Re-measure after anything that makes
+passes cheaper.**
+
+Currently gated: `centrality-refresh`, `cochange-refresh` (both recall-feeding, both validated by
+convergence first). Deliberately not gated: `attribution-refresh` — it carries the primary Tier-1
+usage signal, and ~12 min/day of off-request-path CPU does not justify the risk.
+
+### The instrument: convergence, not a two-run A/B (`dreaming/equivalence.py`)
+
+Comparing a gated run against an ungated one *from the same starting state* would need a state
+**reset**, which a durable Neo4j brain cannot do. The equivalent invariant needs none:
+
+> running the cycle again must change nothing.
+
+A convergent pass can be gated soundly (the skipped work would have produced what is already
+there); a non-convergent one **cannot be gated at all**, and is probably buggy besides. So this is
+a *precondition* for gating, useful before a single gate exists. Callers supply named probes —
+`dreaming` must not import the retrieval rungs — and `check_convergence` digests them across
+repeated cycles and names any view that moved. Run it with `thalamus dream --check-convergence`.
+
+### The RelinkQueue — repairing what a re-derive destroys
+
+`structural-rederive` drops and re-MERGEs a changed file's nodes. On Neo4j `remove` is
+`DETACH DELETE`, which takes the `(memory)-[:TOUCHES]->(node)` cross-hemisphere edges with the
+node; the in-memory backend keeps links in a separate index and loses nothing — **the two
+implementations of one protocol diverge on destructive semantics**, which is why an in-memory test
+suite cannot see this class of bug. The re-derive therefore publishes the paths it rebuilt to a
+`RelinkQueue`, and `structural-refresh` drains it and evicts exactly the memories whose footprint
+names a rebuilt file, so its already-linked cache keeps its purpose while the loss self-heals.
+`build_dream_scheduler` derives the queue from the re-derive pass rather than accepting it as an
+argument — a caller who forgot to connect them would switch the repair off silently, with a green
+suite. See `structural/relink.py` and `tests/integration/test_crosslink_survives_rederive.py`.
 
 ## Per-pass: deterministic/LLM, cadence, firewall, earns-its-place
 

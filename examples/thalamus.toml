@@ -85,6 +85,12 @@ hybrid_retrieval = true
 dream_tick = true
 # Minutes between maintenance cycles (a `remember` also triggers one immediately).
 dream_tick_minutes = 30.0
+# `pass_gating` skips a maintenance pass whose inputs have not changed since its last run, so an
+# idle cycle stops recomputing answers it already has (measured: 25.4 -> 14.6 CPU-s on a large
+# brain). Each gate keys on a durable fingerprint — the file manifest, Brain 1, the commit sha —
+# and re-runs periodically regardless, so an incomplete fingerprint self-heals. false runs every
+# pass every cycle: the ablation baseline, and the escape hatch if a gate is ever suspect.
+pass_gating = true
 
 # ── Safety ───────────────────────────────────────────────────────────────────────────────────
 # `secret_redaction` scrubs credential-shaped text (tokens, keys, passwords) at every ingest
