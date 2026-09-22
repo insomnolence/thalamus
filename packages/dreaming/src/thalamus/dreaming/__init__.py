@@ -34,8 +34,6 @@ from thalamus.dreaming.gating import (
     GatedPass,
     brain1_token,
     combine,
-    file_digest_token,
-    file_state_token,
     manifest_token,
 )
 from thalamus.dreaming.link_resolution import LinkResolutionPass
@@ -87,8 +85,6 @@ __all__ = [
     "check_convergence",
     "combine",
     "digest",
-    "file_digest_token",
-    "file_state_token",
     "manifest_token",
     "snapshot",
     "SupersessionProposal",

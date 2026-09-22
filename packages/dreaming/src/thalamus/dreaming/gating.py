@@ -17,19 +17,27 @@ the caller's discipline:
 * **Only on success.** The token is recorded only when the pass reports ``OK``; a failed or
   self-skipped pass is retried next cycle.
 
-**What may be gated.** Start with passes whose output nothing behavioral consumes — where a wrong
-token costs a stale *log record*, not a stale answer served to the actuator. That property is
-established by reading the pass's consumers, not by its :class:`PassKind`: ``credibility`` is
-labelled ``ACTOR`` but today only reports a distribution, so it qualifies. A pass whose output
-feeds recall (the centrality or usage rungs, the served views) needs its token validated by
-``equivalence.check_convergence`` before it is gated at all.
+**What may be gated — two independent questions, and both were needed.**
+
+*Is it safe?* A pass whose output feeds recall must have its token validated by
+``equivalence.check_convergence`` before it is gated at all; a pass nothing behavioral reads can
+be gated on weaker evidence, because a wrong token costs a stale log record rather than a stale
+answer served to the actuator. That property comes from reading the pass's consumers, not from
+its :class:`PassKind` — ``credibility`` is labelled ``ACTOR`` yet only reports a distribution.
+
+*Is it worth it?* **The token must be cheaper than the pass**, and this is the one that was
+learned the hard way. ``belief-audit`` and ``credibility`` were gated first because they were the
+safest, and both measured as net losses: 0.07s and 0.43s of work behind a ~0.50s Brain-1 token —
+a 7x loss in the first case. They were cheap precisely because the cycle had started sharing one
+Brain-1 read, which had already removed the cost that justified gating them. Both are now ungated.
+
+So: rank by measured cost, gate only where the pass dominates its token, and re-measure after any
+change that makes passes cheaper — the case for a gate expires when its pass gets fast.
 """
 
 from __future__ import annotations
 
-import hashlib
-import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 
 from thalamus.core import Scope
 from thalamus.dreaming.base import (
@@ -55,58 +63,6 @@ def brain1_token(ctx: PassContext) -> str:
     answer, and the two are not symmetric.
     """
     return digest(ctx.memories())
-
-
-def file_state_token(paths: Sequence[str]) -> ChangeToken:
-    """A token over the size + mtime of each path — for passes that read log files.
-
-    Size and mtime rather than content hash because these are append-only, multi-megabyte logs and
-    the point is to be cheaper than the pass. A file that is rewritten in place to exactly the same
-    size within one mtime tick would be missed; ``force_every`` covers that.
-    """
-
-    def token(ctx: PassContext) -> str | None:
-        parts: list[str] = []
-        for path in paths:
-            try:
-                stat = os.stat(path)
-                parts.append(f"{path}:{stat.st_size}:{stat.st_mtime_ns}")
-            except FileNotFoundError:
-                parts.append(f"{path}:absent")
-            except OSError:
-                return None  # cannot tell -> run
-        return digest(parts)
-
-    return token
-
-
-def file_digest_token(paths: Sequence[str], *, chunk: int = 1 << 20) -> ChangeToken:
-    """A token over each path's *contents* — for a file that is rewritten in place.
-
-    ``file_state_token`` is defeated by a derived file that is deleted and rewritten every cycle
-    with identical content (``usage_attributed.jsonl`` is, by design: §14.1 says a derived view is
-    overwritten, never appended). Its mtime moves every tick, so an mtime token never settles and
-    the gate never fires. Hashing the bytes costs a streamed read — still far cheaper than the
-    pass, which reads *and* parses the same file.
-    """
-
-    def token(ctx: PassContext) -> str | None:
-        parts: list[str] = []
-        for path in paths:
-            sha = hashlib.sha256()
-            try:
-                with open(path, "rb") as handle:
-                    while block := handle.read(chunk):
-                        sha.update(block)
-            except FileNotFoundError:
-                parts.append(f"{path}:absent")
-                continue
-            except OSError:
-                return None  # cannot tell -> run
-            parts.append(f"{path}:{sha.hexdigest()}")
-        return digest(parts)
-
-    return token
 
 
 def manifest_token(manifest: FileManifest, scope: Scope) -> ChangeToken:

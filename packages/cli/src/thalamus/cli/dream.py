@@ -40,7 +40,6 @@ from thalamus.dreaming import (
     brain1_token,
     check_convergence,
     combine,
-    file_digest_token,
     manifest_token,
 )
 from thalamus.experiential import build_fate_context, compute_fate
@@ -137,14 +136,10 @@ def build_dream_scheduler(
         passes.append(cochange_refresh)
     if credibility is not None:
         passes.append(credibility)
-    # Gated on Brain 1 only: the pass also depends on footprint files existing on disk, which is
-    # too expensive to fingerprint separately (statting them IS the pass's work). A file deleted
-    # without a Brain-1 write is therefore missed until the forced run — acceptable precisely
-    # because the output is an advisory dream-log proposal, never something recall serves.
-    audit: DreamingPass = BeliefAuditPass()
-    if gate_passes:
-        audit = GatedPass(audit, brain1_token)
-    passes.append(audit)
+    # NOT gated, measured: the pass runs in ~0.07s while a Brain-1 token over ~4.8k records costs
+    # ~0.50s, so gating it was a 7x net loss. It became cheap when the cycle started sharing one
+    # Brain-1 read; the historical figures that justified gating it predate that.
+    passes.append(BeliefAuditPass())
     return Scheduler(passes, log=dream_log)
 
 
@@ -154,8 +149,7 @@ def build_credibility_pass(
     code_repo: Path,
     supersession: SupersessionIndex | None,
     scope: Scope,
-    gate: bool = True,
-) -> DreamingPass | None:
+) -> CredibilityPass | None:
     """Wire the fate-based credibility pass to the brain's logs + git reverts (the composition that
     closes over the ``experiential`` fate primitives, keeping ``dreaming`` decoupled). ``logs_dir``
     holds ``.thalamus/logs`` (the data dir); ``code_repo`` is the git repo whose reverts are read
@@ -184,28 +178,10 @@ def build_credibility_pass(
             for memory_id, verdict in compute_fate(memories, context).items()
         }
 
-    pass_: DreamingPass = CredibilityPass(assess)
-    if not gate:
-        return pass_
-    # Its inputs are Brain 1 plus the three append-only logs its assessor reads and the code
-    # repo's reverts. Brain 1 comes free from the cycle's shared scan; the logs are fingerprinted
-    # by CONTENT, not size+mtime: attribution-refresh rewrites usage_attributed.jsonl every cycle
-    # (a derived view is overwritten, never appended — §14.1), so an mtime token would never
-    # settle and the gate would never fire. Hashing is still far cheaper than parsing, which is
-    # what the pass does with the same bytes. Reverts move only with a commit, which also moves
-    # the logs in practice — and the forced run covers the case where it does not. Safe to gate
-    # because the pass only reports a distribution; nothing behavioral reads it (ROADMAP L-5:
-    # the durable credibility store was never built).
-    return GatedPass(
-        pass_,
-        combine(
-            brain1_token,
-            file_digest_token(
-                [str(logs / name) for name in
-                 ("retrieval.jsonl", "usage.jsonl", "usage_attributed.jsonl")]
-            ),
-        ),
-    )
+    # NOT gated, measured: the pass costs ~0.43s and a token over Brain 1 plus its three logs
+    # cost ~0.49s — the gate was slower than the work. See BeliefAuditPass above; the same shared
+    # Brain-1 read made it cheap.
+    return CredibilityPass(assess)
 
 
 def make_dream_context_factory(
@@ -410,7 +386,7 @@ def run_dream(config: DreamConfig) -> None:
             dream_log=JsonlDreamLog(dream_log_path(config.repo)),
             credibility=build_credibility_pass(
                 logs_dir=config.repo, code_repo=config.repo, supersession=supersession,
-                scope=scope, gate=config.pass_gating,
+                scope=scope,
             ),
             structural_rederive=rederive,
             attribution_refresh=brain.attribution_refresh,

@@ -1082,7 +1082,7 @@ def run_serve(config: ServeConfig) -> None:
                 # git reverts from the code root (they differ for e.g. a sample project).
                 credibility=build_credibility_pass(
                     logs_dir=data_dir, code_repo=config.repo, supersession=supersession,
-                    scope=scope, gate=config.pass_gating,
+                    scope=scope,
                 ),
                 # Re-derive Brain 2 from current source each cycle (durable serves only) so new/
                 # changed code becomes recallable without a restart — hash-gated, so a no-change
