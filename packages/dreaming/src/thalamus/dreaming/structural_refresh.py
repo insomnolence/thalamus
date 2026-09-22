@@ -70,17 +70,30 @@ class StructuralRefreshPass:
         # Evict first, so a memory whose code was just rebuilt is re-linked in THIS cycle rather
         # than waiting for an unrelated write to surface it.
         evicted = self._evict_rebuilt()
+        footprints = [
+            (record.ref, footprint_from_metadata(record.metadata))
+            for record in ctx.memories()
+            if record.memory_id not in self._linked  # only memories new since the last tick
+        ]
+        # Nothing to link -> do not load the code nodes. Loading them is the pass's real cost
+        # (every module and symbol in Brain 2 — ~21.5k rows on a large corpus, measured at ~5s),
+        # and on a settled cycle it was paid in full to then link nothing. Returning here is
+        # equivalent by construction: ``link_by_footprint`` over an empty footprint list applies
+        # no links whatever node set it is given.
+        if not footprints:
+            return PassOutcome(
+                summary=(
+                    "no new memories to link"
+                    + (f"; {evicted} evicted for re-link after re-derive" if evicted else "")
+                ),
+                details={"links": 0, "new_memories": 0, "repaired": evicted},
+            )
         # All code nodes (module + symbols) so a line-aware footprint can link to the smallest
         # enclosing symbol (C-7); a file-only footprint still falls back to the module.
         code_nodes = [
             node
             for kind in _CODE_KINDS
             for node in self._graph.nodes_of_kind(ctx.scope, kind)
-        ]
-        footprints = [
-            (record.ref, footprint_from_metadata(record.metadata))
-            for record in ctx.memories()
-            if record.memory_id not in self._linked  # only memories new since the last tick
         ]
         applied = link_by_footprint(
             footprints, code_nodes, self._links, repo_root=Path(ctx.repo_root)

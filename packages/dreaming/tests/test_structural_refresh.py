@@ -15,6 +15,7 @@ from thalamus.structural import (
     PythonAstIngestor,
     RelinkQueue,
 )
+from thalamus.structural.schema import StructuralNode
 
 SCOPE = Scope(TenantId("t"), RepoId("r"))
 NOW = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
@@ -206,3 +207,58 @@ def test_without_a_relink_queue_behaviour_is_unchanged(tmp_path: Path) -> None:
     pass_ = StructuralRefreshPass(graph, InMemoryCrossLinkIndex())
     pass_.run(_ctx(store, tmp_path))
     assert pass_.run(_ctx(store, tmp_path)).details["repaired"] == 0
+
+
+def test_a_settled_cycle_does_not_load_the_code_nodes(tmp_path: Path) -> None:
+    """Loading every module and symbol is the pass's real cost (~5s on a large corpus), and a
+    settled cycle used to pay it in full to then link nothing."""
+    _write(tmp_path, "foo.py", "def do_thing():\n    return 1\n")
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    episode = MemoryRecord(
+        MemoryId("ep1"), Hemisphere.EXPERIENTIAL, "episode", "did a thing", SCOPE, NOW,
+        metadata={"footprint": ["foo.py"]},
+    )
+    store.add(episode, encoder.encode([episode.content])[0])
+
+    class _CountingGraph(InMemoryStructuralGraph):
+        loads = 0
+
+        def nodes_of_kind(self, scope: Scope, kind: str) -> list[StructuralNode]:
+            type(self).loads += 1
+            return super().nodes_of_kind(scope, kind)
+
+    graph = _CountingGraph(SCOPE)
+    graph.add(PythonAstIngestor().ingest_path(tmp_path, SCOPE))
+    pass_ = StructuralRefreshPass(graph, InMemoryCrossLinkIndex())
+
+    pass_.run(_ctx(store, tmp_path))  # links the episode — must load the nodes
+    after_first = _CountingGraph.loads
+    assert after_first > 0
+
+    outcome = pass_.run(_ctx(store, tmp_path))  # settled: nothing new to link
+    assert _CountingGraph.loads == after_first, "a settled cycle must not load the code nodes"
+    assert outcome.details["links"] == 0
+    assert outcome.details["new_memories"] == 0
+
+
+def test_the_nodes_are_loaded_again_once_there_is_work(tmp_path: Path) -> None:
+    """The skip must not latch: a new memory has to see the current node set."""
+    _write(tmp_path, "foo.py", "def do_thing():\n    return 1\n")
+    graph = InMemoryStructuralGraph(SCOPE)
+    graph.add(PythonAstIngestor().ingest_path(tmp_path, SCOPE))
+    encoder = DeterministicEncoder(dim=32)
+    store = InMemoryStore(dim=32)
+    links = InMemoryCrossLinkIndex()
+    pass_ = StructuralRefreshPass(graph, links)
+
+    pass_.run(_ctx(store, tmp_path))  # empty Brain 1 -> early return
+    record = MemoryRecord(
+        MemoryId("ep1"), Hemisphere.EXPERIENTIAL, "episode", "t", SCOPE, NOW,
+        metadata={"footprint": ["foo.py"]},
+    )
+    store.add(record, encoder.encode([record.content])[0])
+
+    outcome = pass_.run(_ctx(store, tmp_path))
+    assert outcome.details["links"] == 1
+    assert [n.node_id for n in links.nodes_for(record.ref)] == ["module:foo"]
