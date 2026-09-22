@@ -680,16 +680,18 @@ def build_serve_gateway(
     usage_refresh = UsageRefreshPass(_recompute_usage_weights, usage_ref.refresh)
 
     # Now the gateway holds the live graph + links (built inside for the in-memory shell, or the
-    # Neo4j handles), recompute centrality over them: the memories are the scanned episodes (whose
-    # footprints were linked), each weighted by the summed degree of the code nodes it cross-links
-    # to. Reads the gateway's own handles so the dreaming re-derive's updates are seen on recompute.
-    def _recompute_centrality_weights() -> dict[MemoryRef, float]:
+    # Neo4j handles), recompute centrality over them: each memory weighted by the summed degree of
+    # the code nodes it cross-links to. Reads the gateway's own handles so the dreaming re-derive's
+    # updates are seen on recompute. The memory set is supplied per cycle by the caller — the pass
+    # hands in the cycle's live Brain 1, NOT the startup ``episodes`` snapshot this used to close
+    # over, which left every mid-serve memory at weight 0 until a restart.
+    def _recompute_centrality_weights(
+        memories: Sequence[MemoryRef],
+    ) -> dict[MemoryRef, float]:
         live_graph, live_links = gateway.graph, gateway.links
         if live_graph is None or live_links is None:
             return {}
-        return memory_centrality(
-            (episode.ref for episode in episodes), live_graph, live_links
-        )
+        return memory_centrality(memories, live_graph, live_links)
 
     centrality_refresh = CentralityRefreshPass(
         _recompute_centrality_weights, centrality_ref.refresh
